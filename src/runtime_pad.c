@@ -21,8 +21,19 @@
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
+#ifndef BBPORT_UWP
 #include <SDL3/SDL.h>
+#endif
 #include <sys/stat.h>
+
+#ifdef BBPORT_UWP
+/* Native Xbox UWP controller layer (uwp/BBPort.UWP/Platform/GamepadInput.cpp):
+ * samples Windows.Gaming.Input.Gamepad + DirectInput remapping shim without desktop SDL/DirectInput. */
+extern int bbport_uwp_gamepad_poll(uint32_t *out_buttons, uint8_t out_axes[6],
+                                   int *out_touch_side, uint8_t *out_connected_count);
+extern void bbport_uwp_gamepad_set_vibration(uint8_t large_motor, uint8_t small_motor);
+extern const char *bbport_uwp_gamepad_name(void);
+#endif
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -63,25 +74,28 @@ _Static_assert(__builtin_offsetof(PadData,timestamp)==80,"OrbisPadData timestamp
 _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout");
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
-static int initialized, opened, sdl_ready;
-static SDL_Gamepad *gamepad;
+static int initialized, opened;
 static size_t reads;
 static uint8_t connected_count;
+static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
+static void touch_click(PadData *d, int right) {
+    d->buttons|=BTN_TOUCHPAD;
+    d->touch_count=1;
+    d->touches[0]=(PadTouch){.x=right ? 1440 : 480,.y=471,.id=0};
+}
+
+#ifndef BBPORT_UWP
+static int sdl_ready;
+static SDL_Gamepad *gamepad;
 static uint64_t last_mouse_sample_us; /* CNV-003: dt since the previous mouse-to-stick sample */
 static double smoothed_mouse_stick_x, smoothed_mouse_stick_y; /* mouse_to_axis's EMA state */
 static double lock_switch_x, lock_switch_y;  /* lock_switch_flick: motion gathered while locked on */
 static int lock_flick_x, lock_flick_y;       /* the flick being sent */
 static uint64_t lock_flick_until_us, lock_flick_ready_us;
 
-static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint16_t touch_axis(float v, int max) {
     return (uint16_t)(v<=0.0f ? 0 : v>=1.0f ? max : (int)(v*max+0.5f));
-}
-static void touch_click(PadData *d, int right) {
-    d->buttons|=BTN_TOUCHPAD;
-    d->touch_count=1;
-    d->touches[0]=(PadTouch){.x=right ? 1440 : 480,.y=471,.id=0};
 }
 
 /* Opens the first gamepad SDL knows about; called under lock. */
@@ -852,6 +866,7 @@ static void replay_sample(PadData *d) {
     d->left_x=s->axes[0]; d->left_y=s->axes[1]; d->right_x=s->axes[2]; d->right_y=s->axes[3];
     d->l2=s->l2; d->r2=s->r2;
 }
+#endif /* !BBPORT_UWP */
 /* After the menu or the text dialog closes, buttons still held (the Cross that accepted a
  * name) stay hidden until released: the game would take them as a new press. */
 static int hold_after_capture;
@@ -871,6 +886,36 @@ static void touch_ids(PadData *d) {
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
 static void sample(PadData *d) {
+#ifdef BBPORT_UWP
+    memset(d, 0, sizeof(*d));
+    d->left_x = d->left_y = d->right_x = d->right_y = 128;
+    d->orientation[3] = 1.0f;
+    d->timestamp = now_us();
+    uint8_t axes[6] = {128, 128, 128, 128, 0, 0};
+    int touch_side = -1;
+    uint8_t uwp_count = 1;
+    int has_pad = bbport_uwp_gamepad_poll(&d->buttons, axes, &touch_side, &uwp_count);
+    connected_count = uwp_count ? uwp_count : 1;
+    d->connected = 1;
+    d->connected_count = connected_count;
+    if (bbgpu_overlay_captures_input()) {
+        d->buttons = 0;
+        hold_after_capture = 1;
+        return;
+    }
+    if (has_pad) {
+        d->left_x = axes[0]; d->left_y = axes[1];
+        d->right_x = axes[2]; d->right_y = axes[3];
+        d->l2 = axes[4]; d->r2 = axes[5];
+        if (touch_side >= 0) touch_click(d, touch_side);
+        else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d, 0);
+    }
+    touch_ids(d);
+    if (hold_after_capture) {
+        if (d->buttons) d->buttons = 0;
+        else hold_after_capture = 0;
+    }
+#else
     reload_config_if_requested();
     sample_host(d);
     if (bbgpu_overlay_captures_input()) { hold_after_capture=1; return; }
@@ -889,6 +934,7 @@ static void sample(PadData *d) {
         if (d->buttons) d->buttons=0;
         else hold_after_capture=0;
     }
+#endif
 }
 
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
@@ -932,7 +978,9 @@ static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
     info->dead_zone_left=info->dead_zone_right=2;
     info->connection_type=0; info->connected=1; info->device_class=0;
     pthread_mutex_lock(&lock);
+#ifndef BBPORT_UWP
     current_gamepad();
+#endif
     info->connected_count=connected_count ? connected_count : 1;
     pthread_mutex_unlock(&lock);
     return 0;
@@ -941,8 +989,12 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
+#ifdef BBPORT_UWP
+    bbport_uwp_gamepad_set_vibration(param[0], param[1]);
+#else
     SDL_Gamepad *g=current_gamepad();
     if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+#endif
     pthread_mutex_unlock(&lock);
     return 0;
 }
@@ -958,4 +1010,8 @@ static const RuntimeExport exports[]={
     {"scePadSetMotionSensorState",pad_ok_handle_flag},
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
+#ifdef BBPORT_UWP
+void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,bbport_uwp_gamepad_name()); }
+#else
 void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+#endif
