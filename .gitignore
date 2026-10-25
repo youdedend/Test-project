@@ -27,6 +27,7 @@ mods.json
 patches.json
 !launcher/bloodborne.png
 !launcher/assets/*.png
+!uwp/BBPort.UWP/Assets/*.png
 # IDE/session-local
 .claude/
 .vscode/
@@ -34,3 +35,53 @@ benchmarks/
 
 # Optional fsr4vk provider downloaded by the Windows launcher
 /fsr4vk/
+
+# Xbox Dev Mode / UWP build outputs, generated caches, logs, and test certificates
+/uwp/build_out/
+/uwp/AppPackages/
+/uwp/BundleArtifacts/
+/uwp/.vs/
+/uwp/**/bin/
+/uwp/**/obj/
+/uwp/**/x64/
+/uwp/**/ARM64/
+/uwp/**/Debug/
+/uwp/**/Release/
+/uwp/**/Generated Files/
+/uwp/**/shader_cache/
+/uwp/**/logs/
+/uwp/**/*.user
+*.appx
+*.msix
+*.appxbundle
+*.msixbundle
+*.appxsym
+*.appxupload
+*.pfx
+*.cer
+*.pvk
+*.dxil
+*.pso_cache
+*.log
+
+# Copyrighted PlayStation 4 / Bloodborne game assets, dumps, keys, and ISOs (NEVER commit)
+eboot.bin
+eboot.elf
+*.self
+*.sprx
+*.prx
+*.sfo
+*.pkg
+*.iso
+*.key
+sce_sys/
+sce_module/
+dvdroot_ps4/
+CUSA*/
+/assets/
+/dumps/
+/uwp/LocalAssets/*
+!/uwp/LocalAssets/.gitkeep
+boot.bin
+boot-linked.bin
+
