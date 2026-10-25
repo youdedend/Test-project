@@ -1,0 +1,2 @@
+# Place local self-signed development certificates (BBPort.UWP_TemporaryKey.pfx / .cer) here
+# when building locally with uwp/build.ps1 -Sign. Private keys are excluded by .gitignore.
