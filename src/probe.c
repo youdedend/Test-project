@@ -8,11 +8,17 @@
 #include <cpuid.h>
 #include "runtime.h"
 #include "gpu/bbgpu.h"
-#if !defined(__x86_64__) || !defined(__GNUC__)
-#error This prototype requires x86-64 GCC or Clang (including MinGW).
+#if !defined(__x86_64__) && !defined(_M_X64)
+#error This prototype requires x86-64.
+#endif
+#if !defined(__GNUC__) && !defined(BBPORT_UWP)
+#error Desktop build requires x86-64 GCC or Clang (including MinGW).
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#ifdef BBPORT_UWP
+#include <memoryapi.h>
+#endif
 #else
 #include <sys/mman.h>
 #include <malloc.h>
@@ -51,7 +57,10 @@ static size_t round_page(size_t size) { return (size + page_size - 1) & ~(page_s
 static void *allocate(size_t size) {
     void *low=runtime_low_map(size,PROT_READ|PROT_WRITE);
     if (low) return low;
-#ifdef _WIN32
+#ifdef BBPORT_UWP
+    void *p = VirtualAllocFromApp(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!p) fail("VirtualAllocFromApp failed");
+#elif defined(_WIN32)
     void *p = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!p) fail("VirtualAlloc failed");
 #else
@@ -61,7 +70,15 @@ static void *allocate(size_t size) {
     return p;
 }
 static void protect(void *p, size_t size, unsigned flags) {
-#ifdef _WIN32
+#ifdef BBPORT_UWP
+    ULONG old = 0, mode = PAGE_NOACCESS;
+    /* AppContainer WACK forbids RWX simultaneously; code is written RW then transitioned to RX. */
+    if (flags & 1) mode = PAGE_EXECUTE_READ;
+    else if (flags & 2) mode = PAGE_READWRITE;
+    else if (flags & 4) mode = PAGE_READONLY;
+    if (!VirtualProtectFromApp(p, size, mode, &old)) fail("VirtualProtectFromApp failed (ensure codeGeneration capability)");
+    FlushInstructionCache(GetCurrentProcess(), p, size);
+#elif defined(_WIN32)
     DWORD old, mode = PAGE_NOACCESS;
     if (flags & 1) mode = (flags & 2) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
     else if (flags & 2) mode = PAGE_READWRITE;
@@ -462,7 +479,11 @@ void runtime_restart(void) {
 #endif
 }
 
+#ifdef BBPORT_UWP
+int bbport_uwp_run_probe(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
@@ -470,7 +491,9 @@ int main(int argc, char **argv) {
     mallopt(M_ARENA_MAX,1);
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
+#ifndef BBPORT_UWP
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
+#endif
     check_cpu();
 #ifdef _WIN32
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
@@ -660,7 +683,12 @@ int main(int argc, char **argv) {
         BbGpuConfig gpu={title,serial,user_dir ? user_dir : "user",(uint32_t)sdk,attributes,1920,1080};
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
         if (bbgpu_init(&gpu)) fail("GPU initialization failed");
+#ifdef BBPORT_UWP
+        printf("GPU: UWP presenter ready (backend=%d); SDK 0x%08x, %u HLE symbols\n",
+               (int)bbgpu_uwp_active_backend(), (unsigned)sdk, bbgpu_symbol_count());
+#else
         printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,bbgpu_symbol_count());
+#endif
     }
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);

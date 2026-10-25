@@ -21,6 +21,7 @@ endif()
 # profile). Covers bbgpu and the static libraries linked into it. No -march: the same build
 # runs on the Steam Deck.
 option(BB_LTO "Link-time optimization of bbgpu" ON)
+option(BBPORT_UWP "Build UWP Direct3D 12 / Direct3D 11 backend for Xbox Dev Mode (no Vulkan)" OFF)
 set(BB_PGO "off" CACHE STRING "Profile-guided optimization: off, generate, use")
 set(BB_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../pgo" CACHE PATH "Profile directory")
 if (BB_LTO)
@@ -43,6 +44,24 @@ elseif (BB_PGO STREQUAL "use")
     # (or built differently for it, bbgpu_init) are compiled without it.
     add_compile_options(-fprofile-use=${BB_PGO_DIR} -fprofile-partial-training
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
+endif()
+
+if (BBPORT_UWP)
+    add_compile_definitions(BBPORT_UWP NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_library(bbgpu STATIC
+        ../uwp/renderer/d3d12/D3D12Backend.cpp
+        ../uwp/renderer/d3d12/D3D12DescriptorManager.cpp
+        ../uwp/renderer/d3d12/D3D12RenderPassCache.cpp
+        ../uwp/renderer/d3d12/SpirvToDxilCompiler.cpp
+        ../uwp/renderer/d3d12/BbgpuUwpBridge.cpp
+        ../uwp/renderer/d3d11/D3D11FallbackBackend.cpp)
+    target_include_directories(bbgpu PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../uwp/renderer/d3d12
+        ${CMAKE_CURRENT_SOURCE_DIR}/../uwp/renderer/d3d11)
+    target_link_libraries(bbgpu PUBLIC d3d12 d3d11 dxgi dxguid dxcompiler WindowsApp)
+    return()
 endif()
 
 find_package(Vulkan REQUIRED)

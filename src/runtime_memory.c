@@ -24,13 +24,22 @@
 #include <unistd.h>
 #endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. BB_DMEM_MB raises it (the resolution
- * patches above 1080p need about 4 GiB more; run.sh sets it). */
+ * patches above 1080p need about 4 GiB more; run.sh sets it).
+ * Xbox UWP Dev Mode enforces a 5,120 MiB (5 GiB) Game Mode ceiling across DirectMemory,
+ * FlexibleMemory (448 MiB), D3D12 resource/descriptor heaps, and OS overhead; cap default
+ * DirectMemory at 3,328 MiB under BBPORT_UWP so total commit stays safely below 5 GiB. */
 static uint64_t pool_size_bytes(void) {
     static uint64_t size;
     if (!size) {
+#ifdef BBPORT_UWP
+        const char *env = getenv("BB_UWP_DMEM_MB");
+        uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
+        if (mb < 2048 || mb > 3840) mb = 3328;
+#else
         const char *env = getenv("BB_DMEM_MB");
         uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
         if (mb < 5056 || mb > 16384) mb = 5056;
+#endif
         size = mb * 1024 * 1024;
     }
     return size;
@@ -138,9 +147,35 @@ static void region_erase(size_t at, size_t n) {
 /* The guest range is reserved before anything else can be placed there (runtime_start). */
 void runtime_memory_reserve(void) {
     if (region_count) return;
+#ifdef BBPORT_UWP
+    /* On Xbox UWP AppContainer, host WinRT/D3D12 DLLs already occupy islands inside
+     * [USER_MIN, USER_MAX), so reserving the full 960 GiB span in one VirtualAlloc2 call
+     * fails with ERROR_INVALID_ADDRESS (487). Walk VirtualQuery and reserve contiguous
+     * MEM_FREE 64 KiB-aligned windows >= 64 MiB as placeholders instead. */
+    const uintptr_t align = 65536u;
+    for (uintptr_t cur = USER_MIN; cur < USER_MAX;) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((const void *)cur, &mbi, sizeof(mbi))) break;
+        uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        if (end <= cur) break;
+        if (end > USER_MAX) end = USER_MAX;
+        uintptr_t lo = (cur + align - 1) & ~(align - 1);
+        uintptr_t hi = end & ~(align - 1);
+        if (mbi.State == MEM_FREE && hi > lo && (hi - lo) >= (UINT64_C(64) << 20)) {
+            if (VirtualAlloc2(GetCurrentProcess(), (void *)lo, hi - lo,
+                              MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, NULL, 0)) {
+                region_insert(region_count, (HostRegion){lo, hi, 0, 0});
+            }
+        }
+        cur = end;
+    }
+    if (!region_count)
+        win_fail("reserving UWP PS4 placeholder windows", USER_MIN, USER_MAX - USER_MIN);
+#else
     if (!VirtualAlloc2(NULL,(void *)USER_MIN,USER_MAX-USER_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
         win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",USER_MIN,USER_MAX-USER_MIN);
     region_insert(0,(HostRegion){USER_MIN,USER_MAX,0,0});
+#endif
 }
 /* Guest memory committed only as the game maps it: the whole pool did not fit Windows' commit
  * limit (RAM + page file) at once (pool()). */
@@ -152,12 +187,23 @@ static void commit_backing(uint64_t phys, uint64_t size) {
             "lower output resolution\n",size>>20,GetLastError());
     win_fail("committing guest memory",(uintptr_t)(backing_base+phys),size);
 }
+static BOOL host_vprotect(void *addr, size_t len, DWORD prot, DWORD *old_out) {
+#ifdef BBPORT_UWP
+    ULONG uold = 0;
+    if (prot == PAGE_EXECUTE_READWRITE) prot = PAGE_EXECUTE_READ;
+    BOOL ok = VirtualProtectFromApp(addr, len, prot, &uold);
+    if (old_out) *old_out = (DWORD)uold;
+    return ok;
+#else
+    return VirtualProtect(addr, len, prot, old_out);
+#endif
+}
 static void view_map(const HostRegion *r, DWORD protect) {
     DWORD initial=protect==PAGE_NOACCESS ? PAGE_READWRITE : protect, old;
     commit_backing(r->phys,r->end-r->start);
     if (!MapViewOfFile3(section,GetCurrentProcess(),(void *)r->start,r->phys,r->end-r->start,MEM_REPLACE_PLACEHOLDER,initial,NULL,0))
         win_fail("MapViewOfFile3",r->start,r->end-r->start);
-    if (initial!=protect && !VirtualProtect((void *)r->start,r->end-r->start,protect,&old))
+    if (initial!=protect && !host_vprotect((void *)r->start,r->end-r->start,protect,&old))
         win_fail("VirtualProtect",r->start,r->end-r->start);
 }
 static size_t save_protections(uintptr_t start, uintptr_t end, ProtRun **runs, size_t count, size_t *capacity) {
@@ -215,7 +261,7 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
     }
     for (size_t i=0;i<nruns;++i) {
         DWORD old;
-        if (runs[i].protect!=PAGE_READWRITE && !VirtualProtect((void *)runs[i].start,runs[i].end-runs[i].start,runs[i].protect,&old))
+        if (runs[i].protect!=PAGE_READWRITE && !host_vprotect((void *)runs[i].start,runs[i].end-runs[i].start,runs[i].protect,&old))
             win_fail("restoring page protection",runs[i].start,runs[i].end-runs[i].start);
     }
     (void)left_runs;
@@ -236,7 +282,7 @@ static int host_protect(uintptr_t address, uint64_t size, int prot) {
     for (size_t i=region_index(address); i<region_count && regions[i].start<end; ++i) {
         if (!regions[i].mapped) continue;
         uintptr_t a=regions[i].start>address ? regions[i].start : address, b=regions[i].end<end ? regions[i].end : end;
-        if (!VirtualProtect((void *)a,b-a,protect,&old)) return -1;
+        if (!host_vprotect((void *)a,b-a,protect,&old)) return -1;
     }
     return 0;
 }

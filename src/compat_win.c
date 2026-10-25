@@ -124,6 +124,41 @@ void compat_sleep_ns(uint64_t ns) {
         Sleep((DWORD)((ns + 999999) / 1000000));
 }
 
+#ifdef BBPORT_UWP
+#include <fileapifromapp.h>
+int compat_remove_tree(const char *path) {
+    wchar_t wpath[MAX_PATH * 4];
+    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, (int)(sizeof(wpath) / sizeof(*wpath))))
+        return -1;
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (!GetFileAttributesExFromAppW(wpath, GetFileExInfoStandard, &fad)) return 0;
+    if (!(fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (fad.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        if (fad.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+            SetFileAttributesFromAppW(wpath, fad.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+        if (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            return RemoveDirectoryFromAppW(wpath) ? 0 : -1;
+        return DeleteFileFromAppW(wpath) ? 0 : -1;
+    }
+    wchar_t pattern[MAX_PATH * 4];
+    swprintf(pattern, sizeof(pattern) / sizeof(*pattern), L"%ls\\*", wpath);
+    WIN32_FIND_DATAW entry;
+    HANDLE find = FindFirstFileExFromAppW(pattern, FindExInfoBasic, &entry, FindExSearchNameMatch, NULL, 0);
+    int result = 0;
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            if (!wcscmp(entry.cFileName, L".") || !wcscmp(entry.cFileName, L"..")) continue;
+            char child_utf8[MAX_PATH * 4], name_utf8[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, entry.cFileName, -1, name_utf8, sizeof(name_utf8), NULL, NULL);
+            snprintf(child_utf8, sizeof(child_utf8), "%s\\%s", path, name_utf8);
+            if (compat_remove_tree(child_utf8)) result = -1;
+        } while (FindNextFileW(find, &entry));
+        FindClose(find);
+    }
+    if (!RemoveDirectoryFromAppW(wpath)) result = -1;
+    return result;
+}
+#else
 int compat_remove_tree(const char *path) {
     DWORD attributes = GetFileAttributesA(path);
     if (attributes == INVALID_FILE_ATTRIBUTES) return 0;
@@ -149,6 +184,7 @@ int compat_remove_tree(const char *path) {
     if (!RemoveDirectoryA(path)) result = -1;
     return result;
 }
+#endif
 
 int compat_cpu_times(int who, int64_t *user_us, int64_t *kernel_us) {
     FILETIME created, exited, kernel, user;

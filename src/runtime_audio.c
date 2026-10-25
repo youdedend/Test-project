@@ -14,7 +14,17 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#ifdef BBPORT_UWP
+/* Native Xbox UWP XAudio2.9 backend (uwp/BBPort.UWP/Platform/XAudio2Sink.cpp). */
+typedef struct BbUwpXAudioVoice SDL_AudioStream;
+extern SDL_AudioStream *bbport_uwp_xaudio2_open(int channels, int is_float, int sample_rate);
+extern void bbport_uwp_xaudio2_close(SDL_AudioStream *voice);
+extern int bbport_uwp_xaudio2_queued_bytes(SDL_AudioStream *voice);
+extern void bbport_uwp_xaudio2_submit(SDL_AudioStream *voice, const void *data, int bytes);
+extern int bbport_uwp_xaudio2_device_channels(void);
+#else
 #include <SDL3/SDL.h>
+#endif
 
 #define PORTS 25
 #define ERR_NOT_OPENED ((int32_t)0x80260001)
@@ -88,10 +98,15 @@ static void audio_levels(void) {
     if (device_channels) return;
     const char *env=getenv("BB_AUDIO_GAIN");
     if (env && env[0]) { char *end=NULL; float g=strtof(env,&end); if (end!=env && g>0.f && g<=8.f) master_gain=g; }
+#ifdef BBPORT_UWP
+    device_channels = bbport_uwp_xaudio2_device_channels();
+    if (device_channels < 1 || device_channels > 8) device_channels = 2;
+#else
     SDL_AudioSpec spec;
     if (SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL) && spec.channels>=1 && spec.channels<=8)
         device_channels=spec.channels;
     else device_channels=-1;
+#endif
     printf("Runtime: audio device %d ch, gain %.2f\n", device_channels>0 ? device_channels : 0, master_gain);
 }
 
@@ -108,8 +123,13 @@ static void sleep_until(uint64_t deadline) {
 static int sdl_audio(void) {
     if (sdl_ready<0) {
         const char *mode=getenv("BB_AUDIO");
+#ifdef BBPORT_UWP
+        sdl_ready = (!mode || strcmp(mode,"none")) ? 1 : 0;
+        printf("Runtime: audio backend %s\n", sdl_ready ? "XAudio2.9 (UWP)" : "timer (silent)");
+#else
         sdl_ready = (!mode || strcmp(mode,"none")) && SDL_InitSubSystem(SDL_INIT_AUDIO);
         printf("Runtime: audio backend %s\n", sdl_ready ? SDL_GetCurrentAudioDriver() : "timer (silent)");
+#endif
     }
     return sdl_ready;
 }
@@ -164,10 +184,16 @@ static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_
         audio_levels();
         int out=p->channels;
         if (device_channels>0 && device_channels<p->channels) out=device_channels;
+#ifdef BBPORT_UWP
+        p->stream=bbport_uwp_xaudio2_open(out, p->is_float, 48000);
+        if (p->stream) p->out_channels=out;
+        else fprintf(stderr,"Runtime: XAudio2 voice open failed; port %d uses the timer sink\n",id);
+#else
         SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, out, 48000};
         p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
         if (p->stream) { p->out_channels=out; SDL_ResumeAudioStreamDevice(p->stream); }
         else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink\n",SDL_GetError(),id);
+#endif
     }
     p->stats=getenv("BB_AUDIO_STATS")!=NULL;
     const char *dump=getenv("BB_AUDIO_DUMP");
@@ -187,7 +213,11 @@ static ABI int32_t audio_close(int32_t handle) {
     Port *p=port_of(handle,&error);
     if (p) {
         pthread_mutex_lock(&p->lock);
+#ifdef BBPORT_UWP
+        if (p->stream) bbport_uwp_xaudio2_close(p->stream);
+#else
         if (p->stream) SDL_DestroyAudioStream(p->stream);
+#endif
         if (p->dump) fclose(p->dump);
         p->dump=NULL;
         p->stream=NULL; p->used=0;
@@ -243,7 +273,11 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             else if (now-p->stat_last_ns>p->stat_max_gap_ns) p->stat_max_gap_ns=now-p->stat_last_ns;
             p->stat_last_ns=now; ++p->stat_buffers;
             if (p->stream) {
+#ifdef BBPORT_UWP
+                int queued=bbport_uwp_xaudio2_queued_bytes(p->stream);
+#else
                 int queued=SDL_GetAudioStreamQueued(p->stream);
+#endif
                 if (queued<p->stat_min_queued) p->stat_min_queued=queued;
                 if (queued==0) ++p->stat_starved;
             }
@@ -263,6 +297,21 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
         if (p->stream) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
+#ifdef BBPORT_UWP
+            int low=2*(int)out_bytes, queued=bbport_uwp_xaudio2_queued_bytes(p->stream);
+            if (queued<(int)out_bytes) {
+                static const unsigned char silence[2048*8*4];
+                bbport_uwp_xaudio2_submit(p->stream,silence,low-queued<(int)out_bytes ? low-queued : (int)out_bytes);
+                queued=low;
+            }
+            if (!p->window_count || queued<p->window_min) p->window_min=queued;
+            if (++p->window_count==32) {
+                p->adjust_ns=p->window_min>low+2*(int)out_bytes ? (int64_t)(period/32) : p->window_min<low ? -(int64_t)(period/32) : 0;
+                p->window_count=0;
+            }
+            p->next_deadline_ns+=(uint64_t)p->adjust_ns;
+            bbport_uwp_xaudio2_submit(p->stream,converted,(int)out_bytes);
+#else
             int low=2*(int)out_bytes, queued=SDL_GetAudioStreamQueued(p->stream);
             if (queued<(int)out_bytes) {
                 static const unsigned char silence[2048*8*4];
@@ -276,6 +325,7 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             }
             p->next_deadline_ns+=(uint64_t)p->adjust_ns;
             SDL_PutAudioStreamData(p->stream,converted,(int)out_bytes);
+#endif
         }
         ++buffers_out;
     }

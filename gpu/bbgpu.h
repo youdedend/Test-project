@@ -80,6 +80,28 @@ int bbgpu_input_reload_requested(void);
 void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
+
+#ifdef BBPORT_UWP
+#define BB_GPU_UWP_ABI_READY 1
+/* Active graphics backend selected by the UWP host (Game Mode D3D12 vs App Mode D3D11 fallback). */
+typedef enum {
+    BB_GPU_BACKEND_NONE = 0,
+    BB_GPU_BACKEND_VULKAN = 1,
+    BB_GPU_BACKEND_D3D12 = 2,
+    BB_GPU_BACKEND_D3D11_FALLBACK = 3,
+} BbGpuBackend;
+
+/* Supplies the CoreWindow IUnknown* before bbgpu_init() creates the DXGI swapchain. */
+void bbgpu_uwp_set_core_window(void *core_window_unknown, int32_t width, int32_t height);
+/* Returns the active graphics backend (BB_GPU_BACKEND_D3D12 in Game Mode, D3D11 fallback otherwise). */
+BbGpuBackend bbgpu_uwp_active_backend(void);
+/* UWP lifecycle hooks invoked from CoreApplication::Suspending / Resuming. */
+void bbgpu_uwp_on_suspending(void);
+void bbgpu_uwp_on_resuming(void);
+/* Evicts cold TextureSetMemo descriptor slices and staging pools down to target_bytes. */
+uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
