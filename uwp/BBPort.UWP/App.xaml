@@ -1,0 +1,17 @@
+<Application
+    x:Class="BBPort.UWP.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    RequestedTheme="Dark">
+
+    <Application.Resources>
+        <SolidColorBrush x:Key="ObsidianBgBrush" Color="#0B0A0E" />
+        <SolidColorBrush x:Key="CardSurfaceBrush" Color="#15131B" />
+        <SolidColorBrush x:Key="CardBorderBrush" Color="#2E293A" />
+        <SolidColorBrush x:Key="BloodAccentBrush" Color="#9E1B24" />
+        <SolidColorBrush x:Key="PaleGoldBrush" Color="#D7C39A" />
+        <SolidColorBrush x:Key="MutedAshBrush" Color="#9A94A6" />
+        <SolidColorBrush x:Key="PassGreenBrush" Color="#3CA86B" />
+        <SolidColorBrush x:Key="WarnAmberBrush" Color="#D99B26" />
+    </Application.Resources>
+</Application>
