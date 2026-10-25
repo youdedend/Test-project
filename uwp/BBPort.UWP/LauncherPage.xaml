@@ -1,0 +1,214 @@
+<Page
+    x:Class="BBPort.UWP.LauncherPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource ObsidianBgBrush}"
+    XYFocusKeyboardNavigation="Enabled">
+
+    <Grid Padding="48,36,48,36">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="0,0,0,24">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="BLOODBORNE — XBOX DEV MODE UWP LAUNCHER"
+                           Foreground="{StaticResource PaleGoldBrush}"
+                           FontSize="28"
+                           FontWeight="SemiBold"
+                           CharacterSpacing="80" />
+                <TextBlock x:Name="SubtitleText"
+                           Text="Zero-Picker AppContainer Boot • LocalState\game\CUSA03173"
+                           Foreground="{StaticResource MutedAshBrush}"
+                           FontSize="15"
+                           Margin="0,4,0,0" />
+            </StackPanel>
+
+            <Border Grid.Column="1"
+                    Background="{StaticResource CardSurfaceBrush}"
+                    BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="16,10"
+                    VerticalAlignment="Center">
+                <TextBlock x:Name="ControllerBadgeText"
+                           Text="Gamepad: Detecting..."
+                           Foreground="{StaticResource PaleGoldBrush}"
+                           FontSize="15" />
+            </Border>
+        </Grid>
+
+        <!-- Main Two-Column Content -->
+        <Grid Grid.Row="1" ColumnSpacing="28">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.15*" />
+                <ColumnDefinition Width="0.85*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Column: First-Start Asset Audit + Hardware Rating -->
+            <StackPanel Grid.Column="0" Spacing="20">
+                <!-- Hardware Rating Card (replaces desktop PDH/DXGI/JobObject probes) -->
+                <Border Background="{StaticResource CardSurfaceBrush}"
+                        BorderBrush="{StaticResource CardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="22">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="XBOX HARDWARE &amp; SANDBOX RATING"
+                                   Foreground="{StaticResource PaleGoldBrush}"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="DeviceFamilyText"
+                                   Text="Device Family: Checking..."
+                                   Foreground="White"
+                                   FontSize="15" />
+                        <TextBlock x:Name="MemoryCapText"
+                                   Text="AppMemoryUsageLimit: Checking..."
+                                   Foreground="White"
+                                   FontSize="15" />
+                        <TextBlock x:Name="ResourceModeVerdictText"
+                                   Text="Resource Mode: Checking Game Mode vs App Mode..."
+                                   Foreground="{StaticResource WarnAmberBrush}"
+                                   TextWrapping="Wrap"
+                                   FontSize="14" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Zero-Picker First-Start Asset Verification Card -->
+                <Border Background="{StaticResource CardSurfaceBrush}"
+                        BorderBrush="{StaticResource CardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="22">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="FIRST-START ASSET CHECK (NO FILE PICKERS)"
+                                   Foreground="{StaticResource PaleGoldBrush}"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="ProvisionPathText"
+                                   Text="LocalFolder Path: Resolving..."
+                                   Foreground="{StaticResource MutedAshBrush}"
+                                   FontSize="13"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="SfoStatusText"
+                                   Text="• sce_sys\param.sfo: Pending..."
+                                   Foreground="White"
+                                   FontSize="15" />
+                        <TextBlock x:Name="ExecutableStatusText"
+                                   Text="• eboot.bin / boot-linked.bin: Pending..."
+                                   Foreground="White"
+                                   FontSize="15" />
+                        <TextBlock x:Name="ModulesStatusText"
+                                   Text="• sce_module (libc.prx + libSceFios2.prx) &amp; dvdroot_ps4: Pending..."
+                                   Foreground="White"
+                                   FontSize="15" />
+                        <TextBlock x:Name="ProvisionHintText"
+                                   Text="Provision assets with uwp\provision.ps1 (USB NTFS ACL or SFTP port 22)."
+                                   Foreground="{StaticResource MutedAshBrush}"
+                                   TextWrapping="Wrap"
+                                   FontSize="13" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Right Column: Gamepad-Navigable Settings -->
+            <Border Grid.Column="1"
+                    Background="{StaticResource CardSurfaceBrush}"
+                    BorderBrush="{StaticResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="22">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="GRAPHICS, AUDIO &amp; INPUT SETTINGS"
+                               Foreground="{StaticResource PaleGoldBrush}"
+                               FontSize="17"
+                               FontWeight="SemiBold" />
+
+                    <ComboBox x:Name="FpsCombo"
+                              Header="Target Frame Rate"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="OnSettingChanged">
+                        <ComboBoxItem Content="30 FPS (Original Frame Pacing)" Tag="30" />
+                        <ComboBoxItem Content="60 FPS (Recommended on Series X|S)" Tag="60" IsSelected="True" />
+                        <ComboBoxItem Content="90 FPS (VRR 120 Hz Display)" Tag="90" />
+                        <ComboBoxItem Content="120 FPS (Unlocked VRR)" Tag="120" />
+                    </ComboBox>
+
+                    <ComboBox x:Name="OutputHeightCombo"
+                              Header="Output Resolution"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="OnSettingChanged">
+                        <ComboBoxItem Content="1280 x 720 (720p)" Tag="720" />
+                        <ComboBoxItem Content="1920 x 1080 (1080p Safe Budget)" Tag="1080" IsSelected="True" />
+                        <ComboBoxItem Content="2560 x 1440 (1440p Series X)" Tag="1440" />
+                        <ComboBoxItem Content="3840 x 2160 (4K Output + Half-Res Scene)" Tag="2160" />
+                    </ComboBox>
+
+                    <ComboBox x:Name="PresetCombo"
+                              Header="Internal Scene Scale Preset (5 GiB Cap Protection)"
+                              HorizontalAlignment="Stretch"
+                              SelectionChanged="OnSettingChanged">
+                        <ComboBoxItem Content="Native AA (100% Internal)" Tag="0" />
+                        <ComboBoxItem Content="Quality (67% Internal — Recommended)" Tag="1" IsSelected="True" />
+                        <ComboBoxItem Content="Balanced (58% Internal)" Tag="2" />
+                        <ComboBoxItem Content="Performance (50% Internal — Series S Safe)" Tag="3" />
+                    </ComboBox>
+
+                    <ToggleSwitch x:Name="SoundHackToggle"
+                                  Header="userdata0010 (0x204E) Weapon SFX Fix"
+                                  IsOn="True"
+                                  Toggled="OnSettingToggled" />
+
+                    <ToggleSwitch x:Name="SwapConfirmToggle"
+                                  Header="Swap A/B Confirm (Circle = Confirm)"
+                                  IsOn="False"
+                                  Toggled="OnSettingToggled" />
+
+                    <ToggleSwitch x:Name="OnlineToggle"
+                                  Header="The Hunter's Dream / shadNet Online (internetClient)"
+                                  IsOn="False"
+                                  Toggled="OnSettingToggled" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Footer Action Bar -->
+        <Grid Grid.Row="2" Margin="0,24,0,0" ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="StatusFooterText"
+                       Text="Touchpad Mapping: View = Gestures (Left) • View + D-Pad Right = Personal Effects (Right)"
+                       Foreground="{StaticResource MutedAshBrush}"
+                       VerticalAlignment="Center"
+                       FontSize="14" />
+
+            <Button x:Name="RescanButton"
+                    Grid.Column="1"
+                    Content="Re-Scan LocalState"
+                    Padding="24,14"
+                    FontSize="16"
+                    Click="OnRescanClicked" />
+
+            <Button x:Name="LaunchButton"
+                    Grid.Column="2"
+                    Content="BEGIN THE HUNT"
+                    Background="{StaticResource BloodAccentBrush}"
+                    Foreground="White"
+                    FontWeight="Bold"
+                    Padding="34,14"
+                    FontSize="17"
+                    Click="OnLaunchClicked" />
+        </Grid>
+    </Grid>
+</Page>
