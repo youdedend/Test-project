@@ -107,16 +107,44 @@ void runtime_file_unmount(const char *guest) {
 }
 static char user_root[512]="user";
 const char *runtime_file_user_dir(void) { return user_root; }
+#ifdef BBPORT_UWP
+/* Implemented in uwp/BBPort.UWP/Platform/StorageLayer.cpp: resolves LocalFolder & TemporaryFolder. */
+extern int bbport_uwp_storage_get_roots(char *app0_out, size_t app0_cap,
+                                        char *user_out, size_t user_cap,
+                                        char *temp_out, size_t temp_cap);
+#endif
 void runtime_file_configure(const char *app0,const char *user) {
     char path[600];
+#ifdef BBPORT_UWP
+    char uwp_app0[512]="", uwp_user[512]="", uwp_temp[512]="";
+    if (bbport_uwp_storage_get_roots(uwp_app0, sizeof(uwp_app0),
+                                     uwp_user, sizeof(uwp_user),
+                                     uwp_temp, sizeof(uwp_temp)) == 0) {
+        if (!app0 || !*app0) app0 = uwp_app0;
+        if (!user || !*user || !strcmp(user, "user")) user = uwp_user;
+    }
+#endif
     snprintf(user_root,sizeof(user_root),"%s",user);
     runtime_file_mount("/app0",app0);
     runtime_file_mount("/hostapp",app0);
     const char *writable[]={"temp0","download0","data"};
+#ifdef _WIN32
+    _mkdir(user);
+#else
     mkdir(user,0755);
+#endif
     for (int i=0;i<3;++i) {
+#ifdef BBPORT_UWP
+        if (i==0 && uwp_temp[0]) snprintf(path,sizeof(path),"%s",uwp_temp);
+        else snprintf(path,sizeof(path),"%s/%s",user,writable[i]);
+#else
         snprintf(path,sizeof(path),"%s/%s",user,writable[i]);
+#endif
+#ifdef _WIN32
+        _mkdir(path);
+#else
         mkdir(path,0755);
+#endif
         char guest[32]; snprintf(guest,sizeof(guest),"/%s",writable[i]);
         runtime_file_mount(guest,path);
     }
