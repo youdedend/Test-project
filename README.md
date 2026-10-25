@@ -185,6 +185,15 @@ illusion, emoose and the Bloodborne community.
 NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The icon is original
 artwork.
 
+## Xbox Dev Mode (UWP)
+
+An experimental in-tree **Xbox Series X|S & Xbox One Retail Dev Mode UWP (`x64`)** port target
+lives under [`uwp/`](uwp/) (Direct3D 12 Feature Level `12_0` in Game Mode, `Windows.Gaming.Input`
+controller layer, `XAudio2.9` audio, and `LocalFolder` / `TemporaryFolder` sandbox storage, with
+all shared runtime hooks guarded behind `#ifdef BBPORT_UWP`). See **[`XBOX_UWP.md`](XBOX_UWP.md)**
+and **[`uwp/README.md`](uwp/README.md)** for architecture status, prerequisites, `build.ps1` /
+`deploy.ps1` / `provision.ps1` workflows, and open workstreams.
+
 ## License
 
 GNU GPL v2 or later ([LICENSE](LICENSE)). Third-party components keep their own licenses
