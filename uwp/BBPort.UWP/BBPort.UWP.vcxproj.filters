@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Platform">
+      <UniqueIdentifier>{10000001-0317-4BB0-8000-000000000001}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Renderer">
+      <UniqueIdentifier>{10000002-0317-4BB0-8000-000000000002}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Renderer\D3D12">
+      <UniqueIdentifier>{10000003-0317-4BB0-8000-000000000003}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Renderer\D3D11">
+      <UniqueIdentifier>{10000004-0317-4BB0-8000-000000000004}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Input">
+      <UniqueIdentifier>{10000005-0317-4BB0-8000-000000000005}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Launcher">
+      <UniqueIdentifier>{10000006-0317-4BB0-8000-000000000006}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Assets">
+      <UniqueIdentifier>{10000007-0317-4BB0-8000-000000000007}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Platform\GamepadInput.h"><Filter>Platform</Filter></ClInclude>
+    <ClInclude Include="Platform\LifecycleManager.h"><Filter>Platform</Filter></ClInclude>
+    <ClInclude Include="Platform\StorageLayer.h"><Filter>Platform</Filter></ClInclude>
+    <ClInclude Include="Platform\UwpFileLoader.h"><Filter>Platform</Filter></ClInclude>
+    <ClInclude Include="Platform\XAudio2Sink.h"><Filter>Platform</Filter></ClInclude>
+    <ClInclude Include="..\input\DirectInputShim.h"><Filter>Input</Filter></ClInclude>
+    <ClInclude Include="..\renderer\d3d12\D3D12Backend.h"><Filter>Renderer\D3D12</Filter></ClInclude>
+    <ClInclude Include="..\renderer\d3d12\D3D12DescriptorManager.h"><Filter>Renderer\D3D12</Filter></ClInclude>
+    <ClInclude Include="..\renderer\d3d12\D3D12RenderPassCache.h"><Filter>Renderer\D3D12</Filter></ClInclude>
+    <ClInclude Include="..\renderer\d3d12\SpirvToDxilCompiler.h"><Filter>Renderer\D3D12</Filter></ClInclude>
+    <ClInclude Include="..\renderer\d3d11\D3D11FallbackBackend.h"><Filter>Renderer\D3D11</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Platform\GamepadInput.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="Platform\LifecycleManager.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="Platform\StorageLayer.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="Platform\UwpEntryPoint.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="Platform\UwpFileLoader.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="Platform\XAudio2Sink.cpp"><Filter>Platform</Filter></ClCompile>
+    <ClCompile Include="..\input\DirectInputShim.cpp"><Filter>Input</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d12\BbgpuUwpBridge.cpp"><Filter>Renderer\D3D12</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d12\D3D12Backend.cpp"><Filter>Renderer\D3D12</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d12\D3D12DescriptorManager.cpp"><Filter>Renderer\D3D12</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d12\D3D12RenderPassCache.cpp"><Filter>Renderer\D3D12</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d12\SpirvToDxilCompiler.cpp"><Filter>Renderer\D3D12</Filter></ClCompile>
+    <ClCompile Include="..\renderer\d3d11\D3D11FallbackBackend.cpp"><Filter>Renderer\D3D11</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Assets\SplashScreen.png"><Filter>Assets</Filter></Image>
+    <Image Include="Assets\Square150x150Logo.png"><Filter>Assets</Filter></Image>
+    <Image Include="Assets\Square44x44Logo.png"><Filter>Assets</Filter></Image>
+    <Image Include="Assets\StoreLogo.png"><Filter>Assets</Filter></Image>
+    <Image Include="Assets\Wide310x150Logo.png"><Filter>Assets</Filter></Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.xaml"><Filter>Launcher</Filter></None>
+    <None Include="App.xaml.cs"><Filter>Launcher</Filter></None>
+    <None Include="LauncherPage.xaml"><Filter>Launcher</Filter></None>
+    <None Include="LauncherPage.xaml.cs"><Filter>Launcher</Filter></None>
+  </ItemGroup>
+</Project>

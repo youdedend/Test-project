@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7A91B109-0317-4D12-9F64-BB0010900001}</ProjectGuid>
+    <Keyword>DirectXApp</Keyword>
+    <RootNamespace>BBPort.UWP</RootNamespace>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <MinimumVisualStudioVersion>16.0</MinimumVisualStudioVersion>
+    <AppContainerApplication>true</AppContainerApplication>
+    <ApplicationType>Windows Store</ApplicationType>
+    <WindowsTargetPlatformVersion Condition=" '$(WindowsTargetPlatformVersion)' == '' ">10.0.22621.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
+    <AppxBundle>Never</AppxBundle>
+    <AppxBundlePlatforms>x64</AppxBundlePlatforms>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset Condition="'$(UseClangCL)'!='true'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(UseClangCL)'=='true'">ClangCL</PlatformToolset>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(UseClangCL)'!='true'">true</WholeProgramOptimization>
+    <PlatformToolset Condition="'$(UseClangCL)'!='true'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(UseClangCL)'=='true'">ClangCL</PlatformToolset>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)build_out\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build_out\intermediate\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>BBPort.UWP</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <AdditionalOptions>/await /utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>BBPORT_UWP;_UNICODE;UNICODE;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Platform;$(SolutionDir)renderer\d3d12;$(SolutionDir)renderer\d3d11;$(SolutionDir)input;$(SolutionDir)..;$(SolutionDir)..\src;$(SolutionDir)..\gpu;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>d3d12.lib;d3d11.lib;dxgi.lib;dxguid.lib;dxcompiler.lib;xaudio2.lib;xinputuap.lib;bcrypt.lib;ws2_32.lib;WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
+      <SubSystem>Windows</SubSystem>
+      <StackReserveSize>16777216</StackReserveSize>
+      <StackCommitSize>16777216</StackCommitSize>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <CompileAsWinRT>false</CompileAsWinRT>
+      <AdditionalOptions>/await /utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>BBPORT_UWP;_UNICODE;UNICODE;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)Platform;$(SolutionDir)renderer\d3d12;$(SolutionDir)renderer\d3d11;$(SolutionDir)input;$(SolutionDir)..;$(SolutionDir)..\src;$(SolutionDir)..\gpu;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>d3d12.lib;d3d11.lib;dxgi.lib;dxguid.lib;dxcompiler.lib;xaudio2.lib;xinputuap.lib;bcrypt.lib;ws2_32.lib;WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <SubSystem>Windows</SubSystem>
+      <StackReserveSize>16777216</StackReserveSize>
+      <StackCommitSize>16777216</StackCommitSize>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClInclude Include="Platform\GamepadInput.h" Condition="Exists('Platform\GamepadInput.h')" />
+    <ClInclude Include="Platform\LifecycleManager.h" Condition="Exists('Platform\LifecycleManager.h')" />
+    <ClInclude Include="Platform\StorageLayer.h" Condition="Exists('Platform\StorageLayer.h')" />
+    <ClInclude Include="Platform\UwpFileLoader.h" Condition="Exists('Platform\UwpFileLoader.h')" />
+    <ClInclude Include="Platform\XAudio2Sink.h" Condition="Exists('Platform\XAudio2Sink.h')" />
+    <ClInclude Include="..\input\DirectInputShim.h" Condition="Exists('..\input\DirectInputShim.h')" />
+    <ClInclude Include="..\renderer\d3d12\D3D12Backend.h" Condition="Exists('..\renderer\d3d12\D3D12Backend.h')" />
+    <ClInclude Include="..\renderer\d3d12\D3D12DescriptorManager.h" Condition="Exists('..\renderer\d3d12\D3D12DescriptorManager.h')" />
+    <ClInclude Include="..\renderer\d3d12\D3D12RenderPassCache.h" Condition="Exists('..\renderer\d3d12\D3D12RenderPassCache.h')" />
+    <ClInclude Include="..\renderer\d3d12\SpirvToDxilCompiler.h" Condition="Exists('..\renderer\d3d12\SpirvToDxilCompiler.h')" />
+    <ClInclude Include="..\renderer\d3d11\D3D11FallbackBackend.h" Condition="Exists('..\renderer\d3d11\D3D11FallbackBackend.h')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="Platform\GamepadInput.cpp" Condition="Exists('Platform\GamepadInput.cpp')" />
+    <ClCompile Include="Platform\LifecycleManager.cpp" Condition="Exists('Platform\LifecycleManager.cpp')" />
+    <ClCompile Include="Platform\StorageLayer.cpp" Condition="Exists('Platform\StorageLayer.cpp')" />
+    <ClCompile Include="Platform\UwpEntryPoint.cpp" Condition="Exists('Platform\UwpEntryPoint.cpp')" />
+    <ClCompile Include="Platform\UwpFileLoader.cpp" Condition="Exists('Platform\UwpFileLoader.cpp')" />
+    <ClCompile Include="Platform\XAudio2Sink.cpp" Condition="Exists('Platform\XAudio2Sink.cpp')" />
+    <ClCompile Include="..\input\DirectInputShim.cpp" Condition="Exists('..\input\DirectInputShim.cpp')" />
+    <ClCompile Include="..\renderer\d3d12\BbgpuUwpBridge.cpp" Condition="Exists('..\renderer\d3d12\BbgpuUwpBridge.cpp')" />
+    <ClCompile Include="..\renderer\d3d12\D3D12Backend.cpp" Condition="Exists('..\renderer\d3d12\D3D12Backend.cpp')" />
+    <ClCompile Include="..\renderer\d3d12\D3D12DescriptorManager.cpp" Condition="Exists('..\renderer\d3d12\D3D12DescriptorManager.cpp')" />
+    <ClCompile Include="..\renderer\d3d12\D3D12RenderPassCache.cpp" Condition="Exists('..\renderer\d3d12\D3D12RenderPassCache.cpp')" />
+    <ClCompile Include="..\renderer\d3d12\SpirvToDxilCompiler.cpp" Condition="Exists('..\renderer\d3d12\SpirvToDxilCompiler.cpp')" />
+    <ClCompile Include="..\renderer\d3d11\D3D11FallbackBackend.cpp" Condition="Exists('..\renderer\d3d11\D3D11FallbackBackend.cpp')" />
+  </ItemGroup>
+
+  <!-- When building with -p:UseClangCL=true, compile the System V ABI PS4 loader & HLE C runtime in-process -->
+  <ItemGroup Condition="'$(UseClangCL)'=='true'">
+    <ClCompile Include="..\..\src\compat_win.c" />
+    <ClCompile Include="..\..\src\probe.c" />
+    <ClCompile Include="..\..\src\runtime.c" />
+    <ClCompile Include="..\..\src\runtime_ajm.c" />
+    <ClCompile Include="..\..\src\runtime_audio.c" />
+    <ClCompile Include="..\..\src\runtime_content.c" />
+    <ClCompile Include="..\..\src\runtime_file.c" />
+    <ClCompile Include="..\..\src\runtime_input_config.c" />
+    <ClCompile Include="..\..\src\runtime_kernel.c" />
+    <ClCompile Include="..\..\src\runtime_memory.c" />
+    <ClCompile Include="..\..\src\runtime_mutex.c" />
+    <ClCompile Include="..\..\src\runtime_pad.c" />
+    <ClCompile Include="..\..\src\runtime_rebirth.c" />
+    <ClCompile Include="..\..\src\runtime_rtc.c" />
+    <ClCompile Include="..\..\src\runtime_rwlock.c" />
+    <ClCompile Include="..\..\src\runtime_savedata.c" />
+    <ClCompile Include="..\..\src\runtime_sema.c" />
+    <ClCompile Include="..\..\src\runtime_services.c" />
+    <ClCompile Include="..\..\src\runtime_thread.c" />
+    <ClCompile Include="..\..\src\runtime_time.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest" Condition="Exists('Package.appxmanifest')">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Image Include="Assets\SplashScreen.png" />
+    <Image Include="Assets\Square150x150Logo.png" />
+    <Image Include="Assets\Square44x44Logo.png" />
+    <Image Include="Assets\StoreLogo.png" />
+    <Image Include="Assets\Wide310x150Logo.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="App.xaml" Condition="Exists('App.xaml')" />
+    <None Include="App.xaml.cs" Condition="Exists('App.xaml.cs')" />
+    <None Include="LauncherPage.xaml" Condition="Exists('LauncherPage.xaml')" />
+    <None Include="LauncherPage.xaml.cs" Condition="Exists('LauncherPage.xaml.cs')" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>
