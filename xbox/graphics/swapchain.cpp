@@ -5,6 +5,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include <vk_mem_alloc.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,7 +55,11 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present(vk::Queue) {
-    vmaSetCurrentFrameIndex(instance.GetAllocator(), ++frame_index);
+    /* Swapchain::frame_index MUST stay 0 on UWP because image_acquired has 1 element.
+     * Use an independent monotonic counter to refresh VMA's per-frame budget stats. */
+    static std::atomic<u32> vma_frame{0};
+    vmaSetCurrentFrameIndex(instance.GetAllocator(),
+                            vma_frame.fetch_add(1u, std::memory_order_relaxed) + 1u);
     const bool vsync = VsyncEnabled();
     present_mode = vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate;
     return bridge->Present(vsync);

@@ -435,10 +435,25 @@ void BufferCache::ProcessFaultBuffer() {
 
 void BufferCache::SynchronizeDmaBuffers() {
     for (const auto& range : resident_ranges) {
+#ifdef BB_UWP
+        const VAddr end_addr = range.end << block_shift;
+        for (VAddr cur = range.start << block_shift; cur < end_addr;) {
+            const auto* arena = address_space[cur >> arena_page_bits];
+            if (!arena) {
+                cur = ((cur >> arena_page_bits) + 1) << arena_page_bits;
+                continue;
+            }
+            const u64 arena_end = arena->cpu_addr + arena->size_bytes;
+            const u64 step = std::min<u64>({end_addr - cur, arena_end - cur, u64{1} << 30});
+            SynchronizeMemory(arena, cur, static_cast<u32>(step), false, false);
+            cur += step;
+        }
+#else
         const u64 page = range.start >> (arena_page_bits - block_shift);
         const VAddr device_addr = range.start << block_shift;
         const u64 size = (range.end - range.start) << block_shift;
         SynchronizeMemory(address_space[page], device_addr, size, false, false);
+#endif
     }
 }
 
