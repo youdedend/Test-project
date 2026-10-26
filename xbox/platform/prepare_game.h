@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,6 +20,27 @@ struct Dump {
     Bytes fios;
     Bytes sfo;
 };
+
+/// The software metadata read out of a dump's sce_sys/param.sfo.
+struct SfoInfo {
+    std::string app_ver;    // APP_VER, e.g. "01.09" ("" when the key is absent)
+    std::string app_type;   // APP_TYPE, "gp" for a base game, "patch" (or "gd") for an update
+    std::string title_id;   // TITLE_ID, e.g. "CUSA03173"
+    std::string content_id; // CONTENT_ID, the update version is encoded in it
+    std::string path;       // the param.sfo this came from ("" when parsed from bytes)
+    std::string update_ver; // version decoded from CONTENT_ID (e.g. "01.09"), may be empty
+
+    /// True when this param.sfo belongs to an update/patch container rather than a base game.
+    bool IsPatch() const;
+    /// The best version this container can be credited with: APP_VER, else the CONTENT_ID group.
+    const std::string& Version() const;
+};
+
+/// Parses param.sfo bytes. Returns nullopt when the file is not a valid PSF or has no APP_VER;
+/// the raw header bytes are logged so a broken dump can be diagnosed from loader.log.
+std::optional<SfoInfo> ParseParamSfo(const Bytes& sfo, const std::string& path);
+/// Reads and parses `<dir>\sce_sys\param.sfo`. Never falls back to a default version.
+std::optional<SfoInfo> ReadParamSfo(const std::string& dir);
 
 struct BootPrepared {
     Bytes boot_linked; // BBPROBE5 (eboot + libc.prx + libSceFios2.prx + redzone trampolines)

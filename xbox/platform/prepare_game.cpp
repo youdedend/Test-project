@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "prepare_game.h"
 
+#include "sfo_version.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -14,6 +16,9 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+
+// xbox/platform/runtime_compat.c (the AppContainer-safe fopen; main.cpp declares the same).
+extern "C" FILE* bb_uwp_fopen(const char* path, const char* mode);
 
 namespace BbPrepare {
 namespace {
@@ -1300,6 +1305,91 @@ std::string CheckTitle(const Bytes& sfo, std::string* out_title_id, std::string*
     }
     return "is " + title + (id.empty() ? "" : (" (" + id + ")")) +
            ", not Bloodborne (CUSA00900 / CUSA00207 / CUSA03173 / etc.).";
+}
+
+bool SfoInfo::IsPatch() const {
+    return BbPrepare::IsPatchAppType(app_type) || !update_ver.empty();
+}
+
+const std::string& SfoInfo::Version() const {
+    return app_ver.empty() ? update_ver : app_ver;
+}
+
+namespace {
+
+/// Logs the first bytes of a param.sfo that could not be parsed, so the failure is diagnosable
+/// from loader.log without the dump (the file itself never leaves the console).
+void log_bad_sfo(const Bytes& sfo, const std::string& path, const std::string& why) {
+    std::printf("Prepare: cannot read %s (%s, %zu bytes); refusing to guess a version\n",
+                path.empty() ? "param.sfo" : path.c_str(), why.c_str(), sfo.size());
+    const size_t shown = std::min<size_t>(sfo.size(), 64);
+    if (shown) {
+        std::printf("Prepare: param.sfo raw bytes:");
+        for (size_t i = 0; i < shown; ++i) {
+            std::printf(" %02x", sfo[i]);
+        }
+        std::printf("%s\n", shown < sfo.size() ? " ..." : "");
+    }
+    std::fflush(stdout);
+}
+
+} // namespace
+
+std::optional<SfoInfo> ParseParamSfo(const Bytes& sfo, const std::string& path) {
+    std::map<std::string, SfoValue> values;
+    try {
+        values = parse_sfo(sfo);
+    } catch (const std::exception& e) {
+        log_bad_sfo(sfo, path, e.what());
+        return std::nullopt;
+    }
+    const auto text = [&values](const char* key) -> std::string {
+        const auto it = values.find(key);
+        return it == values.end() ? std::string{} : it->second.text;
+    };
+    SfoInfo info;
+    info.app_ver = text("APP_VER");
+    info.app_type = text("APP_TYPE");
+    info.title_id = text("TITLE_ID");
+    info.content_id = text("CONTENT_ID");
+    info.path = path;
+    info.update_ver = BbPrepare::UpdateVersionFromContentId(info.content_id);
+    if (info.app_ver.empty()) {
+        // APP_VER is mandatory; an SFO without it is not a version we are willing to run.
+        log_bad_sfo(sfo, path, "no APP_VER key");
+        return std::nullopt;
+    }
+    std::printf("Prepare: param.sfo %s app_ver=%s app_type=%s title_id=%s content_id=%s%s%s\n",
+                path.empty() ? "(bytes)" : path.c_str(), info.app_ver.c_str(),
+                info.app_type.empty() ? "?" : info.app_type.c_str(), info.title_id.c_str(),
+                info.content_id.empty() ? "?" : info.content_id.c_str(),
+                info.update_ver.empty() ? "" : " content_ver=",
+                info.update_ver.empty() ? "" : info.update_ver.c_str());
+    std::printf("Prepare: param.sfo kind=%s\n", info.IsPatch() ? "patch" : "base");
+    std::fflush(stdout);
+    return info;
+}
+
+std::optional<SfoInfo> ReadParamSfo(const std::string& dir) {
+    const std::string path = dir + "\\sce_sys\\param.sfo";
+    Bytes sfo;
+    FILE* file = bb_uwp_fopen(path.c_str(), "rb");
+    if (!file) {
+        std::printf("Prepare: %s is missing or unreadable\n", path.c_str());
+        std::fflush(stdout);
+        return std::nullopt;
+    }
+    uint8_t chunk[64 * 1024];
+    for (size_t read; (read = std::fread(chunk, 1, sizeof(chunk), file)) > 0;) {
+        sfo.insert(sfo.end(), chunk, chunk + read);
+    }
+    const bool io_error = std::ferror(file) != 0;
+    std::fclose(file);
+    if (io_error) {
+        log_bad_sfo(sfo, path, "read error");
+        return std::nullopt;
+    }
+    return ParseParamSfo(sfo, path);
 }
 
 uint64_t Fingerprint(const Dump& dump, const std::string& redzone_json) {
