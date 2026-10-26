@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -363,6 +364,12 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                                            driver_cache_data);
     }
     if (!driver_cache_data.empty()) {
+        // The first 32 bytes of a Vulkan pipeline cache are the standard header:
+        //   headerSize, headerVersion, vendorID, deviceID, pipelineCacheUUID[16].
+        // Dozen's pipelineCacheUUID is derived from the device properties, so a Mesa rebuild (every
+        // CI package) or a GPU driver update legitimately changes it and the blobs are unusable.
+        // Log both identities and keep the refused file so the next hardware report can say *why*
+        // a cache was dropped instead of leaving "UUID/device mismatch" to guesswork.
         const auto dev_props = instance.GetPhysicalDevice().getProperties();
         u32 hdr_size = 0, hdr_ver = 0, vendor = 0, dev_id = 0;
         bool valid_hdr = driver_cache_data.size() >= 32;
@@ -376,9 +383,32 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                         std::memcmp(driver_cache_data.data() + 16,
                                     dev_props.pipelineCacheUUID.data(), 16) == 0;
         }
+        const auto uuid_text = [](const u8* uuid) {
+            std::string text;
+            char part[3];
+            for (int i = 0; i < 16; ++i) {
+                std::snprintf(part, sizeof(part), "%02x", uuid[i]);
+                text += part;
+            }
+            return text;
+        };
+        std::printf("GPU: driver.vkcache identity: file vendor=%#x device=%#x uuid=%s | current "
+                    "vendor=%#x device=%#x uuid=%s\n",
+                    vendor, dev_id,
+                    driver_cache_data.size() >= 32 ? uuid_text(driver_cache_data.data() + 16).c_str()
+                                                   : "<none>",
+                    dev_props.vendorID, dev_props.deviceID,
+                    uuid_text(dev_props.pipelineCacheUUID.data()).c_str());
         if (!valid_hdr) {
-            std::printf("GPU: discarding stale driver.vkcache (%zu KiB, UUID/device mismatch)\n",
-                        driver_cache_data.size() >> 10);
+            std::printf("GPU: discarding stale driver.vkcache (%zu KiB, %s)\n",
+                        driver_cache_data.size() >> 10,
+                        driver_cache_data.size() < 32 ? "truncated header"
+                        : (vendor != dev_props.vendorID || dev_id != dev_props.deviceID)
+                            ? "device mismatch"
+                            : "pipeline cache UUID changed (Mesa or GPU driver update)");
+            // One generation is kept as driver.vkcache.rejected for support: the identity line
+            // above then shows the two UUIDs side by side.
+            Storage::DataBase::Instance().RotateRejected(Storage::BlobType::DriverCache, "driver");
             std::vector<u8>().swap(driver_cache_data);
         }
     }

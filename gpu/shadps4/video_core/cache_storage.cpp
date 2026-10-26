@@ -242,6 +242,23 @@ void LoadVector(BlobType type, std::filesystem::path& path, std::vector<T>& v) {
     }
 }
 
+void DataBase::RotateRejected(BlobType type, const std::string& name) {
+    if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
+        return;
+    }
+    std::filesystem::path path = cache_path / name;
+    path.replace_extension(GetBlobFileExtension(type));
+    auto rejected = path;
+    rejected += ".rejected";
+    std::error_code error;
+    std::filesystem::remove(rejected, error);
+    error.clear();
+    std::filesystem::rename(path, rejected, error);
+    if (error) {
+        std::filesystem::remove(path, error);
+    }
+}
+
 bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& data) {
     if (!opened) {
         return false;
