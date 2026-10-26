@@ -66,3 +66,7 @@ BB_DESKTOP_SHIM(RegisterClassW, RegisterClassWFails)
 BB_DESKTOP_SHIM(UnregisterClassW, UnregisterClassWFails)
 BB_DESKTOP_SHIM(SHGetFolderPathW, SHGetFolderPathWFails)
 BB_DESKTOP_SHIM(ShellExecuteW, ShellExecuteWFails)
+
+extern "C" int vulkan_smoke(void) {
+    return 21;
+}

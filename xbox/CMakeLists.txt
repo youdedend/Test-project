@@ -43,6 +43,7 @@ set(BB_RUNTIME_SOURCES
   runtime_audio
   runtime_content
   runtime_file
+  runtime_input_config
   runtime_kernel
   runtime_memory
   runtime_mutex
