@@ -693,44 +693,15 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         }
     }
 
-    std::string dump_app_ver;
-    std::string dump_title_id;
-    if (auto problem = BbPrepare::CheckTitle(files.sfo, &dump_title_id, &dump_app_ver);
-        !problem.empty()) {
+    if (auto problem = BbPrepare::CheckTitle(files.sfo); !problem.empty()) {
         stop_with_message("The dump in " + dump + " " + problem, player);
         return false;
     }
 
-    // Hard 01.09 gate. The startup patch set (FPS/resolution/red zones) is compiled against the
-    // 1.09 eboot text, and every HLE path this port special-cases was reverse engineered from it.
-    // An unknown version used to fall through to "running unpatched 30 FPS", which produced an
-    // unwinnable state: no patches, a 30 FPS-limited guest and game code the GPU layer does not
-    // expect. Refuse loudly instead, and only continue with an explicit developer override.
-    const char* force_patches_env = std::getenv("BB_FORCE_PATCHES");
-    const bool force_patches = force_patches_env && std::strcmp(force_patches_env, "1") == 0;
-    const bool version_ok = dump_app_ver == "01.09";
-    const char* patches_mode = version_ok ? "required" : "optional";
-    std::printf("Prepare: dump_app_ver=%s; patches=%s\n",
-                dump_app_ver.empty() ? "unknown" : dump_app_ver.c_str(), patches_mode);
-    std::fflush(stdout);
-    if (!version_ok && !force_patches) {
-        stop_with_message(
-            "The Bloodborne dump in " + dump + " is version " +
-                (dump_app_ver.empty() ? std::string("unknown") : dump_app_ver) +
-                ", but this build requires 01.09.\n\n"
-                "Update the game on a PS4 (or use a 01.09 dump) so that sce_sys/param.sfo "
-                "reports APP_VER 01.09, then launch again. The startup patches, resolution "
-                "control and memory tuning are compiled for that exact build, so the dump "
-                "cannot run unpatched.",
-            player);
-        return false;
-    }
-
-    char marker[192];
-    std::snprintf(marker, sizeof(marker),
-                  "bloodborne-uwp-prepared %s\nsource %016llx\napp_ver %s\n", BB_PREPARED_FORMAT,
-                  static_cast<unsigned long long>(BbPrepare::Fingerprint(files, redzone_json)),
-                  dump_app_ver.empty() ? "unknown" : dump_app_ver.c_str());
+    char marker[128];
+    std::snprintf(marker, sizeof(marker), "bloodborne-uwp-prepared %s\nsource %016llx\n",
+                  BB_PREPARED_FORMAT,
+                  static_cast<unsigned long long>(BbPrepare::Fingerprint(files, redzone_json)));
 
     const std::string boot_path = prepared + "\\boot-linked.bin";
     const std::string content_path = prepared + "\\content.bin";
@@ -760,36 +731,6 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
 
     if (!cached_ok) {
         const bool upgrading_cache = file_exists(boot_path);
-        // A different dump version means the linked boot image, the patch set and the guest memory
-        // layout all change: the driver pipeline cache built for the previous version is worthless
-        // (and, worse, was built from shaders compiled for a different eboot), so regenerate it.
-        std::string previous_ver;
-        {
-            BbPrepare::Bytes previous_bytes;
-            if (read_file_bytes(appver_path, previous_bytes)) {
-                previous_ver.assign(previous_bytes.begin(), previous_bytes.end());
-                while (!previous_ver.empty() &&
-                       (previous_ver.back() == '\n' || previous_ver.back() == '\r')) {
-                    previous_ver.pop_back();
-                }
-            }
-        }
-        const bool version_changed = upgrading_cache && previous_ver != dump_app_ver;
-        if (version_changed) {
-            const auto slash = prepared.find_last_of("\\/");
-            const std::string local_dir =
-                slash == std::string::npos ? prepared : prepared.substr(0, slash);
-            const std::string driver_cache = local_dir + "\\user\\cache\\" + dump_title_id +
-                                             "\\driver.vkcache";
-            const bool deleted = !file_exists(driver_cache) ||
-                                 DeleteFileFromAppW(winrt::to_hstring(driver_cache).c_str()) != 0;
-            std::printf("Prepare: dump version changed %s -> %s; regenerating "
-                        "boot-linked.bin%s\n",
-                        previous_ver.empty() ? "unknown" : previous_ver.c_str(),
-                        dump_app_ver.c_str(),
-                        deleted ? " and driver.vkcache" : " (driver.vkcache delete failed)");
-            std::fflush(stdout);
-        }
         if (player && !upgrading_cache &&
             ask_player("Bloodborne found:\n" + dump +
                            "\n\nPrepare the game files for Xbox Series X|S?\n"
@@ -812,17 +753,10 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         }
         DeleteFileFromAppW(winrt::to_hstring(format_path).c_str());
         const BbPrepare::Bytes ver_bytes(res.app_ver.begin(), res.app_ver.end());
-        char prepared_format[160];
-        std::snprintf(prepared_format, sizeof(prepared_format), "format=%s\napp_ver=%s\n",
-                      BB_PREPARED_FORMAT,
-                      res.app_ver.empty() ? "unknown" : res.app_ver.c_str());
         if (!write_file_bytes(boot_path, res.boot_linked) ||
             !write_file_bytes(content_path, res.content) ||
             !write_file_bytes(eboot_elf_path, res.eboot_elf) ||
             !write_file_bytes(appver_path, ver_bytes) ||
-            !write_file_bytes(prepared + "\\prepared-format.txt",
-                              BbPrepare::Bytes(prepared_format,
-                                               prepared_format + std::strlen(prepared_format))) ||
             !write_file_bytes(format_path,
                               BbPrepare::Bytes(marker, marker + std::strlen(marker)))) {
             stop_with_message("Failed to save prepared Bloodborne files to LocalState\\Prepared.",
@@ -859,6 +793,9 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
             fps_mode = "30";
         }
     }
+    const char* force_patches_env = std::getenv("BB_FORCE_PATCHES");
+    const bool force_patches = force_patches_env && std::strcmp(force_patches_env, "1") == 0;
+
     try {
         auto patch_res = BbPrepare::BuildPatches(eboot_elf, app_ver, patch_xml, ini, fps_mode,
                                                  render_res_override, force_patches);
