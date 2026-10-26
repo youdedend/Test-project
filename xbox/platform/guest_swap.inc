@@ -1,6 +1,7 @@
 /* Sparse temporary LocalState pager for Bloodborne on Xbox Series X|S (5,120 MiB budget):
  * second-chance clock sweep, 4 KiB protection-preserving eviction, FNV-1a integrity verification,
  * and a 128 MiB mapped-window frame pool. */
+#include <assert.h>
 #include <fileapifromapp.h>
 #include <winioctl.h>
 
@@ -19,6 +20,112 @@ static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
 static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views);
+
+/* Live swap views: every 4 KiB window the pager has mapped with MapViewOfFile3FromApp, as a
+ * half-open [begin, end) host interval. Mapped views are guest addresses (the runtime maps the
+ * PS4 address space into this process), so a pointer handed back to the guest -- or to the GPU --
+ * must be inside one of them. The list is small (one entry per window, at most the window limit)
+ * and is only touched by the pager under uwp_swap_view_lock. */
+#define UWP_SWAP_LIVE_VIEWS (16 * 1024)
+static SRWLOCK uwp_swap_view_lock = SRWLOCK_INIT;
+static struct {
+    uintptr_t begin;
+    uintptr_t end;
+} uwp_swap_live_views[UWP_SWAP_LIVE_VIEWS];
+static size_t uwp_swap_live_count;
+static uint64_t uwp_swap_view_guard_rejects;
+static int uwp_swap_live_full;
+
+/* Guest memory is a 40-bit address space; anything at or above 1 TiB is not a guest pointer. */
+#define UWP_SWAP_GUEST_LIMIT (UINT64_C(1) << 40)
+
+static void uwp_swap_note_view(uintptr_t address, size_t size) {
+    AcquireSRWLockExclusive(&uwp_swap_view_lock);
+    if (uwp_swap_live_count < UWP_SWAP_LIVE_VIEWS) {
+        uwp_swap_live_views[uwp_swap_live_count].begin = address;
+        uwp_swap_live_views[uwp_swap_live_count].end = address + size;
+        ++uwp_swap_live_count;
+    } else if (!uwp_swap_live_full) {
+        uwp_swap_live_full = 1;
+        printf("UWP swap: live-view registry full (%d windows); view guard fails open\n",
+               (int)UWP_SWAP_LIVE_VIEWS);
+    }
+    ReleaseSRWLockExclusive(&uwp_swap_view_lock);
+}
+
+static void uwp_swap_forget_view(uintptr_t address, size_t size) {
+    AcquireSRWLockExclusive(&uwp_swap_view_lock);
+    for (size_t i = 0; i < uwp_swap_live_count; ++i) {
+        if (uwp_swap_live_views[i].begin == address &&
+            uwp_swap_live_views[i].end == address + size) {
+            uwp_swap_live_views[i] = uwp_swap_live_views[--uwp_swap_live_count];
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&uwp_swap_view_lock);
+}
+
+/* Is `pointer + size` inside the guest address space at all? */
+static int uwp_swap_guest_ok(const void *pointer, size_t size) {
+    const uintptr_t begin = (uintptr_t)pointer;
+    return begin && begin < UWP_SWAP_GUEST_LIMIT && size <= UWP_SWAP_GUEST_LIMIT - begin;
+}
+
+static int uwp_swap_live_view(const void *pointer, size_t size) {
+    if (!uwp_swap_guest_ok(pointer, size)) {
+        return 0;
+    }
+    const uintptr_t begin = (uintptr_t)pointer;
+    if (uwp_swap_live_full) {
+        return 1;
+    }
+    const uintptr_t end = begin + size;
+    int found = 0;
+    AcquireSRWLockShared(&uwp_swap_view_lock);
+    for (size_t i = 0; i < uwp_swap_live_count; ++i) {
+        if (uwp_swap_live_views[i].begin <= begin && uwp_swap_live_views[i].end >= end) {
+            found = 1;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&uwp_swap_view_lock);
+    return found;
+}
+
+/* A freshly mapped view: it must be the guest address that was asked for and inside the 40-bit
+ * guest space. Release builds clamp (log the first few, return NULL) instead of handing out a
+ * stale or non-guest pointer; accepted views are registered so uwp_swap_live_view can vouch for
+ * them before any later dereference. */
+static void *uwp_swap_accept_view(void *view, uintptr_t expected, size_t size, uintptr_t owner) {
+    if (view && (uintptr_t)view == expected && uwp_swap_guest_ok(view, size)) {
+        uwp_swap_note_view((uintptr_t)view, size);
+        return view;
+    }
+    assert(0 && "swap view mapped at an unexpected address");
+    if (uwp_swap_view_guard_rejects < 8) {
+        ++uwp_swap_view_guard_rejects;
+        printf("UWP swap: refusing view %p (expected %#" PRIxPTR ", owner %#" PRIxPTR
+               "), returning null\n",
+               view, expected, owner);
+    }
+    return NULL;
+}
+
+/* True when every subpage of `page` that currently has a swap view is registered as live, i.e.
+ * the whole-page hash and transfer in the sweep can read it without dereferencing a window that
+ * was released on another thread. */
+static int uwp_swap_live_page(const UwpPage *page) {
+    if (!page->view_mask) {
+        return 0;
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        if ((page->view_mask & (1u << i)) &&
+            !uwp_swap_live_view((void *)(page->address + i * 4096), 4096)) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static uint64_t uwp_swap_hash(const void *data) {
     const uint64_t *words = data;
@@ -125,6 +232,7 @@ static void uwp_swap_unmap_view(UwpPage *page) {
                                   MEM_PRESERVE_PLACEHOLDER)) {
                 uwp_fail("swap view release", page->address);
             }
+            uwp_swap_forget_view(page->address + i * 4096, 4096);
         }
     }
     if (page->view_mask) --uwp_swap_views;
@@ -212,17 +320,28 @@ static int uwp_swap_page_in(UwpPage *page) {
     unsigned before = page->view_mask;
     for (unsigned i = 0; i < 4; ++i) {
         if ((page->view_mask & (1u << i)) || !page->protection[i]) continue;
+        void *view = NULL;
         for (unsigned attempt = 0;; ++attempt) {
-            if (MapViewOfFile3FromApp(uwp_swap_section, GetCurrentProcess(),
-                                      (void *)(page->address + i * 4096),
-                                      (physical->frame - 1) * PAGE + i * 4096, 4096,
-                                      MEM_REPLACE_PLACEHOLDER, win_prot(page->protection[i]),
-                                      NULL, 0)) {
+            view = MapViewOfFile3FromApp(uwp_swap_section, GetCurrentProcess(),
+                                         (void *)(page->address + i * 4096),
+                                         (physical->frame - 1) * PAGE + i * 4096, 4096,
+                                         MEM_REPLACE_PLACEHOLDER, win_prot(page->protection[i]),
+                                         NULL, 0);
+            if (view) {
                 break;
             }
             if (attempt == 7 || !uwp_swap_page_out_locked(UINT64_C(16) * 1024 * 1024, page, 1)) {
                 uwp_fail("swap page-in", page->address + i * 4096);
             }
+        }
+        // The mapped view address is about to become visible to the guest and the GPU: it must be
+        // the guest address we asked for and it must be registered as live. A debug build asserts
+        // that; a release build refuses the view (no stale or non-guest pointer is ever returned)
+        // and treats the page-in as failed so the caller retries or the draw misses.
+        if (uwp_swap_accept_view(view, page->address + i * 4096, 4096, page->address) == NULL) {
+            UnmapViewOfFile2(GetCurrentProcess(), (void *)(page->address + i * 4096),
+                             MEM_PRESERVE_PLACEHOLDER);
+            return 0;
         }
         page->view_mask |= 1u << i;
     }
@@ -243,19 +362,28 @@ static int uwp_swap_protect(UwpPage *page, unsigned index, int prot) {
             if (!UnmapViewOfFile2(GetCurrentProcess(), (void *)address, MEM_PRESERVE_PLACEHOLDER)) {
                 return 0;
             }
+            uwp_swap_forget_view(address, 4096);
             page->view_mask &= ~bit;
-            if (prot) {
-                if (!MapViewOfFile3FromApp(
-                        uwp_swap_section, GetCurrentProcess(), (void *)address,
-                        (uwp_physical[page->physical / PAGE].frame - 1) * PAGE + index * 4096,
-                        4096, MEM_REPLACE_PLACEHOLDER, win_prot(prot), NULL, 0)) {
-                    uwp_fail("swap protection remap", address);
-                }
-                page->view_mask |= bit;
-            }
             if (!page->view_mask) {
                 page->kind = 4;
                 --uwp_swap_views;
+            }
+            unsigned frame = uwp_physical[page->physical / PAGE].frame;
+            if (prot && frame) {
+                // A page whose backing frame was released meanwhile has nothing to remap: `frame`
+                // is 1-based and 0 would have underflowed the section offset below (an invalid
+                // MapViewOfFile3FromApp that used to abort the process after an unmap).
+                void *view = MapViewOfFile3FromApp(
+                    uwp_swap_section, GetCurrentProcess(), (void *)address,
+                    (frame - 1) * PAGE + index * 4096, 4096, MEM_REPLACE_PLACEHOLDER,
+                    win_prot(prot), NULL, 0);
+                if (!view) {
+                    uwp_fail("swap protection remap", address);
+                }
+                if (uwp_swap_accept_view(view, address, 4096, page->address) == NULL) {
+                    return 0;
+                }
+                page->view_mask |= bit;
             }
         }
     }
@@ -282,6 +410,13 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         if (physical->pinned || physical->references != 1 || physical->section) continue;
         if (physical->recent) {
             physical->recent = 0;
+            continue;
+        }
+        if (page->kind == 3 && !uwp_swap_live_page(page)) {
+            // The window was released behind this sweep's back (a protection change or a view
+            // eviction on another thread). Never dereference an address that is no longer a live
+            // view: skip it and let the next sweep see the page in its new state.
+            ++uwp_swap_view_guard_rejects;
             continue;
         }
         if (page->kind == 3) {
