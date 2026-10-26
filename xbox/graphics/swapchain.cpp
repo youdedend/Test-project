@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "bbport_settings.h"
 #include "present_bridge.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -7,14 +8,11 @@
 #include <vk_mem_alloc.h>
 #include <atomic>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 namespace Vulkan {
 namespace {
 bool VsyncEnabled() {
-    const char* env = std::getenv("BB_VSYNC");
-    return !(env && std::strcmp(env, "0") == 0);
+    return BbSettings::Get().vsync.load(std::memory_order_relaxed);
 }
 } // namespace
 
@@ -46,7 +44,21 @@ void Swapchain::Create(u32 w, u32 h) {
 }
 
 void Swapchain::Recreate(u32 w, u32 h) {
-    Create(w, h);
+    if (!bridge) {
+        Create(w, h);
+        return;
+    }
+    if (w == width && h == height && !needs_recreation) {
+        return;
+    }
+    std::scoped_lock lock(Scheduler::submit_mutex);
+    bridge->Resize(w, h);
+    width = w;
+    height = h;
+    extent = {w, h};
+    images = {bridge->Image()};
+    images_view = {bridge->View()};
+    needs_recreation = false;
 }
 
 bool Swapchain::AcquireNextImage() {

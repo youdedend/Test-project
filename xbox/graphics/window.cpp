@@ -2,14 +2,19 @@
 #include "sdl_window.h"
 #include "bbport_overlay.h"
 #include "bbport_prompts.h"
+#include "bbport_settings.h"
 #include "gpu/bbgpu.h"
 #include <SDL3/SDL.h>
 #include <windows.h>
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <thread>
 
 extern "C" uint32_t runtime_pad_dialog_buttons(void);
+extern "C" int bbport_uwp_gamepad_poll(uint32_t* out_buttons, uint8_t out_axes[6],
+                                       int* out_touch_side, uint8_t* out_connected_count);
+extern "C" int bb_uwp_app_visible(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
 
 namespace {
@@ -102,6 +107,11 @@ extern "C" int bb_uwp_dialog_key(uint32_t key, int down, int repeat) {
 namespace Frontend {
 
 WindowSDL::WindowSDL(s32 w, s32 h, const char* title) : width(w), height(h), base_title(title ? title : "Bloodborne") {
+    const int out = std::clamp(BbSettings::Get().output_res.load(std::memory_order_relaxed), 0,
+                               BbSettings::XboxOutputCount - 1);
+    width.store(BbSettings::OutputWidths[out], std::memory_order_relaxed);
+    height.store(BbSettings::OutputHeights[out], std::memory_order_relaxed);
+    window_focused.store(true, std::memory_order_relaxed);
     BbPrompts::OnControllerConnected(BbPrompts::Xbox);
 }
 
@@ -136,8 +146,32 @@ int WindowSDL::PollTextInput(std::string& result) {
 }
 
 bool WindowSDL::PollEvents() {
+    window_focused.store(bb_uwp_app_visible() != 0, std::memory_order_relaxed);
+    {
+        const int out = std::clamp(BbSettings::Get().output_res.load(std::memory_order_relaxed), 0,
+                                   BbSettings::XboxOutputCount - 1);
+        const s32 want_w = BbSettings::OutputWidths[out];
+        const s32 want_h = BbSettings::OutputHeights[out];
+        if (width.load(std::memory_order_relaxed) != want_w ||
+            height.load(std::memory_order_relaxed) != want_h) {
+            width.store(want_w, std::memory_order_relaxed);
+            height.store(want_h, std::memory_order_relaxed);
+        }
+    }
+
     static thread_local uint32_t previous = 0;
-    const uint32_t buttons = runtime_pad_dialog_buttons();
+    uint32_t buttons = 0;
+    uint8_t axes[6] = {128, 128, 128, 128, 0, 0};
+    int touch_side = -1;
+    uint8_t pad_count = 1;
+    bbport_uwp_gamepad_poll(&buttons, axes, &touch_side, &pad_count);
+    if (BbOverlay::CapturesInput()) {
+        // Map Left Thumbstick deflections to virtual D-Pad directions for smooth Xbox menu nav.
+        if (axes[1] < 56) buttons |= 0x10u;       // Up
+        else if (axes[1] > 200) buttons |= 0x40u; // Down
+        if (axes[0] < 56) buttons |= 0x80u;       // Left
+        else if (axes[0] > 200) buttons |= 0x20u; // Right
+    }
     const uint32_t changed = buttons ^ previous;
     previous = buttons;
 

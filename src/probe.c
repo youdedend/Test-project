@@ -610,14 +610,17 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
     fclose(f);
     printf("Patches: %" PRIu64 " writes, %" PRIu64 " bytes applied, %" PRIu64 " pointers rebased\n",count,bytes,rebased);
 }
+#ifdef BB_UWP
+extern void bb_uwp_request_restart(void);
+#endif
+
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
  * applied at start). Descriptors are closed first so the old GPU device and its memory are
  * released before the new process opens its own. */
 void runtime_restart(void) {
     fflush(NULL);
 #ifdef BB_UWP
-    puts("Runtime: settings written; relaunch the app from Xbox Home to apply startup patches");
-    TerminateProcess(GetCurrentProcess(), 0);
+    bb_uwp_request_restart();
 #elif defined(_WIN32)
     /* run.py sets BB_RESTART_COMMAND: the launch command line, started again (new patches). */
     const char *command=getenv("BB_RESTART_COMMAND");

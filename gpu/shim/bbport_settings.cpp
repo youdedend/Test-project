@@ -21,7 +21,18 @@ float Clamp(float v, float lo, float hi) {
     return std::clamp(v, lo, hi);
 }
 
-void Set(Values& v, const std::string& key, const std::string& value) {
+int PresetToXboxScene(int preset) {
+    switch (std::clamp(preset, 0, PresetCount - 1)) {
+    case NativeAA: return XboxScene1080p;
+    case Quality: return XboxScene720p;
+    case Balanced: return XboxScene636p;
+    case Performance: return XboxScene540p;
+    case UltraPerformance: return XboxScene360p;
+    default: return XboxScene720p;
+    }
+}
+
+void Set(Values& v, const std::string& key, const std::string& value, bool* saw_scene_res = nullptr) {
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
     if (key == "upscaler") {
@@ -42,6 +53,44 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.frame_gen_fit_display = i != 0;
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
+        if (!saw_scene_res || !*saw_scene_res) {
+            v.xbox_scene_res = PresetToXboxScene(v.preset.load());
+        }
+    } else if (key == "scene_res") {
+        for (int s = 0; s < XboxSceneCount; ++s) {
+            if (value == std::to_string(XboxSceneWidths[s]) + "x" +
+                             std::to_string(XboxSceneHeights[s])) {
+                v.xbox_scene_res = s;
+                if (saw_scene_res) *saw_scene_res = true;
+                break;
+            }
+        }
+    } else if (key == "vsync") {
+        v.vsync = i != 0;
+    } else if (key == "fps_cap") {
+        if (value == "uncap" || i <= 0) {
+            v.fps_cap = 0;
+        } else if (i <= 30) {
+            v.fps_cap = 30;
+        } else if (i <= 60) {
+            v.fps_cap = 60;
+        } else if (i <= 90) {
+            v.fps_cap = 90;
+        } else {
+            v.fps_cap = 120;
+        }
+    } else if (key == "gamma") {
+        v.gamma = Clamp(f, 0.60f, 1.40f);
+    } else if (key == "fps_patch") {
+        if (value == "uncap" || value == "0") {
+            v.xbox_fps_patch = 0;
+        } else if (i == 30) {
+            v.xbox_fps_patch = 30;
+        } else if (i == 90) {
+            v.xbox_fps_patch = 90;
+        } else {
+            v.xbox_fps_patch = 60;
+        }
     } else if (key == "sharpen") {
         v.sharpen = i != 0;
     } else if (key == "sharpness") {
@@ -120,6 +169,7 @@ void Load() {
         v.effects[e] = Effects[e].default_on;
     }
     if (FILE* file = std::fopen(Path(), "r")) {
+        bool saw_scene_res = false;
         char line[256];
         while (std::fgets(line, sizeof(line), file)) {
             std::string text{line};
@@ -128,11 +178,27 @@ void Load() {
             if (text.empty() || text[0] == '#' || eq == std::string::npos) {
                 continue;
             }
-            Set(v, text.substr(0, eq), text.substr(eq + 1));
+            Set(v, text.substr(0, eq), text.substr(eq + 1), &saw_scene_res);
         }
         std::fclose(file);
         std::printf("Settings: %s\n", Path());
     }
+#ifdef BB_UWP
+    v.output_res = std::clamp(v.output_res.load(), 0, XboxOutputCount - 1);
+    if (v.button_prompts != PromptsPlayStation && v.button_prompts != PromptsXbox) {
+        v.button_prompts = PromptsXbox;
+    }
+    if (const char* app_ver = std::getenv("BB_APP_VER"); app_ver && app_ver[0]) {
+        std::snprintf(v.app_ver_text, sizeof(v.app_ver_text), "%s", app_ver);
+        v.app_ver_is_0109 = (std::strcmp(v.app_ver_text, "01.09") == 0);
+    } else {
+        std::snprintf(v.app_ver_text, sizeof(v.app_ver_text), "01.00");
+        v.app_ver_is_0109 = false;
+    }
+    if (const char* vsync_env = std::getenv("BB_VSYNC"); vsync_env && vsync_env[0]) {
+        v.vsync = (std::strcmp(vsync_env, "0") != 0);
+    }
+#endif
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
@@ -180,6 +246,7 @@ void Load() {
     v.startup_hud_position = v.hud_position;
     v.startup_fov = v.fov;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_xbox_fps_patch = v.xbox_fps_patch;
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411, const char* fsr411_problem) {
@@ -323,7 +390,43 @@ void Save() {
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");
+    const int scene_idx = std::clamp(v.xbox_scene_res.load(), 0, XboxSceneCount - 1);
+    std::fprintf(file, "scene_res=%dx%d\nvsync=%d\nfps_cap=%d\ngamma=%.2f\nfps_patch=%s\n",
+                 XboxSceneWidths[scene_idx], XboxSceneHeights[scene_idx],
+                 int(v.vsync.load()), v.fps_cap.load(), v.gamma.load(),
+                 v.xbox_fps_patch == 0 ? "uncap"
+                 : v.xbox_fps_patch == 30 ? "30"
+                 : v.xbox_fps_patch == 90 ? "90"
+                                          : "60");
     std::fclose(file);
+}
+
+std::pair<int, int> XboxSceneSize() {
+    const int idx = std::clamp(Get().xbox_scene_res.load(std::memory_order_relaxed), 0,
+                               XboxSceneCount - 1);
+    return {XboxSceneWidths[idx], XboxSceneHeights[idx]};
+}
+
+const char* XboxSceneLabel(int xbox_preset) {
+    static constexpr const char* labels[XboxSceneCount] = {
+        "640 x 360 (360p - Max FPS)",
+        "960 x 540 (540p - Performance)",
+        "1128 x 636 (636p - Balanced)",
+        "1280 x 720 (720p - Quality)",
+        "1600 x 900 (900p - High Quality)",
+        "1920 x 1080 (1080p - Native PS4)",
+        "2560 x 1440 (1440p - Supersampled)",
+    };
+    return labels[std::clamp(xbox_preset, 0, XboxSceneCount - 1)];
+}
+
+bool IsXboxSupportedEffect(int effect_index) {
+    if (effect_index < 0 || effect_index >= EffectCount) {
+        return false;
+    }
+    const std::string_view key = Effects[effect_index].key;
+    // Desktop-only script patches / external debug-font patches are not supported on Xbox.
+    return key != "debug_menu" && key != "quit_to_desktop" && key != "rebirth";
 }
 
 float PresetScale(int preset) {

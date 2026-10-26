@@ -1461,24 +1461,15 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
 
     auto writes = compile_named_patches(metas, names, target_ver, segments);
 
-    // Determine scene render resolution (default 1280x720 on Xbox via preset=1, or explicit WxH).
+    // Keep guest targets at 1920x1080 by default so Xbox SceneTargets scales 3D scene
+    // resolution live in-game without restarting; only patch startup scene dimensions when an
+    // explicit BB_UWP_RENDER_RES override is supplied.
     int render_w = 1920, render_h = 1080;
     if (!render_res_override.empty()) {
         int w = 0, h = 0;
         if (std::sscanf(render_res_override.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 180) {
             render_w = w;
             render_h = h;
-        }
-    } else {
-        int preset = 1; // Xbox default: Quality (1280x720 scene + 1920x1080 native HUD)
-        if (auto it = settings.find("preset"); it != settings.end() && !it->second.empty()) {
-            preset = std::clamp(std::atoi(it->second.c_str()), 0, 4);
-        }
-        static constexpr double kScales[5] = {1.0, 1.5, 1.7, 2.0, 3.0};
-        const double scale = kScales[preset];
-        if (scale > 1.0) {
-            render_w = std::max(2, static_cast<int>(std::lround(1920.0 / scale / 2.0)) * 2);
-            render_h = std::max(2, static_cast<int>(std::lround(1080.0 / scale / 2.0)) * 2);
         }
     }
 

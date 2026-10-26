@@ -63,11 +63,20 @@ bool SceneTargets::ShaderResampled(const VideoCore::Image& image) const {
     const auto features = Features(format);
     const auto required = vk::FormatFeatureFlagBits::eSampledImage |
                           vk::FormatFeatureFlagBits::eDepthStencilAttachment;
+#ifdef BB_UWP
+    // On Xbox UWP (Mesa Dozen over D3D12), D32_SFLOAT_S8_UINT may lack vkCmdBlitImage and
+    // VK_EXT_shader_stencil_export; allow the 8-bit stencil shader resampler fallback so the
+    // G-buffer depth+stencil attachment is always eligible for live scene resolution scaling.
+    constexpr bool uwp_allow_stencil_bits = true;
+#else
+    constexpr bool uwp_allow_stencil_bits = false;
+#endif
     // Without shader stencil export (e.g. Pascal) depth/stencil stays native: the eight-draw
     // stencil resampler costs too much on such GPUs. BB_SCENE_STENCIL_BITS=1 forces it (tests).
     return (features & required) == required &&
            (!(image.aspect_mask & vk::ImageAspectFlagBits::eStencil) ||
-            instance.IsShaderStencilExportSupported() || force_stencil_bits);
+            instance.IsShaderStencilExportSupported() || force_stencil_bits ||
+            uwp_allow_stencil_bits);
 }
 // 1 for the scene size, 2 for half resolution (the game's post-processing chain), else 0.
 // Half resolution needs a scene size that halves exactly: the proxy keeps the scene's factor,
@@ -103,6 +112,7 @@ SceneResolution::Size SceneTargets::ProxySize(const VideoCore::Image& image, u32
 }
 bool SceneTargets::SetSize(SceneResolution::Size next) {
     if (next == size) return false;
+    scheduler.EndRendering();
     ResolveAll();
     scheduler.Finish();
     entries.clear(); // no command buffer can still reference these images/views
@@ -211,10 +221,20 @@ void SceneTargets::Copy(Entry& e, VideoCore::Image& original, bool to_native) {
             .dstOffsets = std::array{vk::Offset3D{}, to_native ? native : reduced},
         };
         // Nearest preserves depth/stencil and avoids assuming linear blit support for
-        // integer G-buffer formats. FSR reconstructs color at the HDR scene boundary.
-        scheduler.Record([src,dst,region](vk::CommandBuffer cmd) {
+        // integer G-buffer formats. On UWP (no temporal FSR pass), filterable color resolves
+        // back to native 1920x1080 use linear filtering for smooth spatial upscaling.
+#ifdef BB_UWP
+        const bool linear_color =
+            to_native && aspect == vk::ImageAspectFlagBits::eColor &&
+            bool(Features(original.backing->image.image_ci.format) &
+                 vk::FormatFeatureFlagBits::eSampledImageFilterLinear);
+        const vk::Filter filter = linear_color ? vk::Filter::eLinear : vk::Filter::eNearest;
+#else
+        constexpr vk::Filter filter = vk::Filter::eNearest;
+#endif
+        scheduler.Record([src, dst, region, filter](vk::CommandBuffer cmd) {
             cmd.blitImage(src, vk::ImageLayout::eTransferSrcOptimal, dst,
-                          vk::ImageLayout::eTransferDstOptimal, region, vk::Filter::eNearest);
+                          vk::ImageLayout::eTransferDstOptimal, region, filter);
         });
     }
     if (to_native) e.state.Resolved(); else e.state.CopiedToProxy();

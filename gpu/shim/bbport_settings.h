@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <utility>
 
 namespace BbSettings {
 
@@ -16,6 +17,19 @@ inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
+enum XboxScenePreset : int {
+    XboxScene360p = 0,
+    XboxScene540p = 1,
+    XboxScene636p = 2,
+    XboxScene720p = 3,
+    XboxScene900p = 4,
+    XboxScene1080p = 5,
+    XboxScene1440p = 6,
+    XboxSceneCount = 7
+};
+inline constexpr int XboxSceneWidths[XboxSceneCount] = {640, 960, 1128, 1280, 1600, 1920, 2560};
+inline constexpr int XboxSceneHeights[XboxSceneCount] = {360, 540, 636, 720, 900, 1080, 1440};
+inline constexpr int XboxOutputCount = 4; ///< 16:9 console outputs: 720p, 1080p, 1440p, 2160p
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 /// Frame generation (vk_frame_generation.h): frames generated between two of the game's.
 enum FrameGen : int { FrameGenOff = 0, FrameGenFsr3 = 1, FrameGenDlss = 2, FrameGenFsr401 = 3, FrameGenCount };
@@ -164,6 +178,17 @@ struct Values {
     /// extra frame waits for the display and generation pauses.
     std::atomic<int> frame_gen_flip_limit{0};
 
+    /// Xbox Series X|S host settings (live scene resolution, V-Sync, frame limiter, gamma, and
+    /// 01.09 binary FPS patch selection).
+    std::atomic<int> xbox_scene_res{XboxScene720p};
+    std::atomic<bool> vsync{true};
+    std::atomic<int> fps_cap{60};       ///< 30, 60, 90, 120, or 0 (uncapped)
+    std::atomic<float> gamma{1.0f};     ///< post-processing gamma (0.60 .. 1.40)
+    std::atomic<int> xbox_fps_patch{60}; ///< 01.09 startup patch: 30, 60, 90, or 0 (uncap)
+    bool app_ver_is_0109 = false;
+    char app_ver_text[16] = "01.00";
+    int startup_xbox_fps_patch = 60;
+
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerFsr3;
@@ -203,5 +228,8 @@ float PresetScale(int preset);
 const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
 const char* FrameGenName(int frame_gen);
+std::pair<int, int> XboxSceneSize();
+const char* XboxSceneLabel(int xbox_preset);
+bool IsXboxSupportedEffect(int effect_index);
 
 } // namespace BbSettings

@@ -14,6 +14,7 @@ public:
     vk::ImageView View() const;
     vk::Semaphore Acquired() const;
     vk::Semaphore Ready() const;
+    void Resize(u32 width, u32 height);
     bool Acquire();
     bool Present(bool vsync);
 private:

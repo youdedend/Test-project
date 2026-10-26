@@ -85,6 +85,10 @@ extern "C" uint64_t bb_uwp_app_memory_limit(void) {
     return g_memory_limit_override ? std::min(g_memory_limit_override, actual) : actual;
 }
 
+extern "C" int bb_uwp_app_visible(void) {
+    return g_app_visible.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
 extern "C" IUnknown* bb_uwp_core_window(void) {
     auto window = g_core_window.get();
     void* result = nullptr;
@@ -117,6 +121,45 @@ extern "C" IUnknown* bb_uwp_core_window(void) {
 
 extern "C" void bb_uwp_request_quit(void) {
     close_app("quit requested from in-game menu");
+}
+
+extern "C" void bb_uwp_request_restart(void) {
+    std::puts("UWP lifecycle: requesting app restart to apply startup patches...");
+    std::fflush(nullptr);
+    if (auto win = g_core_window.get()) {
+        auto done = std::make_shared<std::promise<void>>();
+        auto fut = done->get_future();
+        win.Dispatcher().RunAsync(
+            winrt::Windows::UI::Core::CoreDispatcherPriority::High, [done] {
+                try {
+                    auto op = winrt::Windows::ApplicationModel::Core::CoreApplication::
+                        RequestRestartAsync(L"");
+                    op.Completed([done](auto const& async_op,
+                                        winrt::Windows::Foundation::AsyncStatus status) {
+                        if (status == winrt::Windows::Foundation::AsyncStatus::Completed) {
+                            try {
+                                const auto reason = async_op.GetResults();
+                                std::printf("UWP lifecycle: RequestRestartAsync result=%d\n",
+                                            static_cast<int>(reason));
+                                std::fflush(stdout);
+                            } catch (...) {
+                            }
+                        }
+                        try {
+                            done->set_value();
+                        } catch (...) {
+                        }
+                    });
+                } catch (...) {
+                    try {
+                        done->set_value();
+                    } catch (...) {
+                    }
+                }
+            });
+        fut.wait_for(std::chrono::seconds(3));
+    }
+    close_app("restart fallback exit");
 }
 
 static void set_env_var(const char* name, const std::string& value) {
@@ -552,11 +595,15 @@ static void ensure_default_ini(const std::string& ini_path) {
     const char* defaults =
         "# Bloodborne Xbox Series X|S UWP settings (in-game overlay: L3 + R3)\n"
         "upscaler=off\n"
-        "preset=1\n"
+        "scene_res=1280x720\n"
+        "output_res=1920x1080\n"
+        "vsync=1\n"
+        "fps_cap=60\n"
+        "gamma=1.00\n"
+        "fps_patch=60\n"
         "show_fps=1\n"
+        "mute_unfocused=0\n"
         "button_prompts=xbox\n"
-        "quit_to_desktop=0\n"
-        "rebirth=1\n"
         "effect_chromatic_aberration=0\n"
         "effect_dof=1\n"
         "effect_motion_blur=0\n"
@@ -564,10 +611,7 @@ static void ensure_default_ini(const std::string& ini_path) {
         "effect_game_aa=1\n"
         "effect_dynamic_shadows=1\n"
         "effect_ssr=0\n"
-        "model_lod=0\n"
-        "output_res=1920x1080\n"
-        "fov=43\n"
-        "fps_cap=60\n";
+        "model_lod=0\n";
     BbPrepare::Bytes bytes(defaults, defaults + std::strlen(defaults));
     write_file_bytes(ini_path, bytes);
 }
@@ -598,18 +642,9 @@ static std::map<std::string, std::string> parse_kv_file(const std::string& path)
     return kv;
 }
 
-static std::string resolve_render_res_override(const std::map<std::string, std::string>& ini) {
+static std::string resolve_render_res_override(const std::map<std::string, std::string>&) {
     if (const char* forced = std::getenv("BB_UWP_RENDER_RES"); forced && *forced) {
         return forced;
-    }
-    auto w_it = ini.find("render_width");
-    auto h_it = ini.find("render_height");
-    if (w_it != ini.end() && h_it != ini.end()) {
-        const int w = std::atoi(w_it->second.c_str());
-        const int h = std::atoi(h_it->second.c_str());
-        if (w >= 480 && h >= 270) {
-            return std::to_string(w) + "x" + std::to_string(h);
-        }
     }
     return {};
 }
@@ -732,12 +767,19 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
 
     // Release large raw dump buffers before compiling startup patches and launching the guest.
     files = {};
+    set_env_var("BB_APP_VER", app_ver);
 
     const auto ini = parse_kv_file(ini_path);
     const std::string render_res_override = resolve_render_res_override(ini);
     std::string fps_mode = "60";
     if (const char* forced_fps = std::getenv("BB_FPS"); forced_fps && *forced_fps) {
         fps_mode = forced_fps;
+    } else if (auto patch_it = ini.find("fps_patch");
+               patch_it != ini.end() && !patch_it->second.empty()) {
+        const std::string& p = patch_it->second;
+        if (p == "30" || p == "60" || p == "90" || p == "uncap") {
+            fps_mode = p;
+        }
     } else if (auto it = ini.find("fps_cap"); it != ini.end()) {
         const int cap = std::atoi(it->second.c_str());
         if (cap > 0 && cap <= 30) {

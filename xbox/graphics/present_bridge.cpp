@@ -39,6 +39,7 @@ void InitializeDriver() {
 }
 
 struct Presenter::Impl {
+    vk::PhysicalDevice physical;
     vk::Device device;
     vk::Queue queue;
     u32 family{};
@@ -59,6 +60,93 @@ struct Presenter::Impl {
     HANDLE event = nullptr;
     UINT64 tick = 0;
     bool first = true;
+
+    void DestroySharedSurface() {
+        source.Reset();
+        if (device) {
+            if (view) {
+                device.destroyImageView(view);
+                view = nullptr;
+            }
+            if (image) {
+                device.destroyImage(image);
+                image = nullptr;
+            }
+            if (memory) {
+                device.freeMemory(memory);
+                memory = nullptr;
+            }
+        }
+    }
+
+    u64 CreateSharedSurface(u32 width, u32 height) {
+        const vk::ExternalMemoryImageCreateInfo external{
+            .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource};
+        vk::ImageCreateInfo image_info{
+            .pNext = &external,
+            .imageType = vk::ImageType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .extent = {width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eColorAttachment |
+                     vk::ImageUsageFlagBits::eTransferSrc |
+                     vk::ImageUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        };
+        auto image_result = device.createImage(image_info);
+        Check(image_result.result, "Create presentation image");
+        image = image_result.value;
+
+        auto req = device.getImageMemoryRequirements(image);
+        auto props = physical.getMemoryProperties();
+        u32 type = props.memoryTypeCount;
+        for (u32 i = 0; i < props.memoryTypeCount; ++i) {
+            if ((req.memoryTypeBits & (1u << i)) &&
+                (props.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                type = i;
+                break;
+            }
+        }
+        if (type == props.memoryTypeCount) throw std::runtime_error("No presentation memory type");
+
+        vk::MemoryDedicatedAllocateInfo dedicated{.image = image};
+        vk::ExportMemoryAllocateInfo export_info{
+            .pNext = &dedicated,
+            .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource,
+        };
+        auto allocation = device.allocateMemory({
+            .pNext = &export_info,
+            .allocationSize = req.size,
+            .memoryTypeIndex = type,
+        });
+        Check(allocation.result, "Allocate shared presentation image");
+        memory = allocation.value;
+        Check(device.bindImageMemory(image, memory, 0), "Bind presentation image");
+
+        auto exported = device.getMemoryWin32HandleKHR({
+            .memory = memory,
+            .handleType = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource,
+        });
+        Check(exported.result, "Export presentation image");
+        HRESULT opened = native->OpenSharedHandle(exported.value, IID_PPV_ARGS(&source));
+        CloseHandle(exported.value);
+        Check(opened, "Open presentation image in D3D12");
+
+        auto view_result = device.createImageView({
+            .image = image,
+            .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        });
+        Check(view_result.result, "Create presentation view");
+        view = view_result.value;
+        first = true;
+        return req.size;
+    }
 
     void WaitNative() {
         if (fence->GetCompletedValue() >= tick) return;
@@ -96,9 +184,7 @@ struct Presenter::Impl {
         }
         if (device) {
             device.waitIdle();
-            device.destroyImageView(view);
-            device.destroyImage(image);
-            device.freeMemory(memory);
+            DestroySharedSurface();
         }
         if (event) CloseHandle(event);
     }
@@ -108,6 +194,7 @@ Presenter::Presenter(vk::PhysicalDevice physical, vk::Device device, vk::Queue q
                      u32 width, u32 height)
     : impl(std::make_unique<Impl>()) {
     auto& p = *impl;
+    p.physical = physical;
     p.device = device;
     p.queue = queue;
     p.family = family;
@@ -157,69 +244,7 @@ Presenter::Presenter(vk::PhysicalDevice physical, vk::Device device, vk::Queue q
     p.event = CreateEventExW(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
     if (!p.event) throw std::runtime_error("Create presentation event");
 
-    const vk::ExternalMemoryImageCreateInfo external{
-        .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource};
-    vk::ImageCreateInfo image_info{
-        .pNext = &external,
-        .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR8G8B8A8Unorm,
-        .extent = {width, height, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc |
-                 vk::ImageUsageFlagBits::eTransferDst,
-        .sharingMode = vk::SharingMode::eExclusive,
-        .initialLayout = vk::ImageLayout::eUndefined,
-    };
-    auto image_result = device.createImage(image_info);
-    Check(image_result.result, "Create presentation image");
-    p.image = image_result.value;
-
-    auto req = device.getImageMemoryRequirements(p.image);
-    auto props = physical.getMemoryProperties();
-    u32 type = props.memoryTypeCount;
-    for (u32 i = 0; i < props.memoryTypeCount; ++i) {
-        if ((req.memoryTypeBits & (1u << i)) &&
-            (props.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
-            type = i;
-            break;
-        }
-    }
-    if (type == props.memoryTypeCount) throw std::runtime_error("No presentation memory type");
-
-    vk::MemoryDedicatedAllocateInfo dedicated{.image = p.image};
-    vk::ExportMemoryAllocateInfo export_info{
-        .pNext = &dedicated,
-        .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource,
-    };
-    auto allocation = device.allocateMemory({
-        .pNext = &export_info,
-        .allocationSize = req.size,
-        .memoryTypeIndex = type,
-    });
-    Check(allocation.result, "Allocate shared presentation image");
-    p.memory = allocation.value;
-    Check(device.bindImageMemory(p.image, p.memory, 0), "Bind presentation image");
-
-    auto exported = device.getMemoryWin32HandleKHR({
-        .memory = p.memory,
-        .handleType = vk::ExternalMemoryHandleTypeFlagBits::eD3D12Resource,
-    });
-    Check(exported.result, "Export presentation image");
-    HRESULT opened = p.native->OpenSharedHandle(exported.value, IID_PPV_ARGS(&p.source));
-    CloseHandle(exported.value);
-    Check(opened, "Open presentation image in D3D12");
-
-    auto view_result = device.createImageView({
-        .image = p.image,
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR8G8B8A8Unorm,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-    });
-    Check(view_result.result, "Create presentation view");
-    p.view = view_result.value;
+    const u64 shared_bytes = p.CreateSharedSurface(width, height);
 
     auto pool_result = device.createCommandPoolUnique({
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -249,7 +274,7 @@ Presenter::Presenter(vk::PhysicalDevice physical, vk::Device device, vk::Queue q
     p.ready = std::move(ready.value);
 
     std::printf("CoreWindow presentation bridge: %ux%u, shared image %llu KiB\n",
-                width, height, static_cast<unsigned long long>(req.size >> 10));
+                width, height, static_cast<unsigned long long>(shared_bytes >> 10));
 }
 
 Presenter::~Presenter() = default;
@@ -257,6 +282,20 @@ vk::Image Presenter::Image() const { return impl->image; }
 vk::ImageView Presenter::View() const { return impl->view; }
 vk::Semaphore Presenter::Acquired() const { return *impl->acquired; }
 vk::Semaphore Presenter::Ready() const { return *impl->ready; }
+
+void Presenter::Resize(u32 width, u32 height) {
+    auto& p = *impl;
+    Check(p.native_queue->Signal(p.fence.Get(), ++p.tick), "Signal native drain before resize");
+    p.WaitNative();
+    p.device.waitIdle();
+    p.DestroySharedSurface();
+    Check(p.swapchain->ResizeBuffers(2, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0),
+          "Resize CoreWindow swapchain");
+    const u64 shared_bytes = p.CreateSharedSurface(width, height);
+    std::printf("CoreWindow presentation bridge resized: %ux%u, shared image %llu KiB\n",
+                width, height, static_cast<unsigned long long>(shared_bytes >> 10));
+    std::fflush(stdout);
+}
 
 bool Presenter::Acquire() {
     auto& p = *impl;

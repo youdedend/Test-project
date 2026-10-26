@@ -22,6 +22,7 @@
 #ifdef BB_UWP
 extern "C" uint64_t bb_uwp_app_memory_usage();
 extern "C" uint64_t bb_uwp_app_memory_limit();
+extern "C" void bb_uwp_request_quit();
 #endif
 
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
@@ -163,7 +164,7 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, changed);
 }
 
-void Hint(const char* text) {
+[[maybe_unused]] void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::BeginItemTooltip()) {
@@ -191,7 +192,218 @@ std::string FpsText() {
     return text;
 }
 
+#ifdef BB_UWP
+void MenuXbox() {
+    auto& s = BbSettings::Get();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
+                                   viewport->WorkPos.y + 40.0f * base_scale),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(640.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(0.0f, 0.0f),
+        ImVec2(FLT_MAX, std::max(viewport->WorkSize.y - 60.0f * base_scale, 200.0f * base_scale)));
+    bool keep_open = true;
+    if (!ImGui::Begin("Bloodborne - Xbox Settings (L3+R3)", &keep_open,
+                      ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("%s   |   RAM: %llu / %llu MiB   |   Game v%s", FpsText().c_str(),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20), s.app_ver_text);
+    ImGui::TextDisabled("D-Pad / Left Stick: Navigate   A: Select   B / L3+R3: Save & Close");
+
+    ImGui::SeparatorText("Resolution & Display");
+    const int scene_res =
+        std::clamp(s.xbox_scene_res.load(), 0, BbSettings::XboxSceneCount - 1);
+    if (ImGui::BeginCombo("Scene resolution (3D)", BbSettings::XboxSceneLabel(scene_res))) {
+        for (int i = 0; i < BbSettings::XboxSceneCount; ++i) {
+            if (ImGui::Selectable(BbSettings::XboxSceneLabel(i), i == scene_res)) {
+                Store(s.xbox_scene_res, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Text("Active 3D scene: %d x %d   |   HUD & menus: 1920 x 1080",
+                s.active_render_width.load(), s.active_render_height.load());
+    ImGui::TextDisabled("Applies immediately on the next frame (lower scene resolution boosts FPS).");
+
+    static const char* xbox_outputs[BbSettings::XboxOutputCount] = {
+        "1280 x 720 (720p)",
+        "1920 x 1080 (1080p)",
+        "2560 x 1440 (1440p)",
+        "3840 x 2160 (4K)",
+    };
+    const int output = std::clamp(s.output_res.load(), 0, BbSettings::XboxOutputCount - 1);
+    if (ImGui::BeginCombo("Display output", xbox_outputs[output])) {
+        for (int i = 0; i < BbSettings::XboxOutputCount; ++i) {
+            if (ImGui::Selectable(xbox_outputs[i], i == output)) {
+                Store(s.output_res, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    Checkbox("V-Sync", s.vsync);
+
+    if (s.app_ver_is_0109) {
+        static constexpr int cap_values[] = {30, 60, 90, 120, 0};
+        static const char* cap_labels[] = {"30 FPS", "60 FPS", "90 FPS", "120 FPS", "Uncapped"};
+        int cap_idx = 1;
+        const int cur_cap = s.fps_cap.load();
+        for (int i = 0; i < 5; ++i) {
+            if (cap_values[i] == cur_cap) cap_idx = i;
+        }
+        if (ImGui::BeginCombo("Frame-rate limit", cap_labels[cap_idx])) {
+            for (int i = 0; i < 5; ++i) {
+                if (ImGui::Selectable(cap_labels[i], i == cap_idx)) {
+                    Store(s.fps_cap, cap_values[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    Slider("Brightness (gamma)", s.gamma, 0.60f, 1.40f);
+    if (std::abs(s.gamma.load() - 1.0f) > 0.005f) {
+        ImGui::SameLine();
+        if (ImGui::Button("Reset###gamma_reset")) {
+            Store(s.gamma, 1.0f, true);
+        }
+    }
+
+    ImGui::SeparatorText("Interface & Audio");
+    Checkbox("Show FPS & memory counter", s.show_fps);
+    Checkbox("Mute audio when unfocused", s.mute_unfocused);
+
+    static constexpr int xbox_prompt_vals[] = {BbSettings::PromptsXbox,
+                                               BbSettings::PromptsPlayStation};
+    static const char* xbox_prompt_labels[] = {"Xbox", "PlayStation"};
+    int prompt_idx = (s.button_prompts.load() == BbSettings::PromptsPlayStation) ? 1 : 0;
+    if (ImGui::BeginCombo("Button prompts", xbox_prompt_labels[prompt_idx])) {
+        for (int i = 0; i < 2; ++i) {
+            if (ImGui::Selectable(xbox_prompt_labels[i], i == prompt_idx)) {
+                Store(s.button_prompts, xbox_prompt_vals[i], true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (s.app_ver_is_0109) {
+        ImGui::SeparatorText("Game Patches (v01.09 - restart required)");
+        static constexpr int fps_patch_vals[] = {30, 60, 90, 0};
+        static const char* fps_patch_labels[] = {
+            "30 FPS (Original)",
+            "60 FPS++",
+            "90 FPS++",
+            "Uncap FPS++",
+        };
+        int fps_patch_idx = 1;
+        const int cur_fps_patch = s.xbox_fps_patch.load();
+        for (int i = 0; i < 4; ++i) {
+            if (fps_patch_vals[i] == cur_fps_patch) fps_patch_idx = i;
+        }
+        if (ImGui::BeginCombo("Engine FPS patch", fps_patch_labels[fps_patch_idx])) {
+            for (int i = 0; i < 4; ++i) {
+                if (ImGui::Selectable(fps_patch_labels[i], i == fps_patch_idx)) {
+                    Store(s.xbox_fps_patch, fps_patch_vals[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        static const char* lods[] = {"Highest (-2)", "Original", "Lower (+1)", "Lowest (+2)"};
+        static constexpr int lod_values[] = {-2, 0, 1, 2};
+        int lod_index = 1;
+        for (int i = 0; i < 4; ++i) {
+            if (lod_values[i] == s.model_lod) lod_index = i;
+        }
+        if (ImGui::BeginCombo("Model detail (LOD)", lods[lod_index])) {
+            for (int i = 0; i < 4; ++i) {
+                if (ImGui::Selectable(lods[i], i == lod_index)) {
+                    Store(s.model_lod, lod_values[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (ImGui::CollapsingHeader("Visual & gameplay patches (v01.09)")) {
+            for (int e = 0; e < BbSettings::EffectCount; ++e) {
+                if (!BbSettings::IsXboxSupportedEffect(e)) continue;
+                Checkbox(BbSettings::Effects[e].label, s.effects[e]);
+            }
+        }
+
+        bool restart_needed = (s.xbox_fps_patch != s.startup_xbox_fps_patch) ||
+                              (s.model_lod != s.startup_model_lod);
+        for (int e = 0; e < BbSettings::EffectCount; ++e) {
+            if (BbSettings::IsXboxSupportedEffect(e)) {
+                restart_needed |= (s.effects[e] != s.startup_effects[e]);
+            }
+        }
+        if (restart_needed) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                               "Startup patch changes apply after restarting the game");
+            if (ImGui::Button("Apply and restart")) {
+                dirty = false;
+                BbSettings::Save();
+                runtime_restart();
+            }
+        }
+    } else {
+        ImGui::Separator();
+        ImGui::TextDisabled(
+            "Game dump v%s: 60 FPS++ & engine-effect patches require Bloodborne update v01.09.",
+            s.app_ver_text);
+    }
+
+    if (dirty) {
+        dirty = false;
+        BbSettings::Save();
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Close")) {
+        keep_open = false;
+    }
+    static bool quit_armed = false;
+    ImGui::SameLine();
+    if (ImGui::Button(quit_armed ? "Press again to quit###bb_quit" : "Quit game###bb_quit")) {
+        if (quit_armed) {
+            BbSettings::Save();
+            bb_uwp_request_quit();
+        }
+        quit_armed = !quit_armed;
+    }
+    if (quit_armed && !ImGui::IsItemFocused() && !ImGui::IsItemHovered()) {
+        quit_armed = false;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Saved to LocalState\\bbport.ini");
+
+    static bool popup_was_open = false;
+    const bool any_popup =
+        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !any_popup && !popup_was_open) {
+        keep_open = false;
+    }
+    popup_was_open = any_popup;
+
+    ImGui::End();
+    if (!keep_open) {
+        popup_was_open = false;
+        SetOpen(false);
+    }
+}
+#endif
+
 void Menu() {
+#ifdef BB_UWP
+    MenuXbox();
+    return;
+#else
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
@@ -561,6 +773,7 @@ void Menu() {
     if (!keep_open) {
         SetOpen(false);
     }
+#endif
 }
 
 // The game's text dialog: what is typed, and how to finish (keyboard or controller).
@@ -605,7 +818,8 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
 #ifdef BB_UWP
-    ImGui::Text("%s  %llu/%llu MiB", FpsText().c_str(),
+    const auto& s = BbSettings::Get();
+    ImGui::Text("%s  %dp  %llu/%llu MiB", FpsText().c_str(), s.active_render_height.load(),
                 static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                 static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20));
 #else
