@@ -487,3 +487,33 @@ These are produced by the shipped string builders (`xbox/platform/dump_panel.h`)
    run (the excerpts above are the same strings from the same code, produced on the CI machine).
 3. `PR #10` description carries the layout table, the three panel states, the overlay design, the
    verification table and the CI-loop table; it must not be merged before (1).
+
+---
+
+## Crash after character creation — what the PC-port reports translate to
+
+The same crash is a well-documented PC problem. Screened against this codebase, one of the community's
+reported causes is a **verbatim match**, one is **already implemented here**, and the rest are N/A.
+
+| PC cause / community fix | Status in this port |
+| --- | --- |
+| `avplayer_source.h:48 Assertion Failed! Could not allocate frame buffer` — crash on the first movie after creation; people work around it with a post-creation save or by lowering effects | **Was a real defect here.** `GuestBuffer` called `ASSERT_MSG(m_data, ...)`, so a failed guest allocation aborted the process (dashboard crash) instead of failing the stream. **Fixed.** |
+| Enable GPU readbacks, or disable FaceGen (vertex explosions / stale vertices) | **Already implemented**: `EmulatorSettings.GetReadbacksMode()` defaults to `Relaxed` (`gpu/shim/core/emulator_settings.h`), honoured by `RegionManager::InvalidateRegion` / `ForEachModifiedRange`. No FaceGen patch needed. |
+| Out of device memory (`ErrorOutOfDeviceMemory`), 4 GB VRAM, RAM spikes | Still the dominant risk for us: Test #11 died at `4135/5120 MiB`. The `AppMemoryUsage` work (GC at frame boundaries, dense-arena retirement, `/STACK:8388608,65536`) is the equivalent of their "RAM spike workaround" mods. |
+| `SDL_audiocvt.c ConvertAudio` buffer overrun / LibAtrac9 overflow on the cutscene audio | **N/A**: audio is FFmpeg + `XAudio2`; there is no SDL and no `LibAtrac9` call site in `gpu/` or `src/`. |
+| Toggling patches (`Skip Intro`, 60 FPS, resolution) changes whether it crashes | Maps to our `patches/redzone.json` / `Bloodborne.xml` state: a `01.00` dump runs with `patches=skipped`, which is the configuration Test #11 crashed in. Split-dump support addresses this. |
+| VBlank divider / frame-rate cap causing the load to hang | Exposed as `BB_VBLANK_HZ` / `BB_FPS_LIMIT`, not a defect. |
+
+### The fix (`gpu/shadps4/core/libraries/avplayer/`)
+
+- `GuestBuffer::GuestBuffer` no longer aborts. It logs the size/align and exposes `IsValid()`.
+- `AvPlayerSource::Init` allocates video and audio frame buffers one at a time, stops on the first
+  refusal, and **fails the stream** (`return false`) when fewer than two are available — the count
+  below which the decoder and presentation callback cannot run. The guest receives an AvPlayer error
+  and keeps running, instead of the app dying on the cutscene after character creation.
+- Partial allocation still plays: `N of M frame buffers allocated, playing with N`.
+
+What to look for in `dozen.log` / `errors.log` on the next hardware run:
+`Could not allocate frame buffer (… bytes, align …, texture=…)` followed by
+`Video '<path>': only N of M frame buffers … could be allocated` — that is the memory-exhaustion
+pressure the PC reports describe, now visible instead of fatal.

@@ -262,8 +262,27 @@ bool AvPlayerSource::Start() {
         const auto pitch = Common::AlignUp<u32>(m_video_codec_context->width, 64);
         const auto height = Common::AlignUp<u32>(m_video_codec_context->height, 16);
         const auto size = (pitch * height * 3) / 2;
+        u32 allocated{};
         for (u64 index = 0; index < m_max_num_video_framebuffers; ++index) {
-            m_video_buffers.Push(GuestBuffer(m_memory_replacement, 0x100, size, true));
+            GuestBuffer buffer(m_memory_replacement, 0x100, size, true);
+            if (!buffer.IsValid()) {
+                break;
+            }
+            m_video_buffers.Push(std::move(buffer));
+            ++allocated;
+        }
+        if (allocated < 2) {
+            // Two frames are the minimum the decoder and the presentation callback need; with
+            // fewer the stream cannot run, so fail it cleanly instead of dereferencing null.
+            LOG_ERROR(Lib_AvPlayer,
+                      "Video '{}': only {} of {} frame buffers of {} bytes could be allocated "
+                      "(pitch={}, height={})",
+                      path, allocated, m_max_num_video_framebuffers, size, pitch, height);
+            return false;
+        }
+        if (allocated != m_max_num_video_framebuffers) {
+            LOG_WARNING(Lib_AvPlayer, "Video '{}': {} of {} frame buffers allocated, playing with {}",
+                        path, allocated, m_max_num_video_framebuffers, allocated);
         }
     }
     if (m_audio_stream_index) {
@@ -290,8 +309,19 @@ bool AvPlayerSource::Start() {
         constexpr u8 max_channels = 8;
         constexpr size_t max_sample_size = sizeof(s32);
         const auto size = max_channels * max_sample_size * 1024;
+        u32 allocated{};
         for (u64 index = 0; index < (m_max_num_video_framebuffers * 2); ++index) {
-            m_audio_buffers.Push(GuestBuffer(m_memory_replacement, 0x10, size, false));
+            GuestBuffer buffer(m_memory_replacement, 0x10, size, false);
+            if (!buffer.IsValid()) {
+                break;
+            }
+            m_audio_buffers.Push(std::move(buffer));
+            ++allocated;
+        }
+        if (allocated < 2) {
+            LOG_ERROR(Lib_AvPlayer, "Audio '{}': only {} of {} buffers of {} bytes could be allocated",
+                      path, allocated, m_max_num_video_framebuffers * 2, size);
+            return false;
         }
     }
     m_demuxer_thread.Run([this](std::stop_token stop) { this->DemuxerThread(stop); });

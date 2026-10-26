@@ -48,7 +48,23 @@ public:
           m_data(is_texture ? AllocateTexture(memory_replacement, align, size)
                             : Allocate(memory_replacement, align, size)),
           m_size(size), m_is_texture(is_texture) {
-        ASSERT_MSG(m_data, "Could not allocate frame buffer.");
+        // bbport: this used to assert (abort) when the guest allocator refused the request, which on
+        // the console is a crash to the dashboard on the first movie after character creation - the
+        // exact failure PC players hit as "Could not allocate frame buffer" (avplayer_source.h) and
+        // work around with a post-creation save or fewer effects. The request failing means memory
+        // is exhausted, not that the process is corrupt, so report it and let Init() fail the
+        // stream instead: the game sees an AvPlayer error and carries on.
+        if (m_data == nullptr) {
+            LOG_ERROR(Lib_AvPlayer,
+                      "Could not allocate frame buffer ({} bytes, align {:#x}, texture={})",
+                      size, align, is_texture);
+        }
+    }
+
+    /// False when the guest allocator could not satisfy the request. The buffer must not be used
+    /// and the owning stream has to be failed instead of played.
+    bool IsValid() const noexcept {
+        return m_data != nullptr;
     }
 
     ~GuestBuffer() {
