@@ -177,3 +177,115 @@ Test #11 (`xbox-alpha-1.0.26299.1047`) crashed on a **01.00** dump at `4135/5120
 - `GPU: copy layer mismatch: ... skipping the copy` count is reported (each unique triple logs once); it must not correlate with missing visuals.
 - `SPRJ0005` mounted once (`Runtime: save data 'SPRJ0005' mounted at /savedata0` followed by `already mounted ... (refs=1)`), never torn down while a session still uses it.
 - `check-imports.ps1`, `MakeAppx`, `SignTool`, the dense-arena unit test, and the symbolication report all green in CI.
+
+---
+
+## Update / Patch Handling
+
+The root cause of the `bloodborne.exe+0x3003f0` crash in Hardware Test #11 was not a GPU bug: the
+player's USB drive holds the base game and the 01.09 update as **two separate PS4 folders**, the app
+only ever read the base folder, so it booted `APP_VER=01.00`, every red-zone patch was skipped and
+the guest ran the unpatched 30 FPS build. A dump where the update has been merged into the game
+folder (`app_ver=01.09`) was the only configuration that worked. Nothing in §5 is reopened.
+
+This section supersedes the 01.09 gate that was rolled back earlier: there is again a version gate,
+but it is derived from what the launcher detects instead of being a hard exit, and it never guesses
+a version.
+
+### What the app supports now
+
+| Layout | On disk | Launcher | `Prepare:` line |
+| --- | --- | --- | --- |
+| merged | one folder, `param.sfo` `APP_VER=01.09` `APP_TYPE=gp` | runs it directly | `effective=01.09; patches=required` |
+| split | `Bloodborne\` (01.00) + `Bloodborne-patch\` (01.09, own `eboot.bin`, `sce_module\`, `sce_sys\param.sfo`, `dvdroot_ps4\`) | auto-discovers the sibling, or the `[dump] patch_path` from `bbport.ini`, or the folder the player picks | `base_app_ver=01.00; patch_app_ver=01.09; effective=01.09; patches=required` |
+| base only | 01.00 and no update folder anywhere | warning banner; starts only after "Continue anyway (unpatched)" | `effective=01.00; patches=skipped` |
+
+Picking the update folder itself works too: the sibling base folder then supplies the data the
+update does not carry.
+
+### Six revertable commits (in order)
+
+1. **`a13b6e0` — param.sfo reader.** `xbox/platform/sfo_version.h` (pure helpers: version ordering,
+   `CONTENT_ID …-A0109-V0100 -> 01.09`, `APP_TYPE` classification, the single
+   `kPatchTargetVersion`), `SfoInfo`/`ParseParamSfo`/`ReadParamSfo` in `prepare_game.{h,cpp}`.
+   Never falls back to a version: an unreadable or `APP_VER`-less file logs the raw header bytes and
+   returns `std::nullopt`.
+2. **`be9222f` — layout detection.** `DetectDumpLayout(user_picked, preferred_patch)` returns
+   `{kind, base_path, patch_path, base, patch, effective_ver}` and logs exactly one line:
+   `DumpLayout: kind=split; base_ver=01.00; patch_ver=01.09; effective=01.09; base=…; patch=…`.
+   Candidates are rejected (with the reason) on a different `TITLE_ID`, no version, not strictly
+   newer than the base, or an incomplete container. `runtime_compat.c` gained
+   `bb_uwp_list_dir`/`bb_uwp_is_dir`/`bb_uwp_is_file` so `windows.h` stays out of `prepare_game.cpp`.
+3. **`087767f` — launcher panel + persistence.** Base dump / Patch dump / Effective version, the
+   "Use patch" toggle in both directions, the base-only banner with "Pick patch folder" and
+   "Continue anyway (unpatched)", validation of a manually picked update (readable `param.sfo`, same
+   `TITLE_ID`, newer version, `eboot.bin` present) and persistence in **both** places:
+   `[dump] patch_path=` / `[dump] use_patch=` in `bbport.ini` and the StorageFolder token `patch` in
+   the `FutureAccessList`, redeemed on the next launch. The ini round-trip lives in
+   `xbox/platform/ini_file.h` and is CI-tested (comments, order and unrelated settings survive; a
+   missing key lands inside the existing section; an unchanged value does not rewrite the file).
+4. **`2658229` — the overlay.** `BuildOverlayedImage(base, patch, outDir)` materializes the *boot
+   container* into `LocalState\Prepared\overlay` (update first, base game for what the update lacks)
+   and writes `Prepared\overlay\files.txt`. `bb_uwp_overlay_configure()` turns that list into a
+   sorted index and the platform file layer then serves every `<dump>\<rel>` the update provides
+   from `<update>\<rel>` (`bb_uwp_open`/`stat`/`attributes`/`find`, and `opendir`/`readdir` merge the
+   update's entries so patch-only files are visible). Game data is never copied — a real dump is tens
+   of GB — and neither source folder is ever written. The path rules are pure C in
+   `xbox/platform/overlay_index.h` and CI-tested: case- and separator-insensitive prefix match,
+   boundary check so a dump named `Bloodborne` cannot swallow a `Bloodborne-patch` sibling, bounded
+   sorted lookup.
+5. **`a32bc83` — the gate.** `EffectivePatchState()` (required / optional / skipped) from the layout,
+   `enable_red_zones` only when not skipped, the single
+   `Prepare: base_app_ver=…; patch_app_ver=…; effective=…; patches=required|optional|skipped` line,
+   the 01.09 literals in `BuildPatches` replaced by `kPatchTargetVersion`, and
+   `xbox/prepared-format.txt` 2 -> 3 so a Prepared folder from the old format regenerates once.
+6. **`0be18f1` — overlay.json + cache invalidation.** Boot files are hashed while they are copied;
+   `LocalState\Prepared\overlay.json` records the relative paths, the per-file SHA-256 values and a
+   `digest` that covers the effective version, the redirect list and the boot bytes but not the
+   absolute paths (moving the same dump to another drive is not a change). When the digest differs
+   from the previous launch the app logs
+   `Prepare: overlay changed (digest … -> …); invalidating Prepared and driver.vkcache` and deletes
+   `boot-linked.bin`, `content.bin`, `eboot.elf`, `app_ver.txt`, `format.txt` **and**
+   `<user>\cache\<serial>\driver.vkcache` together, because they describe the same guest build.
+
+### Expected lines in `loader.log.txt` for each layout
+
+```
+# merged 01.09
+DumpLayout: kind=merged; base_ver=01.09; patch_ver=-; effective=01.09; base=E:\dumps\Bloodborne; patch=-
+Prepare: base_app_ver=01.09; patch_app_ver=-; effective=01.09; patches=required
+
+# split (base 01.00 + Bloodborne-patch 01.09)
+DumpLayout: kind=split; base_ver=01.00; patch_ver=01.09; effective=01.09; base=E:\dumps\Bloodborne; patch=E:\dumps\Bloodborne-patch
+Overlay: E:\dumps\Bloodborne + E:\dumps\Bloodborne-patch -> D:\…\LocalState\Prepared\overlay (N files from the update, M copied, N redirected, digest …)
+Update overlay: N paths from E:\dumps\Bloodborne-patch over E:\dumps\Bloodborne
+Prepare: base_app_ver=01.00; patch_app_ver=01.09; effective=01.09; patches=required
+
+# base only
+DumpLayout: kind=base-only; base_ver=01.00; patch_ver=-; effective=01.00; base=E:\dumps\Bloodborne; patch=-
+Prepare: base_app_ver=01.00; patch_app_ver=-; effective=01.00; patches=skipped
+Prepare: red-zone patches are skipped, the game runs the unpatched build (as confirmed by the player)
+```
+
+### How to verify
+
+1. Install the package, launch once with the **merged** 01.09 dump: the panel says
+   `Effective version: 01.09`, `loader.log` has `patches=required` and
+   `Compiled startup patches` with `n > 0`.
+2. Copy the **split** pair to USB (`E:\dumps\Bloodborne` + `E:\dumps\Bloodborne-patch`), point the
+   launcher at the base folder, accept the detected update: the panel must show both paths and
+   `Effective version: 01.09`; afterwards `SHA-256` of both USB folders must be unchanged.
+3. Restart: the choice must survive (`[dump] patch_path=` in `LocalState\bbport.ini`), the panel must
+   come up already patched, and `Prepare:` must still say `patches=required`.
+4. Pull the update folder away and restart: the panel must show the base-only banner; the game may
+   only start after "Continue anyway (unpatched)" and must then log `patches=skipped`.
+
+### Still open
+
+- **Hardware run pending.** Nothing here has been exercised on a Series S yet. The acceptance for
+  this work is the split-dump run: `presents > 10,000` in Yharnam with zero faults at `+0x3003f0`
+  and `effective=01.09; patches=required` in the log, plus the three launcher-panel states and the
+  before/after `loader.log` excerpts for the PR description.
+- **Do not merge PR #10 before that run passes.**
+- `driver.vkcache` is dropped whenever the overlay digest changes; if a future update is expected to
+  keep the cache, the digest would have to be split into "guest build" and "data set" parts.
