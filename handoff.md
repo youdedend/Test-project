@@ -289,3 +289,29 @@ Prepare: red-zone patches are skipped, the game runs the unpatched build (as con
 - **Do not merge PR #10 before that run passes.**
 - `driver.vkcache` is dropped whenever the overlay digest changes; if a future update is expected to
   keep the cache, the digest would have to be split into "guest build" and "data set" parts.
+
+### CI history for this work
+
+| Run | Head | Result |
+|---|---|---|
+| `40389855254` | `0be18f1` | `Dozen for UWP` ok, `Xbox UWP package` **failed** in "Build and run UWP platform unit tests" |
+| `40391383955` | `a7cb3de` | same step failed; the annotation (first 4096 chars of the log) hid the failing check |
+| `40395148890` | `dc2bd97` | **green**, both jobs |
+
+Two real defects came out of that loop, and one workflow improvement:
+
+1. **`a7cb3de`** — the test step published the raw tail of the compiler/test output as a check-run
+   annotation. GitHub keeps only the first 4096 characters, so the `FAIL:` line (which comes first)
+   was cut off. `Publish()` now keeps only lines matching
+   `FAIL|FATAL|error:|warning:|check(s) failed|did not compile` (falling back to the last 40 lines)
+   and takes the first 3800 characters, so the failing check is what survives.
+2. **`c344a14`** — `SfoInfo::IsPatch()` treated the `CONTENT_ID`'s update group as decisive, so a
+   **merged** 01.09 dump (`app_type=gp`, `content_id=…-A0109-V0100`) reported `kind=patch` and the
+   layout decisions mis-classified a base game. It is now
+   `IsPatchAppType(app_type) || (app_type.empty() && !update_ver.empty())` — the `CONTENT_ID`
+   fallback only applies when there is no `APP_TYPE` at all — and both `DetectDumpLayout`
+   decisions call `IsPatchAppType(info->app_type)` directly. The diagnostic line became
+   `Prepare: param.sfo kind=%s (app_type=%s)`.
+3. **`dc2bd97`** — three `dump_layout` checks compared a normalized path with a raw
+   `std::filesystem` path. That is a no-op on Linux (`/` on both sides) but fails on Windows, where
+   `std::filesystem` hands back `\`. Both sides now go through the same normalizer.
