@@ -372,7 +372,17 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
             return EXCEPTION_CONTINUE_EXECUTION;
 #endif
         /* GPU page tracking (write-protected guest pages) is resolved first. */
-        if (gpu_enabled && bbgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
+        if (gpu_enabled && bbgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) {
+#ifdef BB_UWP
+            /* If GPU write-tracking unprotected a page that is currently paged out to swap,
+             * commit/page it in immediately rather than faulting a second time on retry. */
+            (void)runtime_memory_handle_commit_fault_at(
+                (uintptr_t)record->ExceptionInformation[1],
+                (int)record->ExceptionInformation[0],
+                guest_code);
+#endif
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
         if (runtime_fault_recover) {
             /* A speculative guest memory read (GPU draw preparation) faulted: the thread resumes
              * in bb_longjmp, outside the exception dispatcher, back at its recovery point. */

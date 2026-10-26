@@ -76,6 +76,7 @@ float base_scale = 1.0f;
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f, last_present_ms = 0.0f;
+std::atomic<uint64_t> present_frame_count{0};
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
@@ -945,6 +946,7 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 
 // Called for every presented image: the interval for the FPS readout and BB_FPS_LOG.
 void NotePresent() {
+    present_frame_count.fetch_add(1, std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
@@ -966,6 +968,7 @@ void NotePresent() {
         const float elapsed = std::chrono::duration<float>(now - window_start).count();
         if (elapsed >= 5.0f) {
             std::printf("Frame rate: %.1f FPS, slowest frame %.1f ms\n", frames / elapsed, worst);
+            std::fflush(stdout);
             window_start = now;
             frames = 0;
             worst = 0.0f;
@@ -1031,3 +1034,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
 }
 
 } // namespace BbOverlay
+
+extern "C" uint64_t bbgpu_uwp_present_count(void) {
+    return BbOverlay::present_frame_count.load(std::memory_order_relaxed);
+}

@@ -56,11 +56,13 @@ void runtime_wait_report(void);
 void runtime_sample_threads(void);
 int runtime_entered_game(void);
 int bb_uwp_dialog_key(uint32_t key, int down, int repeat);
+uint64_t bbgpu_uwp_present_count(void);
 }
 
 static std::atomic<bool> g_finished{false};
 static std::atomic<bool> g_game_mode{false};
 static std::atomic<bool> g_window_closed{false};
+static std::atomic<bool> g_app_visible{true};
 static uint64_t g_memory_limit_override = 0;
 static winrt::agile_ref<winrt::Windows::UI::Core::CoreWindow> g_core_window;
 static winrt::Windows::Storage::StorageFolder g_dump_folder_lease{nullptr};
@@ -947,6 +949,7 @@ static void run_loader() {
     set_env_var("TMP", temp_str);
     set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
     set_env_var("BB_UPSCALER", "off");
+    set_env_var("BB_FPS_LOG", "1");
 
     if (!prepare_game_and_patches(dump, prepared_str, ini_path, player, mode == "prepare") ||
         mode == "prepare") {
@@ -1040,7 +1043,9 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
             });
 
         window.VisibilityChanged([](const auto&, const auto& ev) {
-            std::printf("UWP lifecycle: visible=%u\n", unsigned(ev.Visible()));
+            const bool vis = ev.Visible();
+            g_app_visible.store(vis, std::memory_order_relaxed);
+            std::printf("UWP lifecycle: visible=%u\n", unsigned(vis));
             std::fflush(stdout);
         });
 
@@ -1066,21 +1071,28 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
             CloseHandle(reinterpret_cast<HANDLE>(th));
         }
 
-        // Log memory usage periodically during early boot and support LocalState\diagnostics.txt,
-        // LocalState\threads.txt, and LocalState\quit.txt triggers.
+        // Log memory usage periodically and dump wait/thread stacks if frame presentation
+        // ever stalls for >= 10 seconds while visible.
         std::thread([] {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
             unsigned entered_ticks = 0;
             bool auto_sampled = false;
-            for (unsigned sample = 0; sample < 24 && !g_finished.load(); ++sample) {
+            uint64_t last_presents = 0;
+            unsigned stalled_ticks = 0;
+            bool stall_dumped = false;
+            for (unsigned sample = 0; !g_finished.load(); ++sample) {
                 Sleep(5000);
-                std::printf(
-                    "UWP memory telemetry: %llu/%llu MiB (level=%u)\n",
-                    static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
-                    static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
-                    unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
-                if (!auto_sampled && runtime_entered_game()) {
-                    if (++entered_ticks >= 6) {
+                const uint64_t presents = bbgpu_uwp_present_count();
+                if (sample < 24 || stalled_ticks > 0) {
+                    std::printf(
+                        "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu)\n",
+                        static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                        static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                        unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
+                        static_cast<unsigned long long>(presents));
+                }
+                if (runtime_entered_game()) {
+                    if (!auto_sampled && ++entered_ticks >= 6) {
                         auto_sampled = true;
                         std::puts("UWP +30s boot health snapshot:");
                         runtime_memory_report();
@@ -1088,7 +1100,27 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                         runtime_wait_report();
                         runtime_sample_threads();
                     }
+                    if (g_app_visible.load(std::memory_order_relaxed) && presents > 0) {
+                        if (presents == last_presents) {
+                            if (++stalled_ticks >= 2 && !stall_dumped) {
+                                stall_dumped = true;
+                                std::printf(
+                                    "UWP STALL DETECTED (presents stuck at %llu for %u s):\n",
+                                    static_cast<unsigned long long>(presents), stalled_ticks * 5);
+                                runtime_memory_report();
+                                runtime_file_report();
+                                runtime_audio_report();
+                                runtime_pad_report();
+                                runtime_wait_report();
+                                runtime_sample_threads();
+                            }
+                        } else {
+                            stalled_ticks = 0;
+                            stall_dumped = false;
+                        }
+                    }
                 }
+                last_presents = presents;
                 std::fflush(stdout);
             }
         }).detach();

@@ -23,7 +23,7 @@ static UwpPhysical *uwp_physical;
 static UwpPage *uwp_pages;
 static size_t uwp_count, uwp_capacity;
 static SRWLOCK uwp_commit_lock = SRWLOCK_INIT;
-static uint64_t uwp_faults, uwp_aliases, uwp_snapshots, uwp_moves;
+static uint64_t uwp_faults, uwp_aliases, uwp_snapshots, uwp_moves, uwp_commit_epoch;
 
 static void uwp_fail(const char *what, uintptr_t address);
 static UwpPage *uwp_page(uintptr_t address);
@@ -184,10 +184,13 @@ static int uwp_commit(UwpPage *page) {
     }
     uwp_apply_protection(page);
     ++uwp_faults;
+    ++uwp_commit_epoch;
     return 1;
 }
 
 int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int guest_code) {
+    static __thread uintptr_t last_retry_subpage;
+    static __thread uint64_t last_retry_epoch;
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);
     UwpPage *page = uwp_page(address);
@@ -197,7 +200,11 @@ int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int gue
         physical->recent = 1;
         unsigned index = (unsigned)((address - page->address) / 4096);
         int wanted = page->protection[index];
-        if (wanted & PROT_EXEC) physical->pinned = 1;
+        /* Pin pageable WC_GARLIC pages touched directly by guest CPU code so active CPU/GPU
+         * shared pages stay resident and never stall guest worker threads on swap views. */
+        if (guest_code || (wanted & PROT_EXEC)) {
+            physical->pinned = 1;
+        }
         int permitted = (access == 1) ? (wanted & PROT_WRITE)
                       : (access == 8) ? (wanted & PROT_EXEC)
                       : (wanted & (PROT_READ | PROT_WRITE | PROT_EXEC));
@@ -206,6 +213,7 @@ int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int gue
                 if (uwp_promote(physical, page->physical)) {
                     uwp_fail("pinned page promotion", page->address);
                 }
+                ++uwp_commit_epoch;
                 handled = 1;
             } else {
                 handled = uwp_commit(page);
@@ -215,12 +223,22 @@ int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int gue
                 DWORD old;
                 uintptr_t subpage = address & ~(uintptr_t)4095;
                 if (VirtualQuery((void *)subpage, &info, sizeof(info)) &&
-                    ((access == 1 && info.Protect == PAGE_EXECUTE_READ) ||
-                     (access == 8 && info.Protect == PAGE_READWRITE))) {
-                    handled = VirtualProtectFromApp(
-                        (void *)subpage, 4096, access == 8 ? PAGE_EXECUTE_READ : PAGE_READWRITE, &old);
-                    if (handled && access == 8) {
-                        FlushInstructionCache(GetCurrentProcess(), (void *)subpage, 4096);
+                    info.State == MEM_COMMIT) {
+                    DWORD target = (access == 8) ? PAGE_EXECUTE_READ : PAGE_READWRITE;
+                    if (info.Protect == target) {
+                        if (last_retry_subpage != subpage || last_retry_epoch != uwp_commit_epoch) {
+                            last_retry_subpage = subpage;
+                            last_retry_epoch = uwp_commit_epoch;
+                            handled = 1;
+                        }
+                    } else if (info.Protect == PAGE_EXECUTE_READ || info.Protect == PAGE_READWRITE) {
+                        handled = VirtualProtectFromApp((void *)subpage, 4096, target, &old);
+                        if (handled) {
+                            ++uwp_commit_epoch;
+                            if (access == 8) {
+                                FlushInstructionCache(GetCurrentProcess(), (void *)subpage, 4096);
+                            }
+                        }
                     }
                 }
             } else if (!handled) {
@@ -228,12 +246,20 @@ int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int gue
                 DWORD old;
                 uintptr_t subpage = address & ~(uintptr_t)4095;
                 if (VirtualQuery((void *)subpage, &info, sizeof(info)) &&
-                    info.State == MEM_COMMIT && info.Protect != win_prot(wanted)) {
-                    handled = VirtualProtectFromApp((void *)subpage, 4096, win_prot(wanted), &old);
+                    info.State == MEM_COMMIT) {
+                    if (info.Protect != win_prot(wanted)) {
+                        handled = VirtualProtectFromApp((void *)subpage, 4096, win_prot(wanted), &old);
+                        if (handled) ++uwp_commit_epoch;
+                    } else if (last_retry_subpage != subpage || last_retry_epoch != uwp_commit_epoch) {
+                        /* A concurrent thread committed, paged in, or unprotected this subpage
+                         * while we waited for uwp_commit_lock; retry the faulting instruction. */
+                        last_retry_subpage = subpage;
+                        last_retry_epoch = uwp_commit_epoch;
+                        handled = 1;
+                    }
                 }
             }
         }
-        (void)guest_code;
     }
     ReleaseSRWLockExclusive(&uwp_commit_lock);
     read_unlock();
@@ -358,15 +384,26 @@ static int uwp_promote(UwpPhysical *physical, uint64_t offset) {
 
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t offset) {
     if (uwp_reserve(address, size)) return -1;
-    /* Bloodborne allocates numerous WB_ONION, WC_GARLIC and FlexibleMemory heaps >= 4 MiB;
-     * allow any non-executable mapping >= 4 MiB to participate in second-chance swap paging. */
-    int pageable = (size >= (UINT64_C(4) << 20) && !(prot & PROT_EXEC)) ? 1 : 0;
+    /* Only large (>= 256 MiB) WC_GARLIC (type == 3) GPU bulk pools participate in disk swap
+     * (3,173 MiB in Bloodborne: 0x1042C00000 [2,287 MiB] + 0x10D1B00000 [886 MiB]).
+     * WB_ONION CPU heaps, FMOD audio buffers, GNM command rings, and FlexibleMemory libc heaps
+     * remain resident so host audio/OS threads and guest sync primitives never fault on swap. */
+    int pageable = 0;
+    if (size >= (UINT64_C(256) << 20) && offset < POOL_SIZE && !(prot & PROT_EXEC)) {
+        for (unsigned i = 0; i < LIMIT; ++i) {
+            if (blocks[i].used && blocks[i].type == 3 &&
+                blocks[i].start <= offset && offset - blocks[i].start < blocks[i].size) {
+                pageable = 1;
+                break;
+            }
+        }
+    }
     for (uint64_t n = 0; n < size; n += PAGE) {
         UwpPage *page = uwp_page(address + n);
         if (page->mapped) uwp_detach(page, 1);
         if (reserved) continue;
         UwpPhysical *physical = &uwp_physical[(offset + n) / PAGE];
-        if (!pageable || (prot & PROT_EXEC)) physical->pinned = 1;
+        if (prot & PROT_EXEC) physical->pinned = 1;
         if (physical->references && uwp_promote(physical, offset + n)) {
             uwp_fail("alias section resource limit", page->address);
         }
@@ -439,6 +476,7 @@ static int host_protect(uintptr_t address, uint64_t size, int prot) {
         for (uintptr_t sub = at; sub < end; sub += 4096) {
             page->protection[(sub - page->address) / 4096] = prot;
         }
+        ++uwp_commit_epoch;
         at = end;
     }
     ReleaseSRWLockExclusive(&uwp_commit_lock);

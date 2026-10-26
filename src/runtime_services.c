@@ -257,6 +257,7 @@ static int32_t dialog_init(int i) {
 static int32_t dialog_open(int i) {
     if (!dialogs[i].initialized) return DIALOG_NOT_INITIALIZED;
     printf("Runtime: %s opened; completed immediately (no dialog UI yet)\n",dialogs[i].name);
+    fflush(stdout);
     dialogs[i].status=3; return 0;
 }
 static int32_t dialog_status(int i) { return dialogs[i].status; }
@@ -309,6 +310,7 @@ static void ime_complete(int end_status, const char *text) {
     if (!end_status && ime.buffer && ime.max_length) utf8_to_utf16(text,ime.buffer,ime.max_length);
     ime.end_status=end_status; ime.finished=1; ime.running=0;
     printf("Runtime: ImeDialog %s%s%s\n",end_status ? "cancelled" : "text: ",end_status ? "" : text,"");
+    fflush(stdout);
 }
 static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     (void)extended;
@@ -326,7 +328,10 @@ static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     const char *name=getenv("BB_USER_NAME");
     const char *start=initial[0] ? initial : name && *name ? name : "Hunter";
     if (!bbgpu_text_input_begin(start,prompt[0] ? prompt : "Text")) ime_complete(0,start);
-    else printf("Runtime: ImeDialog opened: shown on screen; keyboard Enter or Cross accepts, Esc or Circle cancels\n");
+    else {
+        printf("Runtime: ImeDialog opened: shown on screen; keyboard Enter or Cross accepts, Esc or Circle cancels\n");
+        fflush(stdout);
+    }
     return 0;
 }
 static ABI int32_t ime_status(void) {
@@ -339,7 +344,10 @@ static ABI int32_t ime_status(void) {
 }
 static ABI int32_t ime_result(uint32_t *result) {
     if (!ime.finished) return (int32_t)0x80BC0101; /* DIALOG NOT_FINISHED */
-    if (result) *result=(uint32_t)ime.end_status;
+    if (result) {
+        memset(result,0,16);
+        *result=(uint32_t)ime.end_status;
+    }
     return 0;
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }

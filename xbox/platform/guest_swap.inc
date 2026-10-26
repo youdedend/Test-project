@@ -230,6 +230,7 @@ static int uwp_swap_page_in(UwpPage *page) {
         page->kind = 3;
         ++uwp_swap_views;
     }
+    if (before != page->view_mask) ++uwp_commit_epoch;
     return before != page->view_mask;
 }
 
@@ -259,6 +260,7 @@ static int uwp_swap_protect(UwpPage *page, unsigned index, int prot) {
         }
     }
     page->protection[index] = prot;
+    ++uwp_commit_epoch;
     return 1;
 }
 
