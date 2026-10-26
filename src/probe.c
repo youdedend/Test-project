@@ -663,6 +663,21 @@ int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
 #endif
     check_cpu();
+#ifdef BB_UWP
+    /* Developer check of the guest memory manager (xbox/platform/guest_memory_test.inc). It runs
+     * before any boot file is read and before the kernel service or the guest TLS are set up: it
+     * needs only the memory manager and a fault handler for the commit-on-touch pages it walks.
+     * The handler is removed again, because the loader runs the game through this same entry
+     * point right afterwards. */
+    if (argc == 2 && !strcmp(argv[1], "--memory-selftest")) {
+        const PVOID handler = AddVectoredExceptionHandler(1, vectored_fault);
+        const int result = runtime_memory_selftest();
+        if (handler) RemoveVectoredExceptionHandler(handler);
+        printf("Memory contract self-test returned %d\n", result);
+        fflush(stdout);
+        return result;
+    }
+#endif
 #ifdef _WIN32
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
      * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them. */
@@ -728,16 +743,6 @@ int main(int argc, char **argv) {
     }
 #endif
     (void)timeout_seconds; /* no watchdog on Windows */
-#ifdef BB_UWP
-    /* Developer check of the guest memory manager on the console (LocalState\run.txt "memory"):
-     * the fault handler above resolves the commit-on-touch pages the test walks. */
-    if (argc == 2 && !strcmp(argv[1], "--memory-selftest")) {
-        const int result = runtime_memory_selftest();
-        printf("Memory contract self-test returned %d\n", result);
-        fflush(stdout);
-        return result;
-    }
-#endif
 #else
     page_size = (size_t)sysconf(_SC_PAGESIZE);
     struct sigaction sa = {0}; sa.sa_sigaction = fault; sa.sa_flags = SA_SIGINFO;

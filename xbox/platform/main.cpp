@@ -939,6 +939,16 @@ static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// The guest memory contract self-test (xbox/platform/guest_memory_test.inc) runs through the
+// loader's own entry point, so the fault handler the loader installs resolves the
+// commit-on-touch pages the test walks, exactly as it does for the game.
+static int run_memory_selftest() {
+    char app_name[] = "bloodborne-uwp";
+    char selftest_flag[] = "--memory-selftest";
+    char* args[] = {app_name, selftest_flag};
+    return bbport_uwp_run_probe(2, args);
+}
+
 static void run_loader() {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     const auto local_w =
@@ -1052,6 +1062,70 @@ static void run_loader() {
         return;
     }
 
+    // Directories and variables the self-test and the game both need. They are set before the game
+    // folder is chosen: the guest memory self-test runs on the first launch, before the folder
+    // picker opens (that dialog waits for the player).
+    const std::string user_str = local_str + "\\user";
+    const std::string prepared_str = local_str + "\\Prepared";
+    const std::string temp_str = local_str + "\\temp";
+    const std::string ini_path = local_str + "\\bbport.ini";
+
+    CreateDirectoryFromAppW(winrt::to_hstring(user_str).c_str(), nullptr);
+    CreateDirectoryFromAppW(winrt::to_hstring(prepared_str).c_str(), nullptr);
+    CreateDirectoryFromAppW(winrt::to_hstring(temp_str).c_str(), nullptr);
+
+    set_env_var("BB_USER_DIR", user_str);
+    set_env_var("BB_GPU_USER_DIR", user_str);
+    set_env_var("TEMP", temp_str);
+    set_env_var("TMP", temp_str);
+    set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
+
+    // Guest memory contract self-test (cosmo/gow3_xbox). It runs by itself on the first launch
+    // after install (while LocalState\memory-selftest.txt does not exist), and again whenever
+    // LocalState\graphics-debug.txt sets BB_MEMORY_SELFTEST=1 or LocalState\run.txt starts with
+    // "memory". Nothing has to be created on the console to get the result: it goes to
+    // loader.log.txt and to memory-selftest.txt. The marker is written before the test runs, so a
+    // test that hangs is not repeated on every start.
+    {
+        const std::filesystem::path marker_path =
+            std::filesystem::path{local_w} / L"memory-selftest.txt";
+        std::error_code marker_ec;
+        const bool ran_before = std::filesystem::exists(marker_path, marker_ec) && !marker_ec;
+        const char* forced = std::getenv("BB_MEMORY_SELFTEST");
+        const bool requested = mode == "memory" || (forced && *forced == '1');
+        if (requested || !ran_before) {
+            std::printf("UWP memory: guest memory contract self-test starting (%s)\n",
+                        requested ? "requested" : "first launch");
+            std::fflush(stdout);
+            const auto write_marker = [&marker_path](const std::string& text) {
+                std::ofstream marker{marker_path, std::ios::trunc};
+                marker << text;
+            };
+            write_marker("started\n");
+            const int result = run_memory_selftest();
+            write_marker("result=" + std::to_string(result) + "\n");
+            std::printf("UWP memory: contract self-test %s (result %d)\n",
+                        result == 0 ? "PASSED" : "FAILED", result);
+            std::fflush(stdout);
+            if (result != 0) {
+                // A failed check leaves guest mappings and swap state half-restored: the game is
+                // not started on this launch, so the failure stays readable instead of turning
+                // into a crash inside the loader. The marker is already written, so the next
+                // launch goes straight to the game.
+                std::printf("UWP memory: close the app and launch it again to start the game "
+                            "without the test (it runs once; set BB_MEMORY_SELFTEST=1 in "
+                            "graphics-debug.txt to repeat it)\n");
+                std::fflush(stdout);
+                g_finished = true;
+                return;
+            }
+        }
+        if (mode == "memory") {
+            g_finished = true;
+            return;
+        }
+    }
+
     if (player) {
         const char* force_choose = std::getenv("BB_CHOOSE_DUMP");
         const bool choose = force_choose && *force_choose == '1';
@@ -1089,48 +1163,17 @@ static void run_loader() {
         return;
     }
 
-    const std::string user_str = local_str + "\\user";
-    const std::string prepared_str = local_str + "\\Prepared";
-    const std::string temp_str = local_str + "\\temp";
-    const std::string ini_path = local_str + "\\bbport.ini";
-
-    CreateDirectoryFromAppW(winrt::to_hstring(user_str).c_str(), nullptr);
-    CreateDirectoryFromAppW(winrt::to_hstring(prepared_str).c_str(), nullptr);
-    CreateDirectoryFromAppW(winrt::to_hstring(temp_str).c_str(), nullptr);
-
     ensure_default_ini(ini_path);
     configure_dlc_and_mods(dump, local_str, user_str);
 
     set_env_var("BB_UWP_DUMP", dump);
-    set_env_var("BB_UWP_PREPARED", prepared_str);
     set_env_var("BB_GAME_DIR", dump);
-    set_env_var("BB_USER_DIR", user_str);
-    set_env_var("BB_GPU_USER_DIR", user_str);
     set_env_var("BB_CONFIG", ini_path);
-    set_env_var("TEMP", temp_str);
-    set_env_var("TMP", temp_str);
-    set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
+    set_env_var("BB_UWP_PREPARED", prepared_str);
     set_default_env_var("BB_UPSCALER", "off");
     set_default_env_var("BB_FPS_LOG", "1");
     set_default_env_var("BB_PRECOMPILE", "0");
     set_default_env_var("BB_PREP_WORKERS", "0");
-
-    // Developer check of the guest memory manager on the console (LocalState\run.txt first line
-    // "memory"): guest mappings, aliases, 4 KiB protections, the sparse pager and the release
-    // paths are exercised without any game files, and the first failing check is left in the log
-    // (cosmo/gow3_xbox xbox/platform/guest_memory_test.inc).
-    if (mode == "memory") {
-        std::puts("UWP memory: running the guest memory contract self-test");
-        std::fflush(stdout);
-        char app_name[] = "bloodborne-uwp";
-        char selftest_flag[] = "--memory-selftest";
-        char* args[] = {app_name, selftest_flag};
-        const int result = bbport_uwp_run_probe(2, args);
-        std::printf("Memory contract self-test returned %d\n", result);
-        std::fflush(stdout);
-        g_finished = true;
-        return;
-    }
 
     if (!prepare_game_and_patches(dump, prepared_str, ini_path, player, mode == "prepare") ||
         mode == "prepare") {

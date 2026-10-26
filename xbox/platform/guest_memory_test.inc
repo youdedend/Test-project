@@ -195,7 +195,11 @@ int runtime_memory_selftest(void) {
            " MiB, after=%" PRIu64 " MiB\n",
            memory_before >> 20, memory_peak >> 20, memory_after >> 20);
     if (flexible_bytes) return 22;
+    /* The swap test shrinks the mapped window to exercise eviction; a failed check must still
+     * leave the window the game's pager will use (the game may run right after this test). */
+    const uint64_t view_limit = uwp_swap_view_limit;
     const int swap_result = uwp_swap_selftest();
+    uwp_swap_view_limit = view_limit;
     if (swap_result) {
         printf("STOP: swap self-test %d\n", swap_result);
         return swap_result;

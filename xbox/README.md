@@ -99,17 +99,32 @@ one from `cosmo/gow3_xbox`, adapted to Bloodborne's guest runtime:
   guest map/unmap/protect that held the memory table for **40 ms** or more
   (`Memory lock: <operation> held the region table for <n> ms`).
 
-### Memory contract self-test (on the console)
+### Memory contract self-test (on the console, no files needed)
 
-1. In **Xbox Device Portal → File Explorer**, open `LocalState` of the app.
-2. Create `run.txt` whose **first line** is `memory` (a second line is only needed for game modes).
-3. Launch the app. The log then prints `UWP memory contract self-test starting`, the swap probe
-   numbers, seven `PASS:` lines and `Memory contract self-test returned 0`.
+The app runs the self-test **by itself on the first launch after install** — nothing has to be
+copied to the console and there is no file to create. Watch for these lines in
+`LocalState\loader.log.txt`:
+
+```
+UWP memory: guest memory contract self-test starting (first launch)
+UWP memory: contract self-test PASSED (result 0)
+```
+
+The result is also written to `LocalState\memory-selftest.txt` (`result=0`). A first launch takes a
+few seconds longer because of it; every later launch goes straight to the game. If a check fails, the
+app stops that launch with `UWP memory: contract self-test FAILED (result <n>)` instead of starting
+the game on a half-restored memory manager — close it and launch again to play (the test has already
+recorded its result), then send `loader.log.txt`.
+
+To run it again later, set `BB_MEMORY_SELFTEST=1` in `LocalState\graphics-debug.txt` (one
+`NAME=value` per line) and launch the app. `LocalState\run.txt` is **not** shipped and is not
+needed: it is only the optional developer override (line 1: `boot`, `prepare`, `imports`, `drives`
+or `memory`; line 2: dump path). Its `memory` mode runs the same test and then stops instead of
+starting the game.
 
 The test walks real guest mappings: lazy zero pages, remap preservation, live aliases, 4 KiB
 protection boundaries inside one 16 KiB page, protected host writes, nested region queries with a
 queued writer, concurrent commits, disk eviction with checksummed page-in, concurrent readers while
 the pager evicts, guest file I/O across a paged range, guest-code pins and released pages. A failure
-prints `STOP: swap self-test <n>` (or returns `<n>` from the contract test) so the first broken
-invariant is identifiable from the log alone. Delete `run.txt` (or change the first line to `boot`)
-to start the game again.
+prints `STOP: swap self-test <n>` (or reports `FAILED (result <n>)`) so the first broken invariant is
+identifiable from the log alone.
