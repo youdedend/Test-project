@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <unordered_set>
+#include <vector>
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "shader_recompiler/frontend/control_flow_graph.h"
@@ -371,12 +373,41 @@ void CFG::LinkBlocks() {
 }
 
 void CFG::RemoveUnreachableBlocks() {
-    for (auto it = std::next(blocks.begin()); it != blocks.end();) {
-        if (it->num_predecessors == 0) {
+    if (blocks.empty()) {
+        return;
+    }
+    for (auto& b : blocks) {
+        b.num_predecessors = 0;
+    }
+    std::unordered_set<Block*> reachable;
+    std::vector<Block*> worklist;
+    Block* entry = &*blocks.begin();
+    reachable.insert(entry);
+    worklist.push_back(entry);
+
+    while (!worklist.empty()) {
+        Block* cur = worklist.back();
+        worklist.pop_back();
+        if (cur->branch_true) {
+            cur->branch_true->num_predecessors++;
+            if (reachable.insert(cur->branch_true).second) {
+                worklist.push_back(cur->branch_true);
+            }
+        }
+        if (cur->branch_false) {
+            cur->branch_false->num_predecessors++;
+            if (reachable.insert(cur->branch_false).second) {
+                worklist.push_back(cur->branch_false);
+            }
+        }
+    }
+
+    for (auto it = blocks.begin(); it != blocks.end();) {
+        if (!reachable.contains(&*it)) {
             LOG_WARNING(Render_Recompiler, "Removing unreachable block begin={:#x}", it->begin);
             it = blocks.erase(it);
         } else {
-            it++;
+            ++it;
         }
     }
 }

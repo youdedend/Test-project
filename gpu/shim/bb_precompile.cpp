@@ -288,6 +288,161 @@ std::filesystem::path QuarantineFilePath() {
     return std::filesystem::path{user_dir}.parent_path() / "precompile_quarantine.txt";
 }
 
+std::filesystem::path InflightFilePath() {
+    const char* user_dir = std::getenv("BB_GPU_USER_DIR");
+    if (!user_dir || !*user_dir) {
+        return {};
+    }
+    return std::filesystem::path{user_dir}.parent_path() / "precompile_inflight.txt";
+}
+
+void AppendQuarantineHash(u64 hash) {
+    if (hash == 0) {
+        return;
+    }
+    const auto qpath = QuarantineFilePath();
+    if (qpath.empty()) {
+        return;
+    }
+#ifdef BB_UWP
+    HANDLE qf = CreateFile2FromAppW(qpath.wstring().c_str(), FILE_APPEND_DATA,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_ALWAYS, nullptr);
+    if (qf != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER zero{};
+        SetFilePointerEx(qf, zero, nullptr, FILE_END);
+        char line[32]{};
+        const int n = std::snprintf(line, sizeof(line), "%016llx\n",
+                                    static_cast<unsigned long long>(hash));
+        DWORD written = 0;
+        if (n > 0) {
+            WriteFile(qf, line, static_cast<DWORD>(n), &written, nullptr);
+        }
+        CloseHandle(qf);
+    }
+#else
+    if (FILE* f = std::fopen(qpath.string().c_str(), "ab")) {
+        std::fprintf(f, "%016llx\n", static_cast<unsigned long long>(hash));
+        std::fclose(f);
+    }
+#endif
+}
+
+void ConsumeInflightCrashBreadcrumb() {
+    const auto ipath = InflightFilePath();
+    if (ipath.empty()) {
+        return;
+    }
+    {
+        Common::FS::IOFile f{ipath, Common::FS::FileAccessMode::Read};
+        if (f.IsOpen()) {
+            const u64 sz = f.GetSize();
+            if (sz > 0 && sz <= 256) {
+                std::string text(static_cast<size_t>(sz), '\0');
+                if (f.ReadRaw<char>(text.data(), text.size()) == text.size()) {
+                    unsigned long long h = 0, partner = 0;
+                    unsigned stage = 0, idx = 0;
+                    if (std::sscanf(text.c_str(), "%llx %llx %u %u", &h, &partner, &stage, &idx) >=
+                            1 &&
+                        h != 0) {
+                        std::printf(
+                            "GPU: previous shader precompile died mid-compile on item %u "
+                            "(stage=%u hash=%016llx partner=%016llx) — quarantining and resuming\n",
+                            idx, stage, h, partner);
+                        std::fflush(stdout);
+                        if (stage == 3u && partner != 0) {
+                            // Quarantine both members only if standalone didn't already clear them;
+                            // encode pair quarantine key so standalone shaders stay unaffected.
+                            const u64 pair_q = static_cast<u64>(h) ^
+                                               (static_cast<u64>(partner) * 0x9E3779B97F4A7C15ull);
+                            AppendQuarantineHash(pair_q);
+                        } else {
+                            AppendQuarantineHash(static_cast<u64>(h));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove(ipath, ec);
+#ifdef BB_UWP
+    DeleteFileFromAppW(ipath.wstring().c_str());
+#endif
+}
+
+class InflightBreadcrumb {
+public:
+    InflightBreadcrumb() {
+        path_ = InflightFilePath();
+        if (path_.empty()) {
+            return;
+        }
+#ifdef BB_UWP
+        handle_ = CreateFile2FromAppW(path_.wstring().c_str(), GENERIC_WRITE,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE, CREATE_ALWAYS, nullptr);
+#else
+        file_ = std::fopen(path_.string().c_str(), "wb");
+#endif
+    }
+
+    ~InflightBreadcrumb() { Clear(); }
+
+    void Record(u32 idx, u32 stage, u64 hash, u64 partner) noexcept {
+        char buf[64]{};
+        const int n = std::snprintf(buf, sizeof(buf), "%016llx %016llx %02u %08u\n",
+                                    static_cast<unsigned long long>(hash),
+                                    static_cast<unsigned long long>(partner), stage, idx);
+        if (n <= 0) {
+            return;
+        }
+#ifdef BB_UWP
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER zero{};
+            SetFilePointerEx(handle_, zero, nullptr, FILE_BEGIN);
+            DWORD written = 0;
+            WriteFile(handle_, buf, static_cast<DWORD>(n), &written, nullptr);
+        }
+#else
+        if (file_) {
+            std::fseek(file_, 0, SEEK_SET);
+            std::fwrite(buf, 1, static_cast<size_t>(n), file_);
+            std::fflush(file_);
+        }
+#endif
+    }
+
+    void Clear() noexcept {
+#ifdef BB_UWP
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+        }
+        if (!path_.empty()) {
+            DeleteFileFromAppW(path_.wstring().c_str());
+            path_.clear();
+        }
+#else
+        if (file_) {
+            std::fclose(file_);
+            file_ = nullptr;
+        }
+        if (!path_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(path_, ec);
+            path_.clear();
+        }
+#endif
+    }
+
+private:
+    std::filesystem::path path_;
+#ifdef BB_UWP
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+#else
+    FILE* file_ = nullptr;
+#endif
+};
+
 std::unordered_set<u64> LoadQuarantineHashes() {
     std::unordered_set<u64> out;
     const auto path = QuarantineFilePath();
@@ -1340,6 +1495,101 @@ bool PopulateVertexInputState(const std::optional<Shader::Gcn::FetchShaderData>&
     return true;
 }
 
+bool ValidateSpirvModule(std::span<const u32> spv, u64 shader_hash) noexcept {
+    if (spv.size() < 6 || spv[0] != 0x07230203u) {
+        return false;
+    }
+    const u32 bound = spv[3];
+    if (bound < 2u || bound > (1u << 22)) {
+        return false;
+    }
+    auto ok_id = [bound](u32 id) noexcept { return id != 0u && id < bound; };
+
+    size_t pos = 5;
+    while (pos < spv.size()) {
+        const u32 hdr = spv[pos];
+        const u32 wc = hdr >> 16;
+        const u32 op = hdr & 0xFFFFu;
+        if (wc == 0 || pos + wc > spv.size()) {
+            std::printf("GPU: rejected truncated SPIR-V (op=%u wc=%u pos=%zu) for %016llx\n", op,
+                        wc, pos, static_cast<unsigned long long>(shader_hash));
+            return false;
+        }
+        auto fail_at = [&](u32 slot) {
+            std::printf("GPU: rejected invalid SPIR-V ID=%u (bound=%u op=%u slot=%u) for %016llx\n",
+                        spv[pos + slot], bound, op, slot,
+                        static_cast<unsigned long long>(shader_hash));
+            return false;
+        };
+        auto check_range = [&](u32 first_slot, u32 end_slot) {
+            for (u32 s = first_slot; s < end_slot && s < wc; ++s) {
+                if (!ok_id(spv[pos + s])) {
+                    return fail_at(s);
+                }
+            }
+            return true;
+        };
+
+        switch (op) {
+        case 12: // OpExtInst: Type, Result, Set, LiteralInst, Operands...
+            if (wc < 4 || !check_range(1, 4) || !check_range(5, wc)) return false;
+            break;
+        case 15: // OpEntryPoint: ExecModel, EntryPointId, Name..., InterfaceIds...
+            if (wc < 4 || !ok_id(spv[pos + 2])) return fail_at(2);
+            break;
+        case 16: // OpExecutionMode: EntryPointId, Mode, ...
+        case 71: // OpDecorate: TargetId, ...
+        case 72: // OpMemberDecorate: StructTypeId, ...
+        case 247: // OpSelectionMerge: MergeBlockId, Control
+        case 248: // OpLabel: ResultId
+        case 249: // OpBranch: TargetLabelId
+            if (wc < 2 || !ok_id(spv[pos + 1])) return fail_at(1);
+            break;
+        case 59: // OpVariable: Type, Result, StorageClass, [Initializer]
+            if (wc < 4 || !check_range(1, 3) || (wc >= 5 && !ok_id(spv[pos + 4]))) return false;
+            break;
+        case 61: // OpLoad: Type, Result, Pointer, [MemoryAccess...]
+        case 81: // OpCompositeExtract: Type, Result, Composite, Indexes...
+        case 250: // OpBranchConditional: Cond, TrueLabel, FalseLabel, [Weights]
+            if (wc < 4 || !check_range(1, 4)) return false;
+            break;
+        case 62: // OpStore: Pointer, Object, [MemoryAccess...]
+        case 246: // OpLoopMerge: MergeBlock, ContinueTarget, Control
+        case 251: // OpSwitch: Selector, Default, ...
+            if (wc < 3 || !check_range(1, 3)) return false;
+            break;
+        case 79: // OpVectorShuffle: Type, Result, Vec1, Vec2, Components...
+        case 82: // OpCompositeInsert: Type, Result, Object, Composite, Indexes...
+            if (wc < 5 || !check_range(1, 5)) return false;
+            break;
+        case 57: // OpFunctionCall
+        case 65: // OpAccessChain
+        case 66: // OpInBoundsAccessChain
+        case 80: // OpCompositeConstruct
+        case 83: // OpCopyObject
+        case 84: // OpTranspose
+        case 245: // OpPhi
+            if (wc < 3 || !check_range(1, wc)) return false;
+            break;
+        case 99: // OpImageWrite: Image, Coordinate, Texel, ...
+            if (wc < 4 || !check_range(1, 4)) return false;
+            break;
+        default:
+            if ((op >= 87 && op <= 98) || op == 100 || op == 101) {
+                // OpImageSample* / OpImageFetch / OpImageRead / OpImageGather: Type, Result, Img, Coord
+                if (wc < 5 || !check_range(1, 5)) return false;
+            } else if ((op >= 102 && op <= 107) || (op >= 109 && op <= 124) ||
+                       (op >= 126 && op <= 191) || (op >= 201 && op <= 205)) {
+                // Pure ID-operand image queries, conversions, arithmetic, logic, comparisons, bit ops
+                if (wc < 3 || !check_range(1, wc)) return false;
+            }
+            break;
+        }
+        pos += wc;
+    }
+    return true;
+}
+
 SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
                                                 const ExtractedShader& sh) {
     ScopedSoftAssert soft_assert;
@@ -1380,6 +1630,9 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             auto ir = Shader::TranslateProgram(sh.code, pools, info, rt, profile);
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            if (!ValidateSpirvModule(spv, sh.hash)) {
+                return false;
+            }
             return ctx.cache.PrecompileArchiveCompute(info, spv);
         }
 
@@ -1402,6 +1655,9 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             }
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            if (!ValidateSpirvModule(spv, sh.hash)) {
+                return false;
+            }
 
             key.mrt_mask = info.mrt_mask;
             key.num_color_attachments = std::bit_width(info.mrt_mask);
@@ -1456,6 +1712,9 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             const auto fetch = Shader::Gcn::ParseFetchShader(info);
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            if (!ValidateSpirvModule(spv, sh.hash)) {
+                return false;
+            }
 
             Vulkan::GraphicsPipelineKey key{};
             key.prim_type = AmdGpu::PrimitiveType::TriangleList;
@@ -1517,6 +1776,9 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
             }
             ps_spv = Shader::Backend::SPIRV::EmitSPIRV(profile, ps_rt, ps_ir, binding);
             ps_pools.ReleaseContents();
+            if (!ValidateSpirvModule(ps_spv, ps_sh.hash)) {
+                return false;
+            }
         }
 
         // 2. Translate + Emit Vertex SECOND with post-Fragment `binding` (exact runtime match!).
@@ -1563,6 +1825,9 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
             fetch = Shader::Gcn::ParseFetchShader(vs_info);
             vs_spv = Shader::Backend::SPIRV::EmitSPIRV(profile, vs_rt, vs_ir, binding);
             vs_pools.ReleaseContents();
+            if (!ValidateSpirvModule(vs_spv, vs_sh.hash)) {
+                return false;
+            }
         }
 
         if (u64(ps_info.buffers.size() + vs_info.buffers.size()) > 30ull) {
@@ -1941,6 +2206,7 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
     }
 
     PrecompileContext ctx{pipe_cache, arena};
+    ConsumeInflightCrashBreadcrumb();
     const auto quarantined = LoadQuarantineHashes();
     if (!quarantined.empty()) {
         std::printf("GPU: skipping %zu previously quarantined shader hash(es)\n",
@@ -1956,6 +2222,7 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
     const u32 pairs_total = static_cast<u32>(linked_pairs.size());
     const u32 grand_total = standalone_total + pairs_total + 1u;
 
+    InflightBreadcrumb inflight;
     {
         ScopedActiveDiag diag{0, grand_total, 4u, 0, 0};
         summary.aux_gs_ok = WarmAuxiliaryGeometryShaders(ctx);
@@ -1977,6 +2244,7 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
         }
         ++summary.precompiled_attempted;
         {
+            inflight.Record(i + 1u, static_cast<u32>(it->second.kind), it->second.hash, 0);
             ScopedActiveDiag diag{i + 1u, grand_total, static_cast<u32>(it->second.kind),
                                   it->second.hash, 0};
             if (CompileSingleExtractedSafe(&ctx, &it->second)) {
@@ -2011,7 +2279,9 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
             break;
         }
         const auto [vs_h, ps_h] = linked_pairs[p];
-        if (quarantined.contains(vs_h) || quarantined.contains(ps_h)) {
+        const u64 pair_q = vs_h ^ (ps_h * 0x9E3779B97F4A7C15ull);
+        if (quarantined.contains(vs_h) || quarantined.contains(ps_h) ||
+            quarantined.contains(pair_q)) {
             continue;
         }
         auto vs_it = extracted_map.find(vs_h);
@@ -2020,6 +2290,7 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
             continue;
         }
         {
+            inflight.Record(step + 1u, 3u, vs_h, ps_h);
             ScopedActiveDiag diag{step + 1u, grand_total, 3u, vs_h, ps_h};
             if (CompileLinkedPairSafe(&ctx, &vs_it->second, &ps_it->second)) {
                 ++summary.linked_pairs_ok;
@@ -2043,10 +2314,12 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
         }
     }
 
+    inflight.Clear();
     extracted_map.clear();
     linked_pairs.clear();
     CompactHostHeaps();
     pipe_cache.FlushCaches();
+    ExportLocalCacheToPortable();
 
     const size_t vkcache_bytes = pipe_cache.GetDriverCacheBytes();
     std::printf("GPU: ahead-of-time DXIL precompile finished: "
