@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,7 +36,9 @@
 #include <utility>
 #include <vector>
 
+#include "ini_file.h"
 #include "prepare_game.h"
+#include "sfo_version.h"
 
 extern "C" void bbgpu_flush_caches(void);
 
@@ -618,35 +621,45 @@ static void ensure_default_ini(const std::string& ini_path) {
         "effect_game_aa=1\n"
         "effect_dynamic_shadows=1\n"
         "effect_ssr=0\n"
-        "model_lod=0\n";
+        "model_lod=0\n"
+        "\n"
+        "[dump]\n"
+        "# Empty patch_path auto-detects the update folder next to the game folder.\n"
+        "patch_path=\n"
+        "use_patch=1\n";
     BbPrepare::Bytes bytes(defaults, defaults + std::strlen(defaults));
     write_file_bytes(ini_path, bytes);
 }
 
+/// Parses `key=value` lines (see xbox/platform/ini_file.h). `[dump] patch_path=` becomes
+/// `dump.patch_path`; the bare keys the patch settings use keep resolving as before.
 static std::map<std::string, std::string> parse_kv_file(const std::string& path) {
-    std::map<std::string, std::string> kv;
     BbPrepare::Bytes raw;
     if (!read_file_bytes(path, raw)) {
-        return kv;
+        return {};
     }
-    std::string content(raw.begin(), raw.end());
-    size_t pos = 0;
-    while (pos < content.size()) {
-        size_t end = content.find('\n', pos);
-        if (end == std::string::npos) end = content.size();
-        std::string line = content.substr(pos, end - pos);
-        pos = end + 1;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        std::string k = line.substr(0, eq);
-        std::string v = line.substr(eq + 1);
-        while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) k.pop_back();
-        while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
-        kv[k] = v;
+    return BbIni::Parse(std::string(raw.begin(), raw.end()));
+}
+
+/// Writes one key of one section, keeping every other line of the player's settings file intact.
+static bool set_ini_value(const std::string& path, const std::string& section, const std::string& key,
+                          const std::string& value) {
+    BbPrepare::Bytes raw;
+    std::string text;
+    if (read_file_bytes(path, raw)) {
+        text.assign(raw.begin(), raw.end());
     }
-    return kv;
+    bool changed = false;
+    const std::string updated = BbIni::SetValue(text, section, key, value, &changed);
+    if (!changed) {
+        return true;
+    }
+    std::printf("Settings %s: %s.%s=%s\n", path.c_str(), section.c_str(), key.c_str(), value.c_str());
+    if (!write_file_bytes(path, BbPrepare::Bytes(updated.begin(), updated.end()))) {
+        std::printf("Settings %s: write failed\n", path.c_str());
+        return false;
+    }
+    return true;
 }
 
 static std::string resolve_render_res_override(const std::map<std::string, std::string>&) {
@@ -654,6 +667,285 @@ static std::string resolve_render_res_override(const std::map<std::string, std::
         return forced;
     }
     return {};
+}
+
+// ---- dump layout: launcher panel, patch folder picker, [dump] persistence --------------------
+
+static winrt::Windows::Storage::StorageFolder g_patch_folder_lease{nullptr};
+
+/// What the launcher decided about the player's dump, and therefore what the game will run.
+struct DumpSelection {
+    BbPrepare::DumpLayout layout;
+    bool use_patch = true;            ///< `[dump] use_patch` in bbport.ini
+    bool unpatched_confirmed = false; ///< the player accepted "Continue anyway (unpatched)"
+
+    [[nodiscard]] bool IsMerged() const {
+        return layout.kind == BbPrepare::DumpLayout::Kind::Merged;
+    }
+    /// True when the update folder is found, enabled and actually decided the version.
+    [[nodiscard]] bool Patched() const {
+        return use_patch && layout.kind == BbPrepare::DumpLayout::Kind::Split;
+    }
+    /// Folder that supplies eboot.bin/sce_module/sce_sys/dvdroot_ps4.
+    [[nodiscard]] const std::string& BasePath() const { return layout.base_path; }
+    /// Version the game will actually report, always read from a param.sfo.
+    [[nodiscard]] std::string EffectiveVersion() const {
+        if (Patched()) return layout.patch.Version();
+        return layout.base.Version();
+    }
+    /// True when the packaged red-zone patch set can be applied to what will run.
+    [[nodiscard]] bool CanRunPatched() const {
+        return BbPrepare::IsPatchTargetVersion(EffectiveVersion());
+    }
+};
+
+/// Redeems the StorageFolder token of a previously picked update folder so RuntimeBroker grants
+/// direct *FromAppW access to it on this launch, exactly like the game folder token.
+static void redeem_patch_lease() {
+    using namespace winrt::Windows::Storage::AccessCache;
+    try {
+        auto list = StorageApplicationPermissions::FutureAccessList();
+        if (list.ContainsItem(L"patch")) {
+            g_patch_folder_lease = list.GetFolderAsync(L"patch").get();
+            if (g_patch_folder_lease) {
+                std::printf("Patch folder lease: %s\n",
+                            winrt::to_string(g_patch_folder_lease.Path()).c_str());
+            }
+        }
+    } catch (const winrt::hresult_error& err) {
+        std::printf("Patch folder lease lookup: 0x%08x\n", static_cast<unsigned>(err.code()));
+    }
+}
+
+/// Validates a folder the player picked as the update, remembers it for the FutureAccessList and
+/// returns its path. `problem` is shown to the player when the folder cannot be used.
+static std::string use_picked_patch(const winrt::Windows::Storage::StorageFolder& folder,
+                                    const BbPrepare::SfoInfo& base, std::string& problem) {
+    const std::string path = winrt::to_string(folder.Path());
+    const auto info = BbPrepare::ReadParamSfo(path);
+    std::printf("Patch folder picker: '%s'; param.sfo: %s\n", path.c_str(),
+                info ? "read" : "missing or unreadable");
+    if (path.empty()) {
+        problem = "That folder cannot be read by the app.\n\nCopy the update folder to the USB "
+                  "drive next to the game folder and pick it there.";
+        return {};
+    }
+    if (!info) {
+        problem = "There is no readable sce_sys\\param.sfo in:\n" + path +
+                  "\n\nChoose the folder holding the Bloodborne update: it contains eboot.bin, "
+                  "sce_module, sce_sys\\param.sfo and dvdroot_ps4. Decrypted dumps usually keep it "
+                  "next to the game folder, for example ...\\Bloodborne-patch.";
+        return {};
+    }
+    if (!base.title_id.empty() && !info->title_id.empty() &&
+        _stricmp(base.title_id.c_str(), info->title_id.c_str()) != 0) {
+        problem = "That folder belongs to a different game (TITLE_ID " + info->title_id +
+                  ", this dump is " + base.title_id + ").";
+        return {};
+    }
+    if (BbPrepare::CompareVersions(info->Version(), base.Version()) <= 0) {
+        problem = "The folder:\n" + path + "\n\nreports app_ver=" + info->Version() +
+                  " (APP_TYPE=" + info->app_type + "), which is not newer than the game dump (" +
+                  base.Version() + ").\n\nPick the " +
+                  std::string(BbPrepare::kPatchTargetVersion) +
+                  " update folder, not the base game and not an older patch.";
+        return {};
+    }
+    if (!file_exists(path + "\\eboot.bin")) {
+        problem = "The update folder " + path +
+                  " has a param.sfo but no eboot.bin, so the patched executable is missing.";
+        return {};
+    }
+    try {
+        g_patch_folder_lease = folder;
+        winrt::Windows::Storage::AccessCache::StorageApplicationPermissions::FutureAccessList()
+            .AddOrReplace(L"patch", folder);
+    } catch (const winrt::hresult_error& err) {
+        std::printf("Patch folder lease: 0x%08x\n", static_cast<unsigned>(err.code()));
+    }
+    return path;
+}
+
+static std::string describe_dump(const std::string& path, const BbPrepare::SfoInfo& info) {
+    std::string text = path + " - app_ver=" + (info.Version().empty() ? "unknown" : info.Version());
+    if (!info.app_type.empty()) {
+        text += " (" + info.app_type + ")";
+    }
+    if (!info.title_id.empty()) {
+        text += " " + info.title_id;
+    }
+    return text;
+}
+
+/// The launcher summary panel: base dump, patch dump (in use or not) and the effective version.
+static std::string dump_panel_text(const DumpSelection& sel) {
+    const auto& layout = sel.layout;
+    std::string text = "Base dump:  " + describe_dump(layout.base_path, layout.base) + "\n";
+    if (layout.patch_path.empty()) {
+        text += "Patch dump: none found\n";
+    } else if (sel.use_patch) {
+        text += "Patch dump: " + describe_dump(layout.patch_path, layout.patch) + " (in use)\n";
+    } else {
+        text += "Patch dump: " + describe_dump(layout.patch_path, layout.patch) +
+                " (NOT USED - \"Use patch\" is off)\n";
+    }
+    text += "Effective version: " + sel.EffectiveVersion();
+    if (!sel.CanRunPatched()) {
+        text += " - patches will be SKIPPED";
+    }
+    return text;
+}
+
+static std::string base_only_banner(const DumpSelection& sel) {
+    std::string text = "! No " + std::string(BbPrepare::kPatchTargetVersion) +
+                       " update folder was found.\n"
+                       "Without it the red-zone patches are skipped: the game runs unpatched at "
+                       "30 FPS and can crash when gameplay starts.\n\n";
+    const std::string parent = [&sel] {
+        const auto& path = sel.layout.base_path;
+        const size_t slash = path.find_last_of("\\/");
+        return slash == std::string::npos ? std::string() : path.substr(0, slash);
+    }();
+    text += "Choose the update folder - the one holding eboot.bin and sce_sys\\param.sfo with "
+            "APP_TYPE=patch (usually next to the game folder" +
+            (parent.empty() ? std::string(")") : ": " + parent + "\\Bloodborne-patch)") +
+            ".\n\nThe game folder itself is never modified.";
+    return text;
+}
+
+/// Shows the detected layout and applies the player's choice. Returns false when the app must not
+/// start the game (unreadable dump, or the player closed the panel).
+static bool launcher_select_dump_layout(const std::string& picked, const std::string& ini_path,
+                                        bool player, DumpSelection& sel) {
+    redeem_patch_lease();
+    auto ini = parse_kv_file(ini_path);
+    std::string saved_patch = [&ini] {
+        const auto it = ini.find("dump.patch_path");
+        return it == ini.end() ? std::string() : it->second;
+    }();
+    bool use_patch = BbIni::Flag(ini, "dump.use_patch", true);
+    if (!saved_patch.empty() && !dir_exists(saved_patch)) {
+        std::printf("Saved patch folder is gone: %s\n", saved_patch.c_str());
+        saved_patch.clear();
+        set_ini_value(ini_path, "dump", "patch_path", "");
+    }
+
+    for (;;) {
+        sel.layout = BbPrepare::DetectDumpLayout(picked, saved_patch);
+        sel.use_patch = use_patch;
+        if (!sel.layout.IsValid()) {
+            stop_with_message("The Bloodborne dump in " + picked +
+                                  " has no readable sce_sys\\param.sfo.\n\nChoose the folder "
+                                  "containing eboot.bin, sce_module, sce_sys, and dvdroot_ps4.",
+                              player);
+            return false;
+        }
+        std::printf("Launcher dump layout:\n%s\n", dump_panel_text(sel).c_str());
+        std::fflush(stdout);
+        if (!player) {
+            std::printf("Headless launch (run.txt): no layout confirmation dialog; patches=%s\n",
+                        sel.CanRunPatched() ? "applied" : "skipped");
+            std::fflush(stdout);
+            return true;
+        }
+
+        const std::string header = "Bloodborne dump\n\n";
+        enum class Action { Launch, LaunchUnpatched, EnablePatch, PickPatch, ChangeFolder, Close };
+        Action action = Action::Close;
+        if (sel.IsMerged()) {
+            std::printf("Launcher panel: merged dump (effective=%s)\n",
+                        sel.EffectiveVersion().c_str());
+            const int choice = ask_player(header + dump_panel_text(sel) + "\n\nLaunch the game?",
+                                          {"Launch", "Change game folder"});
+            action = choice == 0 ? Action::Launch
+                                 : (choice == 1 ? Action::ChangeFolder : Action::Close);
+        } else if (!sel.layout.patch_path.empty() && sel.use_patch) {
+            std::printf("Launcher panel: split dump (effective=%s)\n",
+                        sel.EffectiveVersion().c_str());
+            const int choice = ask_player(
+                header + dump_panel_text(sel) +
+                    "\n\nThe update is merged over the game dump inside the app's LocalState; "
+                    "your USB folder is never modified.",
+                {"Launch", "Run base only", "Pick patch folder"});
+            action = choice == 0   ? Action::Launch
+                     : choice == 1 ? Action::LaunchUnpatched
+                     : choice == 2 ? Action::PickPatch
+                                   : Action::Close;
+        } else if (!sel.layout.patch_path.empty()) {
+            std::printf("Launcher panel: split dump, patch disabled (effective=%s)\n",
+                        sel.EffectiveVersion().c_str());
+            const int choice = ask_player(
+                header + dump_panel_text(sel) +
+                    "\n\nThe update was found but \"Use patch\" is off: the game runs the "
+                    "unpatched 30 FPS build.",
+                {"Use patch", "Launch unpatched", "Pick patch folder"});
+            action = choice == 0   ? Action::EnablePatch
+                     : choice == 1 ? Action::LaunchUnpatched
+                     : choice == 2 ? Action::PickPatch
+                                   : Action::Close;
+        } else {
+            std::printf("Launcher panel: base-only dump (effective=%s)\n",
+                        sel.EffectiveVersion().c_str());
+            const int choice = ask_player(header + dump_panel_text(sel) + "\n\n" +
+                                              base_only_banner(sel),
+                                          {"Pick patch folder", "Continue anyway (unpatched)", "Close"});
+            action = choice == 0   ? Action::PickPatch
+                     : choice == 1 ? Action::LaunchUnpatched
+                                   : Action::Close;
+        }
+
+        switch (action) {
+        case Action::Launch:
+            set_ini_value(ini_path, "dump", "use_patch", "1");
+            return true;
+        case Action::LaunchUnpatched:
+            sel.use_patch = false;
+            sel.unpatched_confirmed = true;
+            set_ini_value(ini_path, "dump", "use_patch", "0");
+            return true;
+        case Action::EnablePatch:
+            use_patch = true;
+            set_ini_value(ini_path, "dump", "use_patch", "1");
+            continue;
+        case Action::ChangeFolder: {
+            auto folder = pick_folder();
+            if (!folder) {
+                std::puts("Folder picker: cancelled");
+                continue;
+            }
+            std::string problem;
+            if (auto next = use_picked(folder, problem); !next.empty()) {
+                switch_game_folder(next);
+            } else {
+                ask_player(problem, {"OK"});
+            }
+            continue;
+        }
+        case Action::PickPatch: {
+            auto folder = pick_folder();
+            if (!folder) {
+                std::puts("Patch folder picker: cancelled");
+                continue;
+            }
+            std::string problem;
+            std::string patch_path = use_picked_patch(folder, sel.layout.base, problem);
+            if (patch_path.empty()) {
+                ask_player(problem, {"OK"});
+                continue;
+            }
+            saved_patch = patch_path;
+            use_patch = true;
+            set_ini_value(ini_path, "dump", "patch_path", patch_path);
+            set_ini_value(ini_path, "dump", "use_patch", "1");
+            std::printf("Patch folder saved: %s\n", patch_path.c_str());
+            std::fflush(stdout);
+            continue;
+        }
+        case Action::Close:
+        default:
+            return false;
+        }
+    }
 }
 
 static bool prepare_game_and_patches(const std::string& dump, const std::string& prepared,
@@ -1155,7 +1447,7 @@ static void run_loader() {
         if (dump.empty()) {
             close_app("no game folder selected");
         }
-        std::printf("Active Bloodborne dump: %s (%s)\n", dump.c_str(),
+        std::printf("Picked Bloodborne folder: %s (%s)\n", dump.c_str(),
                     describe_place(dump).c_str());
     } else if (dump.empty() && mode != "memory") {
         std::puts("STOP: dump path missing on line 2 of LocalState\\run.txt");
@@ -1164,6 +1456,24 @@ static void run_loader() {
     }
 
     ensure_default_ini(ini_path);
+
+    // Read the dump's metadata, pair a base game with a separately dumped update folder and let the
+    // player confirm or change that choice before anything is prepared.
+    DumpSelection selection;
+    if (!launcher_select_dump_layout(dump, ini_path, player, selection)) {
+        g_finished = true;
+        return;
+    }
+    dump = selection.BasePath();
+    std::printf("Launch target: base=%s; patch=%s; effective=%s; patches=%s\n",
+                selection.layout.base_path.c_str(),
+                selection.layout.patch_path.empty() ? "-"
+                                                    : selection.layout.patch_path.c_str(),
+                selection.EffectiveVersion().c_str(),
+                selection.CanRunPatched() ? "required" : "skipped");
+    std::printf("Active Bloodborne dump: %s (%s)\n", dump.c_str(), describe_place(dump).c_str());
+    std::fflush(stdout);
+
     configure_dlc_and_mods(dump, local_str, user_str);
 
     set_env_var("BB_UWP_DUMP", dump);
