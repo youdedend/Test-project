@@ -33,6 +33,10 @@ private:
     u64 m_position{};
     u64 m_file_size{};
     AVIOContext* m_avio_context{};
+#ifdef BB_UWP
+    u8* m_low_bounce{};
+    u32 m_low_bounce_cap{};
+#endif
 };
 
 } // namespace Libraries::AvPlayer

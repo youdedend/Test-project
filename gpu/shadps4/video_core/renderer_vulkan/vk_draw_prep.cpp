@@ -16,6 +16,10 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include <xxhash.h>
 
+#ifdef BB_UWP
+#include <winrt/Windows.System.h>
+#endif
+
 namespace Vulkan {
 
 namespace {
@@ -52,7 +56,7 @@ u32 DefaultWorkerCount() {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
 #ifdef BB_UWP
-    return std::clamp<u32>(BbThreads::Available() / 2, 1, 2);
+    return 1;
 #else
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
@@ -230,6 +234,17 @@ std::shared_ptr<DrawPreparation::Submission> DrawPreparation::Build(
     if (!Enabled()) {
         return {};
     }
+#ifdef BB_UWP
+    try {
+        using winrt::Windows::System::MemoryManager;
+        const u64 used = MemoryManager::AppMemoryUsage();
+        const u64 limit = MemoryManager::AppMemoryUsageLimit();
+        if (limit > 0 && used + 768_MB >= limit) {
+            return {};
+        }
+    } catch (...) {
+    }
+#endif
     auto submission = std::make_shared<Submission>();
     submission->commands.assign(commands.begin(), commands.end());
     ForEachPacket(submission->commands, [&](const AmdGpu::PM4Header* header) {

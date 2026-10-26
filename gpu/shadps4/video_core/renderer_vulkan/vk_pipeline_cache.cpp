@@ -29,6 +29,12 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
+#ifdef BB_UWP
+#include <malloc.h>
+#include <winrt/Windows.System.h>
+extern "C" uint64_t runtime_memory_page_out(uint64_t bytes);
+#endif
+
 namespace Vulkan {
 
 using Shader::HwStage;
@@ -348,15 +354,52 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
-    WarmUp();
 
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    std::vector<u8> driver_cache_data;
+    if (EmulatorSettings.IsPipelineCacheEnabled()) {
+        Storage::DataBase::Instance().Open();
+        Storage::DataBase::Instance().Load(Storage::BlobType::DriverCache, "driver",
+                                           driver_cache_data);
+    }
+    vk::PipelineCacheCreateInfo cache_ci{};
+    if (!driver_cache_data.empty()) {
+        cache_ci.initialDataSize = driver_cache_data.size();
+        cache_ci.pInitialData = driver_cache_data.data();
+    }
+    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_ci);
+    if (cache_result != vk::Result::eSuccess && !driver_cache_data.empty()) {
+        std::tie(cache_result, cache) = instance.GetDevice().createPipelineCacheUnique({});
+    }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+
+#ifndef BB_UWP
+    WarmUp();
+#endif
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    FlushCaches();
+    Sync();
+}
+
+namespace {
+void ReclaimMemoryBeforeRuntimePsoCompile() {
+#ifdef BB_UWP
+    try {
+        using winrt::Windows::System::MemoryManager;
+        const u64 used = MemoryManager::AppMemoryUsage();
+        const u64 limit = MemoryManager::AppMemoryUsageLimit();
+        if (limit > 0 && used + 640_MB >= limit) {
+            runtime_memory_page_out(32_MB);
+            _heapmin();
+        }
+    } catch (...) {
+    }
+#endif
+}
+} // namespace
 
 // bbport: shader/pipeline compile time on the GPU thread, reported by BB_FRAME_STATS.
 std::atomic<u64> g_bb_compile_ns;
@@ -432,6 +475,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
         CompileTimer timer;
+        ReclaimMemoryBeforeRuntimePsoCompile();
 
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
@@ -447,6 +491,11 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
+#ifdef BB_UWP
+        if ((num_new_pipelines % 32u) == 0u) {
+            FlushCaches();
+        }
+#endif
 
         if (EmulatorSettings.IsShaderCollect()) {
             for (auto stage = 0; stage < MaxShaderStages; ++stage) {
@@ -470,6 +519,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
         LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
         CompileTimer timer;
+        ReclaimMemoryBeforeRuntimePsoCompile();
 
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
@@ -482,6 +532,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         }
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+#ifdef BB_UWP
+        if ((num_new_pipelines % 32u) == 0u) {
+            FlushCaches();
+        }
+#endif
 
         if (EmulatorSettings.IsShaderCollect()) {
             auto& m = sel.modules[0];
@@ -828,6 +883,9 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
+#ifdef BB_UWP
+    pools = Shader::Pools{};
+#endif
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
     vk::ShaderModule module;

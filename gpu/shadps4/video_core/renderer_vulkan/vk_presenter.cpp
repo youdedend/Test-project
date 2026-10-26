@@ -19,6 +19,7 @@ extern "C" void bb_uwp_choose_game_folder(char* message, size_t size);
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "bb_precompile.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
@@ -184,6 +185,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     swapchain_frame_gen = frame_generator->Wanted();
     rasterizer->GetUpscaler().SetFrameGenerator(frame_generator.get());
 #ifdef BB_UWP
+    bool warmed_in_launcher = false;
     if (const char* launcher = std::getenv("BB_UWP_LAUNCHER"); launcher && *launcher == '1') {
         std::string title = "Bloodborne";
         char folder_line[600]{};
@@ -201,9 +203,17 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         };
         for (;;) {
             std::string heading = folder_line[0] ? (title + "\n" + folder_line) : title;
-            const int choice = choose(heading, {"Start Bloodborne", "Change game folder..."});
+            const int choice = choose(
+                heading,
+                {"Start Bloodborne", "Warm Up & Verify Game Shaders", "Change game folder..."});
             if (choice == 0) {
                 break;
+            }
+            if (choice == 1) {
+                title = BbPrecompile::RunFullVerifyAndWarmUp(
+                    *rasterizer, [this] { PresentLoadingFrame(); });
+                warmed_in_launcher = true;
+                continue;
             }
             char found_raw[4096]{};
             bb_uwp_find_game_folders(found_raw, sizeof(found_raw));
@@ -242,6 +252,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
                 }
             }
         }
+    }
+    if (!warmed_in_launcher) {
+        BbPrecompile::WarmUpBeforeBoot(*rasterizer, [this] { PresentLoadingFrame(); });
     }
 #endif
 }

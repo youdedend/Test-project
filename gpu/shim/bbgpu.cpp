@@ -1,5 +1,6 @@
 #include "bbport_write_log.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
+#include "bb_precompile.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "bbport_copy.h"
@@ -30,6 +31,7 @@
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "bloodborne_cam.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -351,6 +353,15 @@ u32 ConsumeGameOnlyScreenshotRequests() { return 0; }
 u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
+
+extern "C" void bbgpu_flush_caches(void) {
+    if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
+        r->GetPipelineCache().FlushCaches();
+    } else {
+        Storage::DataBase::Instance().Flush();
+    }
+    BbPrecompile::ExportLocalCacheToPortable();
+}
 
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;

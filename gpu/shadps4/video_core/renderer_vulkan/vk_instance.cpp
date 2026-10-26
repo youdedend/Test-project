@@ -274,6 +274,39 @@ std::string Instance::GetDriverVersionName() {
     return GetReadableVersion(version);
 }
 
+namespace {
+
+bool PipelineBinaryCacheRequested() {
+    const char* setting = std::getenv("BB_PIPELINE_BINARIES");
+    return !setting || *setting != '0';
+}
+
+bool InitializePipelineBinaryCache(vk::Device device, bool supported,
+                                   vk::PipelineBinaryKeyKHR& global_key) {
+    global_key = vk::PipelineBinaryKeyKHR{};
+    if (!PipelineBinaryCacheRequested() || !supported) {
+        return false;
+    }
+    const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+    if (!dispatch.vkGetPipelineKeyKHR || !dispatch.vkCreatePipelineBinariesKHR ||
+        !dispatch.vkGetPipelineBinaryDataKHR || !dispatch.vkDestroyPipelineBinaryKHR ||
+        !dispatch.vkReleaseCapturedPipelineDataKHR) {
+        LOG_WARNING(Render_Vulkan, "Pipeline binary cache functions unavailable; using normal compilation");
+        return false;
+    }
+    const auto result = device.getPipelineKeyKHR(nullptr, &global_key);
+    if (result != vk::Result::eSuccess || !global_key.keySize ||
+        global_key.keySize > VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR) {
+        global_key = vk::PipelineBinaryKeyKHR{};
+        return false;
+    }
+    std::printf("GPU: VK_KHR_pipeline_binary disk cache enabled (global key %u bytes)\n",
+                global_key.keySize);
+    return true;
+}
+
+} // namespace
+
 bool Instance::CreateDevice() {
     const vk::StructureChain feature_chain = physical_device.getFeatures2<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
@@ -288,6 +321,8 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
         vk::PhysicalDeviceMutableDescriptorTypeFeaturesEXT,
         vk::PhysicalDeviceDescriptorBufferFeaturesEXT,
+        vk::PhysicalDeviceMaintenance5FeaturesKHR,
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR,
         vk::PhysicalDeviceFaultFeaturesEXT>();
     features = feature_chain.get().features;
 
@@ -362,7 +397,11 @@ bool Instance::CreateDevice() {
 #endif
 
     // Optional
-    maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
+    maintenance_5 = feature_chain.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5 &&
+                    add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
+    pipeline_binaries = PipelineBinaryCacheRequested() && maintenance_5 &&
+                        feature_chain.get<vk::PhysicalDevicePipelineBinaryFeaturesKHR>().pipelineBinaries &&
+                        add_extension(VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
     // bbport: after a device loss the driver says where the GPU faulted (ReportDeviceLost).
     device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
                    add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -701,6 +740,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceMaintenance5FeaturesKHR{
             .maintenance5 = true,
         },
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR{
+            .pipelineBinaries = true,
+        },
         vk::PhysicalDeviceFaultFeaturesEXT{
             .deviceFault = true,
         },
@@ -780,6 +822,9 @@ bool Instance::CreateDevice() {
     if (!maintenance_5) {
         device_chain.unlink<vk::PhysicalDeviceMaintenance5FeaturesKHR>();
     }
+    if (!pipeline_binaries) {
+        device_chain.unlink<vk::PhysicalDevicePipelineBinaryFeaturesKHR>();
+    }
     if (!device_fault) {
         device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
     }
@@ -855,6 +900,8 @@ bool Instance::CreateDevice() {
         BbUwp::InstallDescriptorFallback(*device);
     }
 #endif
+    pipeline_binaries =
+        InitializePipelineBinaryCache(*device, pipeline_binaries, pipeline_binary_global_key);
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }

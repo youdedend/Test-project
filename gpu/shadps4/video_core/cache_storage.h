@@ -18,6 +18,7 @@ enum class BlobType : u32 {
     ShaderBinary,
     PipelineKey,
     ShaderProfile,
+    DriverCache,
 };
 
 class DataBase {
@@ -28,8 +29,12 @@ public:
 
     void Open();
     void Close();
+    void Flush();
     [[nodiscard]] bool IsOpened() const {
         return opened;
+    }
+    [[nodiscard]] const std::filesystem::path& GetCachePath() const {
+        return cache_path;
     }
     void FinishPreload();
     /// bbport: removes every cached blob (an incompatible cache is rebuilt, not ignored).
@@ -41,6 +46,7 @@ public:
     void Load(BlobType type, const std::string& name, std::vector<u8>& data);
     void Load(BlobType type, const std::string& name, std::vector<u32>& data);
 
+    [[nodiscard]] size_t CountBlobs(BlobType type) const;
     void ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func);
 
 private:

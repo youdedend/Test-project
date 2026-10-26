@@ -76,10 +76,11 @@ inline constexpr int FovDefault = 43, FovMin = 30, FovMax = 90;
 struct Values {
 #ifdef BB_UWP
     std::atomic<int> upscaler{UpscalerOff};
+    std::atomic<int> preset{Quality};
 #else
     std::atomic<int> upscaler{UpscalerFsr3};
-#endif
     std::atomic<int> preset{NativeAA};
+#endif
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
     std::atomic<bool> jitter{true};

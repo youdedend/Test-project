@@ -15,6 +15,10 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
+#ifdef BB_UWP
+#include <winrt/Windows.System.h>
+#endif
+
 namespace Vulkan {
 
 using VideoCore::MemoryType;
@@ -25,15 +29,20 @@ namespace {
 // ~2 ms per 16 MiB block. Streaming bursts a few seconds apart re-created the blocks trimmed
 // in between and copies into them ran at 0.3 GB/s (stutter). Blocks now live 30 s idle, the
 // upload ring keeps BB_STAGING_KEEP_MB (512) and is populated at startup.
+#ifdef BB_UWP
+constexpr u64 RING_IDLE_FRAMES = 90;
+constexpr u64 VRAM_RING_IDLE_FRAMES = 60;
+constexpr u64 LARGE_IDLE_FRAMES = 30;
+constexpr u64 PREWARM_BLOCKS = 2;
+constexpr u64 DEFAULT_KEEP_MB = 32;
+constexpr u64 DEFAULT_KEEP_VRAM_MB = 16;
+#else
 constexpr u64 RING_IDLE_FRAMES = 3000;
 constexpr u64 VRAM_RING_IDLE_FRAMES = 600; ///< bbport: a few seconds
 constexpr u64 LARGE_IDLE_FRAMES = 3000;
-#ifdef BB_UWP
-constexpr u64 PREWARM_BLOCKS = 4;
-constexpr u64 DEFAULT_KEEP_MB = 64;
-#else
 constexpr u64 PREWARM_BLOCKS = 8;
 constexpr u64 DEFAULT_KEEP_MB = 512;
+constexpr u64 DEFAULT_KEEP_VRAM_MB = 32;
 #endif
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
@@ -52,7 +61,9 @@ StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& sched
     // bbport: the VRAM ring (scratch for detiling and copies) keeps far less: blocks kept for a
     // burst of uploads at an area load stayed in VRAM for good (~300 MiB on the test route).
     const char* vram_env = std::getenv("BB_STAGING_KEEP_VRAM_MB");
-    keep_vram_blocks = (vram_env ? std::strtoull(vram_env, nullptr, 10) : 32) * 1_MB / BLOCK_SIZE;
+    keep_vram_blocks =
+        (vram_env ? std::strtoull(vram_env, nullptr, 10) : DEFAULT_KEEP_VRAM_MB) * 1_MB /
+        BLOCK_SIZE;
     Ring& ring = rings[u32(MemoryType::HostUncached)];
     for (u64 i = 0; i < PREWARM_BLOCKS; ++i) {
         auto& block = ring.blocks.emplace_back(Block{
@@ -175,13 +186,30 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
+    bool urgent_trim = false;
+#ifdef BB_UWP
+    try {
+        using winrt::Windows::System::MemoryManager;
+        const u64 used = MemoryManager::AppMemoryUsage();
+        const u64 limit = MemoryManager::AppMemoryUsageLimit();
+        urgent_trim = limit > 0 && used + 896_MB >= limit;
+    } catch (...) {
+    }
+#endif
     for (u32 type = 0; type < rings.size(); ++type) {
         const bool vram = type == u32(MemoryType::DeviceLocal);
-        TrimRing(rings[type], vram ? keep_vram_blocks : keep_blocks,
-                 vram ? VRAM_RING_IDLE_FRAMES : RING_IDLE_FRAMES);
+        const u64 keep = urgent_trim ? (vram ? 0 : 1) : (vram ? keep_vram_blocks : keep_blocks);
+        const u64 idle = urgent_trim ? 1 : (vram ? VRAM_RING_IDLE_FRAMES : RING_IDLE_FRAMES);
+        TrimRing(rings[type], keep, idle);
     }
     for (auto& cache : large_caches) {
-        TrimLarge(cache);
+        if (urgent_trim) {
+            std::erase_if(cache, [this](const LargeBuffer& entry) {
+                return !entry.held && scheduler.IsFree(entry.tick);
+            });
+        } else {
+            TrimLarge(cache);
+        }
     }
     PublishStats();
 }

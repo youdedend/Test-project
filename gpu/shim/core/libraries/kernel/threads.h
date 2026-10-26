@@ -13,6 +13,12 @@
 #include "core/libraries/kernel/threads/pthread.h"
 
 extern "C" void runtime_thread_attach_host(const char* name);
+#ifdef BB_UWP
+extern "C" void* runtime_low_stack_alloc(size_t size);
+extern "C" void runtime_low_stack_free(void* ptr, size_t size);
+extern "C" void* compat_call_on_low_stack(void* (*fn)(void*), void* arg, void* stack_base,
+                                          size_t stack_size);
+#endif
 
 namespace Libraries::Kernel {
 class Thread {
@@ -23,7 +29,26 @@ public:
         finished = std::make_shared<std::atomic<bool>>(false);
         thread = std::jthread([func = std::move(func), done = finished](std::stop_token stop) {
             runtime_thread_attach_host("bb:hle");
+#ifdef BB_UWP
+            constexpr size_t kLowStackBytes = 2 * 1024 * 1024;
+            if (void* low_stack = runtime_low_stack_alloc(kLowStackBytes)) {
+                struct CallCtx {
+                    const std::function<void(std::stop_token)>* fn;
+                    std::stop_token* st;
+                } ctx{&func, &stop};
+                auto tramp = [](void* p) -> void* {
+                    auto* c = static_cast<CallCtx*>(p);
+                    (*c->fn)(*c->st);
+                    return nullptr;
+                };
+                compat_call_on_low_stack(+tramp, &ctx, low_stack, kLowStackBytes);
+                runtime_low_stack_free(low_stack, kLowStackBytes);
+            } else {
+                func(stop);
+            }
+#else
             func(stop);
+#endif
             done->store(true);
         });
     }

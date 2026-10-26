@@ -28,7 +28,11 @@
 namespace VideoCore {
 
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
+#ifdef BB_UWP
+static constexpr size_t STREAM_BUFFER_SIZE = 48_MB;
+#else
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
+#endif
 
 static constexpr auto ARENA_USAGE =
     vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |

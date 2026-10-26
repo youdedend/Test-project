@@ -14,7 +14,7 @@ static uint64_t uwp_swap_frame_count;
 static unsigned char uwp_swap_copy[16384];
 static uint64_t uwp_swap_out, uwp_swap_in, uwp_swap_disk_pages, uwp_swap_views;
 static uint64_t uwp_swap_hash_checks, uwp_swap_hash_errors, uwp_swap_view_evictions;
-static uint64_t uwp_swap_view_limit = UINT64_C(128) * 1024 * 1024 / PAGE;
+static uint64_t uwp_swap_view_limit = UINT64_C(64) * 1024 * 1024 / PAGE;
 static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
@@ -376,16 +376,20 @@ static void *uwp_pager(void *unused) {
         uint64_t used = bb_uwp_app_memory_usage();
         uint64_t out = 0;
         if (limit > (UINT64_C(1024) << 20)) {
-            if (used > limit - (UINT64_C(384) << 20)) draining = 1;
-            if (used <= limit - (UINT64_C(512) << 20)) draining = 0;
-            if (draining) out = uwp_swap_reclaim(UINT64_C(2) << 20, 0);
+            if (used > limit - (UINT64_C(896) << 20)) draining = 1;
+            if (used <= limit - (UINT64_C(1024) << 20)) draining = 0;
+            if (draining) {
+                int urgent = used > limit - (UINT64_C(560) << 20);
+                out = uwp_swap_reclaim(urgent ? (UINT64_C(16) << 20) : (UINT64_C(4) << 20),
+                                       urgent ? 1 : 0);
+            }
         }
         uint64_t now = GetTickCount64();
         if (now - reported >= 5000) {
             uwp_swap_report();
             reported = now;
         }
-        Sleep(out ? 1 : 50);
+        Sleep(out ? 1 : 40);
     }
     return NULL;
 }
@@ -407,6 +411,6 @@ void runtime_memory_start_paging(void) {
     if (pthread_create(&thread, NULL, uwp_pager, NULL)) uwp_fail("pager thread", 0);
     pthread_detach(thread);
     uwp_swap_started = 1;
-    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=384 MiB\n",
+    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=896 MiB\n",
            bb_uwp_app_memory_limit() >> 20);
 }

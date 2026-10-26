@@ -384,12 +384,12 @@ static int uwp_promote(UwpPhysical *physical, uint64_t offset) {
 
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t offset) {
     if (uwp_reserve(address, size)) return -1;
-    /* Only large (>= 256 MiB) WC_GARLIC (type == 3) GPU bulk pools participate in disk swap
-     * (3,173 MiB in Bloodborne: 0x1042C00000 [2,287 MiB] + 0x10D1B00000 [886 MiB]).
+    /* Only >= 16 MiB WC_GARLIC (type == 3) GPU pools participate in disk swap so GPU textures/meshes
+     * already mirrored in VMA do not stay double-stored in CPU RAM.
      * WB_ONION CPU heaps, FMOD audio buffers, GNM command rings, and FlexibleMemory libc heaps
      * remain resident so host audio/OS threads and guest sync primitives never fault on swap. */
     int pageable = 0;
-    if (size >= (UINT64_C(256) << 20) && offset < POOL_SIZE && !(prot & PROT_EXEC)) {
+    if (size >= (UINT64_C(16) << 20) && offset < POOL_SIZE && !(prot & PROT_EXEC)) {
         for (unsigned i = 0; i < LIMIT; ++i) {
             if (blocks[i].used && blocks[i].type == 3 &&
                 blocks[i].start <= offset && offset - blocks[i].start < blocks[i].size) {

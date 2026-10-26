@@ -82,6 +82,9 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     case BlobType::ShaderProfile: {
         return "bin";
     }
+    case BlobType::DriverCache: {
+        return "vkcache";
+    }
     default:
         UNREACHABLE();
     }
@@ -120,11 +123,30 @@ void DataBase::Open() {
     opened = true;
 }
 
+void DataBase::Flush() {
+    if (!IsOpened()) {
+        return;
+    }
+    std::packaged_task<void()> fence{[] {}};
+    auto done = fence.get_future();
+    {
+        std::scoped_lock lock{m_request};
+        req_queue.emplace(std::move(fence));
+    }
+    {
+        std::scoped_lock lk{submit_mutex};
+        ++num_requests;
+        request_cv.notify_one();
+    }
+    done.wait();
+}
+
 void DataBase::Close() {
     if (!IsOpened()) {
         return;
     }
 
+    Flush();
     io_worker.request_stop();
     io_worker.join();
 
@@ -164,7 +186,12 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                     }
                 }
                 std::error_code error;
+                std::filesystem::remove(path, error);
+                error.clear();
                 std::filesystem::rename(temp, path, error);
+                if (error) {
+                    std::filesystem::remove(temp, error);
+                }
             }
         }};
         std::scoped_lock lock{m_request};
@@ -194,8 +221,17 @@ void LoadVector(BlobType type, std::filesystem::path& path, std::vector<T>& v) {
         mz_zip_reader_extract_to_mem(&zip_ar, index, v.data(), stat.m_uncomp_size, 0);
     } else {
         const auto file = IOFile{path, FileAccessMode::Read};
-        v.resize(file.GetSize() / sizeof(T));
-        file.Read(v);
+        if (!file.IsOpen()) {
+            return;
+        }
+        const u64 byte_size = file.GetSize();
+        if (byte_size == 0 || (byte_size % sizeof(T)) != 0) {
+            return;
+        }
+        v.resize(static_cast<size_t>(byte_size / sizeof(T)));
+        if (file.Read(v) != v.size()) {
+            v.clear();
+        }
     }
 }
 
@@ -239,7 +275,34 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
     return LoadVector(type, path, data);
 }
 
+size_t DataBase::CountBlobs(BlobType type) const {
+    if (!opened) {
+        return 0;
+    }
+    const auto ext = "." + GetBlobFileExtension(type);
+    size_t count = 0;
+    if (EmulatorSettings.IsPipelineCacheArchived()) {
+        const auto num_files = mz_zip_reader_get_num_files(&zip_ar);
+        for (int index = 0; index < num_files; ++index) {
+            std::array<char, MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE> file_name{};
+            mz_zip_reader_get_filename(&zip_ar, index, file_name.data(), file_name.size());
+            count += std::string_view{file_name.data()}.ends_with(ext);
+        }
+        return count;
+    }
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
+        if (entry.is_regular_file(ec) && entry.path().extension().string() == ext) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func) {
+    if (!opened) {
+        return;
+    }
     const auto& ext = GetBlobFileExtension(type);
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         const auto num_files = mz_zip_reader_get_num_files(&zip_ar);
@@ -256,14 +319,23 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
-            if (file_name.path().extension().string().ends_with(ext)) {
+        const std::string dot_ext = "." + ext;
+        std::error_code ec;
+        for (const auto& file_name : std::filesystem::directory_iterator{cache_path, ec}) {
+            if (!file_name.is_regular_file(ec)) {
+                continue;
+            }
+            if (file_name.path().extension().string() == dot_ext) {
                 using namespace Common::FS;
-                const auto& file = IOFile{file_name, FileAccessMode::Read};
+                const auto file = IOFile{file_name.path(), FileAccessMode::Read};
                 if (file.IsOpen()) {
-                    std::vector<u8> data(file.GetSize());
-                    file.Read(data);
-                    func(std::move(data));
+                    const u64 sz = file.GetSize();
+                    if (sz > 0) {
+                        std::vector<u8> data(static_cast<size_t>(sz));
+                        if (file.Read(data) == data.size()) {
+                            func(std::move(data));
+                        }
+                    }
                 }
             }
         }

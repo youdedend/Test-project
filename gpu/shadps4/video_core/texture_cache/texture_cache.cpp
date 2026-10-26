@@ -1171,9 +1171,9 @@ void TextureCache::GarbageCollectImages() {
     }();
     const u64 app_budget = test_budget ? std::min(test_budget, bb_uwp_app_memory_limit())
                                        : bb_uwp_app_memory_limit();
-    trigger_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget / 2;
-    pressure_gc_memory = app_budget > 512_MB ? app_budget - 512_MB : app_budget * 3 / 4;
-    critical_gc_memory = app_budget > 256_MB ? app_budget - 256_MB : app_budget * 7 / 8;
+    trigger_gc_memory = app_budget > 1152_MB ? app_budget - 1152_MB : app_budget / 2;
+    pressure_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget * 3 / 4;
+    critical_gc_memory = app_budget > 448_MB ? app_budget - 448_MB : app_budget * 7 / 8;
 #else
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
@@ -1222,7 +1222,12 @@ void TextureCache::GarbageCollectImages() {
     }
     static const u64 idle_seconds = [] {
         const char* env = std::getenv("BB_GC_IDLE_SECONDS");
-        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : 20, 1, 63);
+#ifdef BB_UWP
+        constexpr u64 kDefaultIdleSeconds = 8;
+#else
+        constexpr u64 kDefaultIdleSeconds = 20;
+#endif
+        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : kDefaultIdleSeconds, 1, 63);
     }();
     // Under pressure an image goes once unused for BB_GC_PRESSURE_IDLE_SECONDS (5), over the
     // critical mark for 1 s first, and only then by submissions (a fraction of a second). On
@@ -1231,7 +1236,13 @@ void TextureCache::GarbageCollectImages() {
     // ran. (bbport 0.5, deadinside28/bloodborne_pc c7e3e55, via parsifal295's PR #63.)
     static const u64 pressure_idle_seconds = [] {
         const char* env = std::getenv("BB_GC_PRESSURE_IDLE_SECONDS");
-        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : 5, 0, 63);
+#ifdef BB_UWP
+        constexpr u64 kDefaultPressureIdleSeconds = 2;
+#else
+        constexpr u64 kDefaultPressureIdleSeconds = 5;
+#endif
+        return std::clamp<u64>(
+            env ? std::strtoull(env, nullptr, 10) : kDefaultPressureIdleSeconds, 0, 63);
     }();
     // The tick at the start of that second (an older one where no submission came then).
     const auto tick_seconds_ago = [&](u64 seconds) {
@@ -1239,7 +1250,11 @@ void TextureCache::GarbageCollectImages() {
     };
     const u64 idle_tick = tick_seconds_ago(idle_seconds);
     // Last used a minute ago or more (lru_touched_tick: real use, not the collector's Touch).
+#ifdef BB_UWP
+    const u64 minute_tick = gc_tick_at_second[(second - 45) % gc_tick_at_second.size()];
+#else
     const u64 minute_tick = gc_tick_at_second[(second - 60) % gc_tick_at_second.size()];
+#endif
     bool evicted_any = false;
     {
     std::scoped_lock lock{mutex};
@@ -1260,7 +1275,11 @@ void TextureCache::GarbageCollectImages() {
         } else if (!emergency) {
             below_tick = std::min(below_tick, tick_seconds_ago(aggresive ? 1 : pressure_idle_seconds));
         }
+#ifdef BB_UWP
+        num_deletions = aggresive ? 64 : pressured ? 32 : 16;
+#else
         num_deletions = aggresive ? 40 : pressured ? 20 : 10;
+#endif
         visited = 0;
     };
     const auto clean_up = [&](ImageId image_id) {
@@ -1282,7 +1301,11 @@ void TextureCache::GarbageCollectImages() {
         // 6 GB cards). Kept, an image past the VRAM budget goes to system memory (UniqueImage).
         static const bool drop_old = [] {
             const char* env = std::getenv("BB_GC_DROP_OLD");
+#ifdef BB_UWP
+            return !env || env[0] != '0';
+#else
             return env && env[0] == '1';
+#endif
         }();
         const bool drop = drop_old && tiled && download && aggresive &&
                           image.lru_touched_tick < minute_tick;

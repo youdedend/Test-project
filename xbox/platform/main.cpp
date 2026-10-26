@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <io.h>
@@ -35,6 +36,8 @@
 #include <vector>
 
 #include "prepare_game.h"
+
+extern "C" void bbgpu_flush_caches(void);
 
 #ifndef BB_PREPARED_FORMAT
 #define BB_PREPARED_FORMAT "1"
@@ -810,6 +813,22 @@ static void run_loader() {
         }
     }
 
+    {
+        auto rotate_log = [&](const wchar_t* name, const wchar_t* prev_name) {
+            std::error_code ec;
+            const std::filesystem::path cur = std::filesystem::path{local_w} / name;
+            const std::filesystem::path prev = std::filesystem::path{local_w} / prev_name;
+            if (std::filesystem::exists(cur, ec) && std::filesystem::file_size(cur, ec) > 0 && !ec) {
+                std::filesystem::remove(prev, ec);
+                ec.clear();
+                std::filesystem::rename(cur, prev, ec);
+            }
+        };
+        rotate_log(L"loader.log", L"loader.prev.log");
+        rotate_log(L"errors.log", L"errors.prev.log");
+        rotate_log(L"dozen.log", L"dozen.prev.log");
+    }
+
     _wfreopen((local_w + L"\\loader.log").c_str(), L"w", stdout);
     _wfreopen((local_w + L"\\errors.log").c_str(), L"w", stderr);
     HANDLE dozen_stream = CreateFile2FromAppW(
@@ -1012,11 +1031,14 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
     void Initialize(const winrt::Windows::ApplicationModel::Core::CoreApplicationView& app) {
         app.Activated([this](const auto&, const auto&) { window.Activate(); });
         winrt::Windows::ApplicationModel::Core::CoreApplication::Suspending(
-            [](const auto&, const auto&) {
+            [](const auto&, const winrt::Windows::ApplicationModel::SuspendingEventArgs& args) {
+                auto deferral = args.SuspendingOperation().GetDeferral();
                 std::printf("UWP lifecycle: suspending; memory=%llu/%llu MiB\n",
                             static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                             static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20));
-                std::fflush(stdout);
+                bbgpu_flush_caches();
+                std::fflush(nullptr);
+                deferral.Complete();
             });
         winrt::Windows::ApplicationModel::Core::CoreApplication::Resuming(
             [](const auto&, const auto&) {
