@@ -777,7 +777,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
 
-        Shader::ShaderParams params{};
+        std::optional<Shader::ShaderParams> params;
         if (sel.worker) {
             sigjmp_buf recover;
             if (sigsetjmp(recover, 0)) {
@@ -788,22 +788,21 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
                 return false;
             }
             runtime_fault_recover = &recover;
-            const auto maybe_params = AmdGpu::TryGetParams(*pgm);
+            params = AmdGpu::TryGetParams(*pgm);
             runtime_fault_recover = nullptr;
-            if (!maybe_params) {
+            if (!params) {
                 sel.worker->failed = true;
                 key.stage_hashes[stage_out_idx] = 0;
                 sel.infos[stage_out_idx] = nullptr;
                 return false;
             }
-            params = *maybe_params;
         } else {
-            params = AmdGpu::GetParams(*pgm);
+            params.emplace(AmdGpu::GetParams(*pgm));
         }
         std::optional<Shader::Gcn::FetchShaderData> fetch_shader_;
         std::tie(sel.infos[stage_out_idx], sel.modules[stage_out_idx], fetch_shader_,
                  key.stage_hashes[stage_out_idx]) =
-            GetProgram(sel, stage_in, stage_out, params, binding);
+            GetProgram(sel, stage_in, stage_out, *params, binding);
         if (fetch_shader_) {
             sel.fetch_shader = fetch_shader_;
         }
