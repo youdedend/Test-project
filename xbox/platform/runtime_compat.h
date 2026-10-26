@@ -37,6 +37,12 @@ DWORD bb_uwp_attributes(const char *path);
 BOOL bb_uwp_delete(const char *path);
 BOOL bb_uwp_remove_directory(const char *path);
 HANDLE bb_uwp_find(const char *pattern, WIN32_FIND_DATAA *out);
+/* 1 when the path exists and is a directory / a regular file, 0 otherwise. */
+int bb_uwp_is_dir(const char *path);
+int bb_uwp_is_file(const char *path);
+/* Enumerates the entries of `dir` (no "." / ".."), calling visit(name_utf8, is_dir, user). */
+void bb_uwp_list_dir(const char *dir, void (*visit)(const char *name, int is_dir, void *user),
+                     void *user);
 BOOL bb_uwp_find_next(HANDLE handle, WIN32_FIND_DATAA *out);
 #ifdef __cplusplus
 }

@@ -87,9 +87,19 @@ inline int CompareVersions(std::string_view left, std::string_view right) {
     return a < b ? -1 : (a > b ? 1 : 0);
 }
 
-/// True when `version` is 01.09, the only build the packaged patch set was reverse engineered for.
+/// The APP_VER the packaged patch set was reverse engineered for (patches/redzone.json records it
+/// as "eboot": "Bloodborne 01.09"). This is the *patch set's* requirement, never a guess about a
+/// dump: every dump version is still read from that dump's own sce_sys/param.sfo.
+inline constexpr std::string_view kPatchTargetVersion = "01.09";
+
+/// True when `version` is exactly the build the packaged patch set targets.
 inline bool IsPatchTargetVersion(std::string_view version) {
-    return CompareVersions(version, "01.09") == 0 && !version.empty();
+    return !version.empty() && CompareVersions(version, kPatchTargetVersion) == 0;
+}
+
+/// True when `version` is the target build or newer: only there can the red-zone patch set apply.
+inline bool ReachesPatchTargetVersion(std::string_view version) {
+    return !version.empty() && CompareVersions(version, kPatchTargetVersion) >= 0;
 }
 
 } // namespace BbPrepare

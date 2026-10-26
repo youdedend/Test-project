@@ -224,6 +224,42 @@ BOOL bb_uwp_find_next(HANDLE h, WIN32_FIND_DATAA *out) {
     return TRUE;
 }
 
+int bb_uwp_is_dir(const char *path) {
+    const DWORD attr = bb_uwp_attributes(path);
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+int bb_uwp_is_file(const char *path) {
+    const DWORD attr = bb_uwp_attributes(path);
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+/* Directory enumeration for the platform layer (dump layout detection, overlay manifests).
+ * The callback keeps windows.h out of prepare_game.cpp. */
+void bb_uwp_list_dir(const char *dir, void (*visit)(const char *name, int is_dir, void *user),
+                     void *user) {
+    if (!dir || !*dir || !visit) return;
+    wchar_t name[4096];
+    if (!wide(dir, name, 4096)) return;
+    size_t n = wcslen(name);
+    if (n + 3 >= 4096) return;
+    if (n > 0 && name[n - 1] == L'\\') wcscat_s(name, 4096, L"*");
+    else wcscat_s(name, 4096, L"\\*");
+    WIN32_FIND_DATAW data;
+    HANDLE h = FindFirstFileExFromAppW(name, FindExInfoBasic, &data, FindExSearchNameMatch, NULL, 0);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        char utf8[1024];
+        if (!WideCharToMultiByte(CP_UTF8, 0, data.cFileName, -1, utf8, (int)sizeof(utf8), NULL,
+                                 NULL)) {
+            continue;
+        }
+        if (!strcmp(utf8, ".") || !strcmp(utf8, "..")) continue;
+        visit(utf8, (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, user);
+    } while (FindNextFileW(h, &data));
+    FindClose(h);
+}
+
 DIR *opendir(const char *path) {
     wchar_t name[4096];
     if (!wide(path, name, 4096)) return NULL;

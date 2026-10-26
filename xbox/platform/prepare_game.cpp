@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -1390,6 +1391,289 @@ std::optional<SfoInfo> ReadParamSfo(const std::string& dir) {
         return std::nullopt;
     }
     return ParseParamSfo(sfo, path);
+}
+
+// ---- Dump layout detection (merged / split base+patch / base only) ----
+
+namespace {
+
+/// xbox/platform/runtime_compat.c: enumerates a folder without pulling windows.h in here.
+extern "C" void bb_uwp_list_dir(const char* dir,
+                                void (*visit)(const char* name, int is_dir, void* user),
+                                void* user);
+extern "C" int bb_uwp_is_file(const char* path);
+extern "C" int bb_uwp_is_dir(const char* path);
+
+const char* const kPatchNameHints[] = {"patch", "update", "dlc"};
+
+bool HasFile(const std::string& path) {
+    return bb_uwp_is_file(path.c_str()) != 0;
+}
+
+std::string JoinPath(const std::string& dir, const std::string& leaf) {
+    if (dir.empty()) {
+        return leaf;
+    }
+    return dir + (dir.back() == '\\' || dir.back() == '/' ? "" : "\\") + leaf;
+}
+
+bool NamedLikePatch(const std::string& folder) {
+    const std::string leaf = ToLower(folder);
+    return std::any_of(std::begin(kPatchNameHints), std::end(kPatchNameHints),
+                       [&](const char* hint) { return leaf.find(hint) != std::string::npos; });
+}
+
+struct DirListState {
+    std::string dir;
+    std::vector<std::string> out;
+};
+
+void CollectDir(const char* name, int is_dir, void* user) {
+    auto* state = static_cast<DirListState*>(user);
+    if (is_dir) {
+        state->out.push_back(JoinPath(state->dir, name));
+    }
+}
+
+std::vector<std::string> ListDirs(const std::string& dir) {
+    DirListState state;
+    state.dir = dir;
+    bb_uwp_list_dir(dir.c_str(), &CollectDir, &state);
+    return std::move(state.out);
+}
+
+std::string ParentOf(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    if (slash == std::string::npos) {
+        return {};
+    }
+    if (slash == 2 && path.size() > 2 && path[1] == ':') {
+        return path.substr(0, 3);  // "E:\"
+    }
+    return path.substr(0, slash);
+}
+
+std::string LeafOf(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+/// True when `dir` looks like a bootable container: eboot.bin + sce_sys/param.sfo.
+bool HasContainerFiles(const std::string& dir) {
+    return HasFile(JoinPath(dir, "eboot.bin")) && HasFile(JoinPath(dir, "sce_sys\\param.sfo"));
+}
+
+/// A candidate update container is usable when it is complete, belongs to the same title and is
+/// strictly newer than the base game.
+bool IsUsablePatch(const std::string& dir, const SfoInfo& patch, const SfoInfo& base,
+                   std::string* why_not) {
+    if (!base.title_id.empty() && !patch.title_id.empty() && base.title_id != patch.title_id) {
+        *why_not = "different TITLE_ID (" + patch.title_id + ")";
+        return false;
+    }
+    if (patch.Version().empty()) {
+        *why_not = "no version in param.sfo";
+        return false;
+    }
+    if (CompareVersions(patch.Version(), base.Version()) <= 0) {
+        *why_not = "not newer than the base game (" + patch.Version() + " <= " + base.Version() +
+                   ")";
+        return false;
+    }
+    if (!HasContainerFiles(dir)) {
+        *why_not = "incomplete container (eboot.bin or sce_sys/param.sfo missing)";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+const char* DumpLayout::KindName() const {
+    switch (kind) {
+    case Kind::Merged:
+        return "merged";
+    case Kind::Split:
+        return "split";
+    case Kind::BaseOnly:
+    default:
+        return "base-only";
+    }
+}
+
+std::string DumpLayout::LogLine() const {
+    std::string line = "DumpLayout: kind=";
+    line += KindName();
+    line += "; base_ver=" + (base.app_ver.empty() ? std::string("unknown") : base.app_ver);
+    line += "; patch_ver=";
+    line += patch_path.empty()
+                ? std::string("-")
+                : (patch.Version().empty() ? std::string("unknown") : patch.Version());
+    line += "; effective=";
+    line += effective_ver.empty() ? std::string("unknown") : effective_ver;
+    line += "; base=" + base_path;
+    line += "; patch=" + (patch_path.empty() ? std::string("-") : patch_path);
+    return line;
+}
+
+std::string DumpLayout::Summary() const {
+    const auto describe = [](const std::string& path, const SfoInfo& info) {
+        if (path.empty()) {
+            return std::string("not found");
+        }
+        std::string text =
+            path + " - app_ver=" + (info.Version().empty() ? "unknown" : info.Version());
+        if (!info.app_type.empty()) {
+            text += " (" + info.app_type + ")";
+        }
+        if (!info.title_id.empty()) {
+            text += " " + info.title_id;
+        }
+        return text;
+    };
+    std::string text = "Base dump:  " + describe(base_path, base) + "\n";
+    if (kind == Kind::Split) {
+        text += "Patch dump: " + describe(patch_path, patch) + " (auto-detected)\n";
+    } else if (kind == Kind::Merged) {
+        text += "Patch dump: (already merged into the base folder)\n";
+    } else {
+        text += "Patch dump: not found - choose a patch folder\n";
+    }
+    text += "Effective version: " + (effective_ver.empty() ? std::string("unknown") : effective_ver);
+    if (kind == Kind::BaseOnly) {
+        text += " - patches will be SKIPPED";
+    }
+    return text;
+}
+
+DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& preferred_patch) {
+    DumpLayout layout;
+    layout.base_path = user_picked;
+    const auto finish = [&layout]() {
+        std::printf("%s\n", layout.LogLine().c_str());
+        std::fflush(stdout);
+        return layout;
+    };
+
+    const auto picked = ReadParamSfo(user_picked);
+    if (!picked) {
+        // Unreadable param.sfo: leave the layout invalid (empty base.app_ver) so the caller tells
+        // the player instead of guessing a version.
+        return finish();
+    }
+    layout.base = *picked;
+
+    // 1. The picked folder is itself an update container (patch-rooted dump): run it directly and,
+    //    when the base game sits next to it, use that folder for the data the patch does not hold.
+    //    A merged dump reports APP_TYPE=gp with the patched APP_VER, so only the APP_TYPE decides
+    //    whether the folder is a patch container (its CONTENT_ID keeps the A0109 group either way).
+    if (IsPatchAppType(layout.base.app_type)) {
+        layout.kind = DumpLayout::Kind::Merged;
+        layout.patch_path = user_picked;
+        layout.patch = layout.base;
+        layout.effective_ver = layout.base.Version();
+        const std::string parent = ParentOf(user_picked);
+        if (!parent.empty()) {
+            for (const auto& sibling : ListDirs(parent)) {
+                if (sibling == user_picked) {
+                    continue;
+                }
+                auto info = ReadParamSfo(sibling);
+                if (!info || info->IsPatch() || !HasContainerFiles(sibling)) {
+                    continue;
+                }
+                if (!layout.base.title_id.empty() && !info->title_id.empty() &&
+                    info->title_id != layout.base.title_id) {
+                    continue;
+                }
+                std::printf("Prepare: patch-rooted dump; base game data from %s\n", sibling.c_str());
+                layout.base_path = sibling;
+                layout.base = *info;
+                layout.kind = DumpLayout::Kind::Split;
+                break;
+            }
+        }
+        return finish();
+    }
+
+    // 2. Pair the base game with the highest-version update container that belongs to it. A dump
+    //    that already sits at the target version is only classified as merged after the search has
+    //    confirmed that no newer update folder sits next to it.
+    struct Candidate {
+        std::string path;
+        SfoInfo info;
+    };
+    std::vector<Candidate> candidates;
+    const auto consider = [&](const std::string& path) {
+        if (path.empty() || path == user_picked || !HasContainerFiles(path)) {
+            return;
+        }
+        if (std::any_of(candidates.begin(), candidates.end(),
+                        [&](const Candidate& c) { return c.path == path; })) {
+            return;
+        }
+        auto info = ReadParamSfo(path);
+        if (!info) {
+            return;
+        }
+        std::string why;
+        if (!IsUsablePatch(path, *info, layout.base, &why)) {
+            if (info->IsPatch() || CompareVersions(info->Version(), layout.base.Version()) > 0) {
+                std::printf("Prepare: ignoring patch candidate %s (%s)\n", path.c_str(),
+                            why.c_str());
+            }
+            return;
+        }
+        candidates.push_back({path, std::move(*info)});
+    };
+
+    if (!preferred_patch.empty()) {
+        consider(preferred_patch);
+    }
+    const std::string parent = ParentOf(user_picked);
+    if (!parent.empty()) {
+        // Named siblings ("*patch*", "*update*", "*dlc*") first, then every other sibling: a patch
+        // folder is often called "Bloodborne-01.09" and a base dump "Bloodborne (patched in place)".
+        std::vector<std::string> siblings = ListDirs(parent);
+        std::stable_sort(siblings.begin(), siblings.end(), [](const std::string& a, const std::string& b) {
+            const std::string la = ToLower(LeafOf(a));
+            const bool ha = la.find("patch") != std::string::npos ||
+                            la.find("update") != std::string::npos;
+            const std::string lb = ToLower(LeafOf(b));
+            const bool hb = lb.find("patch") != std::string::npos ||
+                            lb.find("update") != std::string::npos;
+            return ha && !hb;
+        });
+        for (const auto& sibling : siblings) {
+            consider(sibling);
+        }
+    }
+    for (const auto& sub : ListDirs(user_picked)) {
+        if (NamedLikePatch(LeafOf(sub))) {
+            consider(sub);
+        }
+    }
+
+    if (!candidates.empty()) {
+        const Candidate* best = &candidates.front();
+        for (const auto& candidate : candidates) {
+            if (CompareVersions(candidate.info.Version(), best->info.Version()) > 0) {
+                best = &candidate;
+            }
+        }
+        layout.kind = DumpLayout::Kind::Split;
+        layout.patch_path = best->path;
+        layout.patch = best->info;
+        layout.effective_ver = best->info.Version();
+        return finish();
+    }
+
+    // 3. No newer update container anywhere: either the dump already carries the patched build
+    //    (merged) or it is a bare 01.00 base game that the patch set cannot target.
+    layout.effective_ver = layout.base.Version();
+    layout.kind = ReachesPatchTargetVersion(layout.effective_ver) ? DumpLayout::Kind::Merged
+                                                                  : DumpLayout::Kind::BaseOnly;
+    return finish();
 }
 
 uint64_t Fingerprint(const Dump& dump, const std::string& redzone_json) {

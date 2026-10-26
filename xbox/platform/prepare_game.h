@@ -58,6 +58,42 @@ struct PatchBuildResult {
     std::string summary;
 };
 
+/// How a dump folder is laid out on disk, and which file sources the app will actually run.
+struct DumpLayout {
+    enum class Kind {
+        Merged,   ///< one folder that already holds the highest version (patched in place)
+        Split,    ///< base game folder plus a separate update/patch folder
+        BaseOnly, ///< base game only: anything the patch set targets cannot be applied
+    };
+
+    Kind kind = Kind::BaseOnly;
+    std::string base_path;      ///< folder with the base game data (eboot/sce_module/sce_sys)
+    std::string patch_path;     ///< update container folder (empty unless Kind::Split)
+    SfoInfo base;               ///< param.sfo of `base_path`
+    SfoInfo patch;              ///< param.sfo of `patch_path` (empty unless Kind::Split)
+    std::string effective_ver;  ///< version the app will run (patch version when split)
+
+    [[nodiscard]] bool IsValid() const {
+        return !base.app_ver.empty();
+    }
+    /// "merged" / "split" / "base-only".
+    [[nodiscard]] const char* KindName() const;
+    /// Player-facing multi-line summary for the launcher panel.
+    [[nodiscard]] std::string Summary() const;
+    /// The single `DumpLayout: ...` line written to loader.log.
+    [[nodiscard]] std::string LogLine() const;
+};
+
+/// Detects the layout of `user_picked`:
+///  - a param.sfo that belongs to an update (APP_TYPE patch/gd or a CONTENT_ID version) is used
+///    directly, and a sibling base-game folder is picked up as its data source when present;
+///  - a param.sfo at the target version is a merged, already-updated dump;
+///  - otherwise the parent folder, the folder itself and `preferred_patch` (bbport.ini
+///    [dump] patch_path) are searched for the highest-version update container with the same
+///    TITLE_ID. Without one the layout is BaseOnly.
+/// Logs exactly one `DumpLayout: ...` line.
+DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& preferred_patch = {});
+
 // Empty string when param.sfo names a retail Bloodborne release, otherwise a player-facing error.
 std::string CheckTitle(const Bytes& sfo, std::string* out_title_id = nullptr,
                        std::string* out_app_ver = nullptr);

@@ -176,19 +176,23 @@ jobs:
 
       - name: Build and run UWP platform unit tests
         # The dense-arena lifetime policy (retire with an in-flight DrawPrep must defer, never
-        # destroy) and the PS4 software-version helpers (CONTENT_ID -> 01.09, APP_TYPE, version
-        # ordering) decide crash safety and which dump/patch is selected, so they are tested here.
+        # destroy), the PS4 software-version helpers (CONTENT_ID -> 01.09, APP_TYPE, version
+        # ordering) and dump layout detection (merged / split / base-only plus the patch folder
+        # that gets picked) decide crash safety and which dump is booted, so they are tested here.
+        # prepare_game.cpp is pure C++ apart from four file hooks, so the layout test links it
+        # against a std::filesystem stand-in and exercises the code that actually ships.
         run: |
           $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
           & "$vs/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
           $clang = "$vs/VC/Tools/Llvm/x64/bin/clang-cl.exe"
           $tests = @(
-            @{ name = 'dense_arena'; src = 'xbox\tests\dense_arena_lifetime_test.cpp'; include = 'xbox/graphics' },
-            @{ name = 'sfo_version'; src = 'xbox\tests\sfo_version_test.cpp'; include = 'xbox/platform' }
+            @{ name = 'dense_arena'; include = 'xbox/graphics'; sources = @('xbox\tests\dense_arena_lifetime_test.cpp') },
+            @{ name = 'sfo_version'; include = 'xbox/platform'; sources = @('xbox\tests\sfo_version_test.cpp') },
+            @{ name = 'dump_layout'; include = 'xbox/platform'; sources = @('xbox\tests\dump_layout_test.cpp', 'xbox\platform\prepare_game.cpp') }
           )
           foreach ($test in $tests) {
             $exe = "$env:RUNNER_TEMP\$($test.name)_test.exe"
-            & $clang /nologo /std:c++20 /EHsc /W3 "/I$($test.include)" /Fe:"$exe" $test.src
+            & $clang /nologo /std:c++20 /EHsc /W3 "/I$($test.include)" /Fe:"$exe" $test.sources
             if ($LASTEXITCODE) { throw "$($test.name) test did not compile" }
             & $exe
             if ($LASTEXITCODE) { throw "$($test.name) test failed" }
