@@ -229,6 +229,30 @@ DrawPreparation::~DrawPreparation() {
     scanner = {};
 }
 
+std::shared_ptr<DrawPreparation::Submission> DrawPreparation::FindSubmissionLocked(u64 seq) const {
+    const auto it = std::ranges::lower_bound(submissions, seq, {}, &Submission::seq);
+    if (it != submissions.end() && (*it)->seq == seq) {
+        return *it;
+    }
+    return {};
+}
+
+bool DrawPreparation::HasContiguousRangeLocked(u64 from_seq, u64 to_seq) const {
+    if (from_seq >= to_seq) {
+        return true;
+    }
+    const auto it = std::ranges::lower_bound(submissions, from_seq, {}, &Submission::seq);
+    if (it == submissions.end() || (*it)->seq != from_seq) {
+        return false;
+    }
+    const u64 count = to_seq - from_seq;
+    const auto rem = static_cast<u64>(std::distance(it, submissions.end()));
+    if (rem < count) {
+        return false;
+    }
+    return (*(it + static_cast<std::ptrdiff_t>(count - 1)))->seq == to_seq - 1;
+}
+
 std::shared_ptr<DrawPreparation::Submission> DrawPreparation::Build(
     std::span<const u32> commands) {
     if (!Enabled()) {
@@ -239,7 +263,7 @@ std::shared_ptr<DrawPreparation::Submission> DrawPreparation::Build(
         using winrt::Windows::System::MemoryManager;
         const u64 used = MemoryManager::AppMemoryUsage();
         const u64 limit = MemoryManager::AppMemoryUsageLimit();
-        if (limit > 0 && used + 768_MB >= limit) {
+        if (limit > 0 && used + 256_MB >= limit) {
             return {};
         }
     } catch (...) {
@@ -282,11 +306,15 @@ void DrawPreparation::BeginSubmission(u64 seq, const AmdGpu::Regs& regs, u64 reg
         baseline_ready = true;
         cv.notify_all();
     }
-    // Idle helpers can starve on a busy CPU. Rather than queueing without bound, restart
-    // them from the GPU thread's own state (one register copy) once the scanner lags.
+    // Idle helpers can starve on a busy CPU, and UWP memory pressure can skip individual Build()
+    // copies. Restart from the GPU thread's live state whenever the scanner lags or a skipped
+    // sequence number left a gap before `seq`.
     constexpr u64 MaxScanLag = 64;
-    if (!submissions.empty() && seq > tail_seq + MaxScanLag &&
-        submissions.front()->seq < seq && !submissions.front()->scanned.load()) {
+    const bool lag_exceeded = !submissions.empty() && seq > tail_seq + MaxScanLag &&
+                              submissions.front()->seq < seq &&
+                              !submissions.front()->scanned.load(std::memory_order_acquire);
+    const bool gap_before_seq = seq > tail_seq && !HasContiguousRangeLocked(tail_seq, seq);
+    if (lag_exceeded || gap_before_seq) {
         *tail_regs = regs;
         tail_seq = seq;
         tail_checksum = reg_checksum;
@@ -296,10 +324,7 @@ void DrawPreparation::BeginSubmission(u64 seq, const AmdGpu::Regs& regs, u64 reg
         ++rebases;
         cv.notify_all();
     }
-    if (!submissions.empty() && seq >= submissions.front()->seq &&
-        seq - submissions.front()->seq < submissions.size()) {
-        current = submissions[seq - submissions.front()->seq];
-    }
+    current = FindSubmissionLocked(seq);
 }
 
 void DrawPreparation::EndSubmission() {
@@ -365,8 +390,11 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
         {
             std::unique_lock lk{mutex};
             cv.wait(lk, stop, [&] {
-                return next_seq < tail_seq ||
-                       (!submissions.empty() && submissions.back()->seq >= next_seq);
+                if (next_seq < tail_seq) {
+                    return true;
+                }
+                submission = FindSubmissionLocked(next_seq);
+                return submission != nullptr;
             });
             if (stop.stop_requested()) {
                 return;
@@ -376,10 +404,9 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
                 *regs = *tail_regs;
                 checksum = tail_checksum;
                 next_seq = tail_seq;
+                submission.reset();
                 continue;
             }
-            // Unscanned buffers are only collected by a rebase, so `next_seq` is still queued.
-            submission = submissions[next_seq - submissions.front()->seq];
         }
         submission->start_checksum = checksum;
         dirty.Clear();
@@ -416,7 +443,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         for (const auto& submission : submissions) {
             if (submission->seq >= gpu && submission->seq >= tail_seq &&
                 submission->scanned.load(std::memory_order_acquire) &&
-                !submission->claimed.load(std::memory_order_relaxed)) {
+                !submission->claimed.load(std::memory_order_relaxed) &&
+                HasContiguousRangeLocked(tail_seq, submission->seq)) {
                 return submission;
             }
         }
@@ -425,6 +453,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
 
     while (!stop.stop_requested()) {
         std::shared_ptr<Submission> target;
+        bool path_ok = true;
         {
             std::unique_lock lk{mutex};
             // gpu_seq moves without the lock: keep the candidate the predicate found.
@@ -437,16 +466,26 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             target->claimed.store(true, std::memory_order_relaxed);
             // Buffers between this worker's state and the target: their deltas. A position
-            // already collected (or past the target) restarts from the queue's tail state.
-            if (position == NoPosition || position < tail_seq || position > target->seq) {
+            // already collected (or past the target, or across a gap) restarts from tail_regs.
+            if (position == NoPosition || position < tail_seq || position > target->seq ||
+                !HasContiguousRangeLocked(position, target->seq)) {
                 *regs = *tail_regs;
                 position = tail_seq;
             }
-            const u64 front = submissions.front()->seq;
             path.clear();
             for (u64 seq = position; seq < target->seq; ++seq) {
-                path.push_back(submissions[seq - front]);
+                auto step = FindSubmissionLocked(seq);
+                if (!step || !step->scanned.load(std::memory_order_acquire)) {
+                    path_ok = false;
+                    break;
+                }
+                path.push_back(std::move(step));
             }
+        }
+        if (!path_ok) {
+            path.clear();
+            position = NoPosition;
+            continue;
         }
         for (const auto& step : path) {
             step->delta.Apply(*regs);

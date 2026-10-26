@@ -362,6 +362,26 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         Storage::DataBase::Instance().Load(Storage::BlobType::DriverCache, "driver",
                                            driver_cache_data);
     }
+    if (!driver_cache_data.empty()) {
+        const auto dev_props = instance.GetPhysicalDevice().getProperties();
+        u32 hdr_size = 0, hdr_ver = 0, vendor = 0, dev_id = 0;
+        bool valid_hdr = driver_cache_data.size() >= 32;
+        if (valid_hdr) {
+            std::memcpy(&hdr_size, driver_cache_data.data() + 0, 4);
+            std::memcpy(&hdr_ver, driver_cache_data.data() + 4, 4);
+            std::memcpy(&vendor, driver_cache_data.data() + 8, 4);
+            std::memcpy(&dev_id, driver_cache_data.data() + 12, 4);
+            valid_hdr = hdr_size >= 32 && hdr_ver == 1 && vendor == dev_props.vendorID &&
+                        dev_id == dev_props.deviceID &&
+                        std::memcmp(driver_cache_data.data() + 16,
+                                    dev_props.pipelineCacheUUID.data(), 16) == 0;
+        }
+        if (!valid_hdr) {
+            std::printf("GPU: discarding stale driver.vkcache (%zu KiB, UUID/device mismatch)\n",
+                        driver_cache_data.size() >> 10);
+            std::vector<u8>().swap(driver_cache_data);
+        }
+    }
     vk::PipelineCacheCreateInfo cache_ci{};
     if (!driver_cache_data.empty()) {
         cache_ci.initialDataSize = driver_cache_data.size();
@@ -377,6 +397,10 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+    std::vector<u8>().swap(driver_cache_data);
+#ifdef BB_UWP
+    _heapmin();
+#endif
 
 #ifndef BB_UWP
     WarmUp();
@@ -496,7 +520,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
 #ifdef BB_UWP
-        if ((num_new_pipelines % 32u) == 0u) {
+        if ((num_new_pipelines % 128u) == 0u) {
             FlushCaches();
         }
 #endif
@@ -537,7 +561,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
 #ifdef BB_UWP
-        if ((num_new_pipelines % 32u) == 0u) {
+        if ((num_new_pipelines % 128u) == 0u) {
             FlushCaches();
         }
 #endif
@@ -753,7 +777,29 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
 
-        const auto params = AmdGpu::GetParams(*pgm);
+        Shader::ShaderParams params{};
+        if (sel.worker) {
+            sigjmp_buf recover;
+            if (sigsetjmp(recover, 0)) {
+                runtime_fault_recover = nullptr;
+                sel.worker->failed = true;
+                key.stage_hashes[stage_out_idx] = 0;
+                sel.infos[stage_out_idx] = nullptr;
+                return false;
+            }
+            runtime_fault_recover = &recover;
+            const auto maybe_params = AmdGpu::TryGetParams(*pgm);
+            runtime_fault_recover = nullptr;
+            if (!maybe_params) {
+                sel.worker->failed = true;
+                key.stage_hashes[stage_out_idx] = 0;
+                sel.infos[stage_out_idx] = nullptr;
+                return false;
+            }
+            params = *maybe_params;
+        } else {
+            params = AmdGpu::GetParams(*pgm);
+        }
         std::optional<Shader::Gcn::FetchShaderData> fetch_shader_;
         std::tie(sel.infos[stage_out_idx], sel.modules[stage_out_idx], fetch_shader_,
                  key.stage_hashes[stage_out_idx]) =
@@ -939,6 +985,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         // thread. A jump out of the specialization leaks its partial allocations (rare).
         sigjmp_buf recover;
         if (sigsetjmp(recover, 0)) {
+            runtime_fault_recover = nullptr;
             worker.failed = true;
             return {};
         }

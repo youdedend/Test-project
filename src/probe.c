@@ -300,7 +300,7 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) { Sleep(INFINITE); }
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     const CONTEXT *c=info->ContextRecord;
-    char where[MAX_PATH+64];
+    static char where[MAX_PATH+64];
     describe_address(where,sizeof(where),(uintptr_t)c->Rip);
     if (record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
         fprintf(stderr,"Fault: %s access to %p at %s (thread %lu)\n",

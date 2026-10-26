@@ -5,8 +5,18 @@
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <set>
+
+namespace {
+std::atomic<std::uint64_t> g_uwp_pending_retired_arena_bytes{0};
+}
+
+extern "C" std::uint64_t bbgpu_uwp_pending_retired_arena_bytes() noexcept {
+    return g_uwp_pending_retired_arena_bytes.load(std::memory_order_acquire);
+}
 
 namespace VideoCore {
 
@@ -66,6 +76,10 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         }
     } while (expanded);
 
+    if (!previous.empty()) {
+        scheduler.PopPendingOperations();
+    }
+
     auto arena = &arenas.emplace_back(instance, first_page << arena_page_bits,
                                       (last_page - first_page + 1) << arena_page_bits,
                                       MemoryType::DeviceLocal);
@@ -74,10 +88,13 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         const vk::BufferCopy copy{0, old->cpu_addr - arena->cpu_addr, old->size_bytes};
         runtime.CopyBuffer(old, arena, std::span{&copy, 1});
         auto* mutable_old = const_cast<Buffer*>(old);
-        retired_bytes += mutable_old->size_bytes;
-        arena_backed -= std::min<u64>(arena_backed, mutable_old->size_bytes);
-        scheduler.DeferOperation([mutable_old]() {
+        const u64 old_bytes = mutable_old->size_bytes;
+        retired_bytes += old_bytes;
+        arena_backed -= std::min<u64>(arena_backed, old_bytes);
+        g_uwp_pending_retired_arena_bytes.fetch_add(old_bytes, std::memory_order_acq_rel);
+        scheduler.DeferOperation([mutable_old, old_bytes]() {
             mutable_old->buffer.Destroy();
+            g_uwp_pending_retired_arena_bytes.fetch_sub(old_bytes, std::memory_order_acq_rel);
         });
     }
     arena_backed += arena->size_bytes;

@@ -165,23 +165,50 @@ void EnsureDirTree(const std::filesystem::path& dir) {
 #endif
 }
 
-bool CopyFileViaIoFile(const std::filesystem::path& src, const std::filesystem::path& dst) {
+bool HasValidVkCacheHeader(const u8* hdr, size_t len) {
+    if (!hdr || len < 32) {
+        return false;
+    }
+    return ReadLe32(hdr + 0) >= 32u && ReadLe32(hdr + 4) == 1u;
+}
+
+bool CopyFileViaIoFile(const std::filesystem::path& src, const std::filesystem::path& dst,
+                       bool allow_uuid_replace = false) {
     Common::FS::IOFile in{src, Common::FS::FileAccessMode::Read};
     if (!in.IsOpen()) {
         return false;
     }
     const u64 size = in.GetSize();
-    if (size == 0 || size > 256ull * 1024 * 1024) {
+    if (size == 0 || size > 512ull * 1024 * 1024) {
         return false;
+    }
+    const bool is_vkcache = dst.extension() == ".vkcache";
+    std::array<u8, 32> src_hdr{};
+    if (is_vkcache) {
+        if (size < 32 || in.ReadRaw<u8>(src_hdr.data(), src_hdr.size()) != src_hdr.size() ||
+            !HasValidVkCacheHeader(src_hdr.data(), src_hdr.size()) || !in.Seek(0)) {
+            return false;
+        }
     }
     {
         Common::FS::IOFile existing{dst, Common::FS::FileAccessMode::Read};
         if (existing.IsOpen()) {
             const u64 dst_size = existing.GetSize();
-            if (dst_size == size) {
-                return false;
-            }
-            if (dst.extension() == ".vkcache" && dst_size > size) {
+            if (is_vkcache && dst_size >= 32) {
+                std::array<u8, 32> dst_hdr{};
+                if (existing.ReadRaw<u8>(dst_hdr.data(), dst_hdr.size()) == dst_hdr.size() &&
+                    HasValidVkCacheHeader(dst_hdr.data(), dst_hdr.size())) {
+                    const bool same_uuid =
+                        std::memcmp(src_hdr.data() + 8, dst_hdr.data() + 8, 24) == 0;
+                    if (!same_uuid) {
+                        if (!allow_uuid_replace) {
+                            return false;
+                        }
+                    } else if (dst_size >= size) {
+                        return false;
+                    }
+                }
+            } else if (dst_size == size) {
                 return false;
             }
         }
@@ -209,7 +236,8 @@ bool CopyFileViaIoFile(const std::filesystem::path& src, const std::filesystem::
 u32 SyncDirectoryTree(const std::filesystem::path& src_root,
                       const std::filesystem::path& dst_root,
                       const ProgressFn& progress,
-                      const char* label_prefix) {
+                      const char* label_prefix,
+                      bool allow_uuid_replace = false) {
     if (src_root.empty() || dst_root.empty()) {
         return 0;
     }
@@ -244,7 +272,8 @@ u32 SyncDirectoryTree(const std::filesystem::path& src_root,
     u32 copied = 0;
     const u32 total = static_cast<u32>(rel_files.size());
     for (u32 i = 0; i < total; ++i) {
-        if (CopyFileViaIoFile(src_root / rel_files[i], dst_root / rel_files[i])) {
+        if (CopyFileViaIoFile(src_root / rel_files[i], dst_root / rel_files[i],
+                              allow_uuid_replace)) {
             ++copied;
         }
         if (progress && ((i % 16u) == 0u || i + 1 == total)) {
@@ -285,7 +314,7 @@ std::filesystem::path QuarantineFilePath() {
     if (!user_dir || !*user_dir) {
         return {};
     }
-    return std::filesystem::path{user_dir}.parent_path() / "precompile_quarantine.txt";
+    return std::filesystem::path{user_dir}.parent_path() / "precompile_quarantine_v2.txt";
 }
 
 std::filesystem::path InflightFilePath() {
@@ -1963,11 +1992,11 @@ u32 ExportLocalCacheToPortable() {
     u32 exported = 0;
     const auto portable = LocalPortableCacheRoot();
     if (!portable.empty()) {
-        exported += SyncDirectoryTree(local, portable, {}, "Exporting shader cache...");
+        exported += SyncDirectoryTree(local, portable, {}, "Exporting shader cache...", true);
     }
     const auto dump_cache = DumpPortableCacheRoot();
     if (!dump_cache.empty()) {
-        SyncDirectoryTree(local, dump_cache, {}, "Exporting USB shader cache...");
+        SyncDirectoryTree(local, dump_cache, {}, "Exporting USB shader cache...", true);
     }
     if (exported > 0) {
         std::printf("GPU: exported %u shader/pipeline cache files to %s\n", exported,
@@ -2348,6 +2377,7 @@ void WarmUpBeforeBoot(Vulkan::Rasterizer& rasterizer,
         }
     };
 
+    ConsumeInflightCrashBreadcrumb();
     SyncPortableCacheToLocal(ui_progress);
 
     if (const char* scan_env = std::getenv("BB_SCAN_SHADERBND");
@@ -2379,6 +2409,7 @@ std::string RunFullVerifyAndWarmUp(Vulkan::Rasterizer& rasterizer,
         }
     };
 
+    ConsumeInflightCrashBreadcrumb();
     const u32 imported = SyncPortableCacheToLocal(ui_progress);
 
     u32 warmed_ok = 0;

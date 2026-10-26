@@ -245,7 +245,11 @@ void Traverse(EmitContext& ctx, const IR::Program& program) {
             ctx.OpReturn();
             break;
         case IR::AbstractSyntaxNode::Type::Unreachable:
+#ifdef BB_UWP
+            ctx.OpReturn();
+#else
             ctx.OpUnreachable();
+#endif
             break;
         }
         if (node.type != IR::AbstractSyntaxNode::Type::Block) {

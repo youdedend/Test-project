@@ -93,17 +93,19 @@ target_compile_definitions(bloodborne PRIVATE
 
 target_compile_options(bloodborne PRIVATE
   /W3
+  /Oy-
   $<$<COMPILE_LANGUAGE:C>:/clang:-Wno-deprecated-declarations>
   $<$<COMPILE_LANGUAGE:C>:/clang:-masm=att>
   $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
 )
 
-# Keep 64 GiB - 1 TiB clear for the PS4 guest address space (/HIGHENTROPYVA:NO) and commit
-# a 16 MiB default stack inside the AppContainer.
+# Keep 64 GiB - 1 TiB clear for the PS4 guest address space (/HIGHENTROPYVA:NO) and reserve
+# an 8 MiB auto-growing stack (64 KiB initial commit) per host thread inside the AppContainer
+# instead of eagerly committing 16 MiB across 80+ OS/guest/driver threads (~1.25 GiB saved).
 target_link_options(bloodborne PRIVATE
   /APPCONTAINER
   /HIGHENTROPYVA:NO
-  /STACK:16777216,16777216
+  /STACK:8388608,65536
   /OPT:REF
 )
 target_link_directories(bloodborne BEFORE PRIVATE "$ENV{VCToolsInstallDir}/lib/x64/store")

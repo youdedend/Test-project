@@ -28,6 +28,7 @@
 #ifdef BB_UWP
 extern "C" uint64_t bb_uwp_app_memory_usage();
 extern "C" uint64_t bb_uwp_app_memory_limit();
+extern "C" uint64_t bbgpu_uwp_pending_retired_arena_bytes() noexcept;
 #endif
 
 namespace VideoCore {
@@ -1379,10 +1380,12 @@ void TextureCache::GarbageCollectImages() {
     }
     }
 #ifdef BB_UWP
-    /* FreeImage defers VkImage/VMA destruction via scheduler.DeferOperation until GPU submission
-     * retirement; under Xbox 5 GiB AppMemoryUsage pressure, retire pending destructions immediately
-     * (outside TextureCache::mutex) so D3D12 committed heaps actually return to the UWP budget. */
-    if (evicted_any && bb_uwp_app_memory_usage() >= pressure_gc_memory) {
+    /* FreeImage and dense-arena growth defer VkImage/VkBuffer VMA destruction via
+     * scheduler.DeferOperation until GPU submission retirement; under Xbox 5 GiB AppMemoryUsage
+     * pressure or heavy arena retirement, retire pending destructions immediately (outside
+     * TextureCache::mutex and outside any render pass) so D3D12 committed heaps return promptly. */
+    if ((evicted_any && bb_uwp_app_memory_usage() >= pressure_gc_memory) ||
+        bbgpu_uwp_pending_retired_arena_bytes() >= 64_MB) {
         scheduler.Finish();
         scheduler.PopPendingOperations();
     }

@@ -29,6 +29,7 @@
 #ifdef BB_UWP
 #include <windows.h>
 #include <malloc.h>
+#include <winrt/Windows.System.h>
 #endif
 
 namespace Serialization {
@@ -992,7 +993,7 @@ void PipelineCache::WarmUp(const WarmUpProgressCallback& progress) {
     }
 
     Storage::DataBase::Instance().FinishPreload();
-    if (bin_saves > 0 || num_pipelines > 0) {
+    if (bin_saves > 0 || driver_cache_dirty || num_new_pipelines != num_flushed_pipelines) {
         FlushCaches();
     }
 }
@@ -1005,19 +1006,42 @@ void PipelineCache::FlushCaches() {
     if (!db.IsOpened()) {
         return;
     }
-    if (pipeline_cache &&
-        (driver_cache_dirty || num_new_pipelines != num_flushed_pipelines ||
-         num_flushed_pipelines == 0)) {
+    bool can_serialize_driver_cache = true;
+#ifdef BB_UWP
+    if (!driver_cache_dirty) {
+        try {
+            using winrt::Windows::System::MemoryManager;
+            const u64 used = MemoryManager::AppMemoryUsage();
+            const u64 limit = MemoryManager::AppMemoryUsageLimit();
+            if (limit > 0 && used + 768_MB >= limit) {
+                can_serialize_driver_cache = false;
+            }
+        } catch (...) {
+        }
+    }
+#endif
+    bool wrote_driver_cache = false;
+    if (pipeline_cache && can_serialize_driver_cache &&
+        (driver_cache_dirty || num_new_pipelines != num_flushed_pipelines)) {
         auto [res, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
         if (res == vk::Result::eSuccess && !data.empty()) {
             const size_t sz = data.size();
             db.Save(Storage::BlobType::DriverCache, "driver", std::move(data));
             num_flushed_pipelines = num_new_pipelines;
             driver_cache_dirty = false;
+            wrote_driver_cache = true;
             std::printf("GPU: saved driver.vkcache (%zu KiB)\n", sz >> 10);
         }
     }
     db.Flush();
+#ifdef BB_UWP
+    if (wrote_driver_cache) {
+        _heapmin();
+        if (const HANDLE heap = GetProcessHeap()) {
+            HeapCompact(heap, 0);
+        }
+    }
+#endif
 }
 
 void PipelineCache::Sync() {
