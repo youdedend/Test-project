@@ -110,7 +110,9 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-#ifndef _WIN32
+#ifdef _WIN32
+    BbStats::gpu_thread_id.store(static_cast<unsigned long>(gettid()));
+#else
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
         BbStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
