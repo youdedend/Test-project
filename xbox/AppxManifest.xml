@@ -46,10 +46,15 @@
               <uap:FileType>.bhd</uap:FileType>
               <uap:FileType>.bdt</uap:FileType>
               <uap:FileType>.bhd5</uap:FileType>
+              <uap:FileType>.hkxbhd</uap:FileType>
+              <uap:FileType>.hkxbdt</uap:FileType>
+              <uap:FileType>.tpfbhd</uap:FileType>
+              <uap:FileType>.tpfbdt</uap:FileType>
               <uap:FileType>.bnd</uap:FileType>
               <uap:FileType>.chrbnd</uap:FileType>
               <uap:FileType>.texbnd</uap:FileType>
               <uap:FileType>.anibnd</uap:FileType>
+              <uap:FileType>.behbnd</uap:FileType>
               <uap:FileType>.hkxbnd</uap:FileType>
               <uap:FileType>.partsbnd</uap:FileType>
               <uap:FileType>.objbnd</uap:FileType>
@@ -63,6 +68,7 @@
               <uap:FileType>.shadergdb</uap:FileType>
               <uap:FileType>.luabnd</uap:FileType>
               <uap:FileType>.talkesdbnd</uap:FileType>
+              <uap:FileType>.nvmbnd</uap:FileType>
               <uap:FileType>.nvmhktbnd</uap:FileType>
               <uap:FileType>.rumblebnd</uap:FileType>
               <uap:FileType>.fgmbnd</uap:FileType>
@@ -92,20 +98,12 @@
               <uap:FileType>.itl</uap:FileType>
               <uap:FileType>.at9</uap:FileType>
               <uap:FileType>.xvag</uap:FileType>
-              <uap:FileType>.vag</uap:FileType>
               <uap:FileType>.hirc</uap:FileType>
               <uap:FileType>.bnk</uap:FileType>
               <uap:FileType>.mp4</uap:FileType>
               <uap:FileType>.pam</uap:FileType>
-              <uap:FileType>.bik</uap:FileType>
-              <uap:FileType>.bk2</uap:FileType>
-              <uap:FileType>.webm</uap:FileType>
-              <uap:FileType>.usm</uap:FileType>
               <uap:FileType>.gfx</uap:FileType>
               <uap:FileType>.ccm</uap:FileType>
-              <uap:FileType>.ttf</uap:FileType>
-              <uap:FileType>.otf</uap:FileType>
-              <uap:FileType>.sub</uap:FileType>
               <uap:FileType>.fgm</uap:FileType>
               <uap:FileType>.ctl</uap:FileType>
               <uap:FileType>.tri</uap:FileType>
@@ -114,20 +112,16 @@
               <uap:FileType>.gnf</uap:FileType>
               <uap:FileType>.dds</uap:FileType>
               <uap:FileType>.png</uap:FileType>
-              <uap:FileType>.jpg</uap:FileType>
               <uap:FileType>.dat</uap:FileType>
               <uap:FileType>.trp</uap:FileType>
               <uap:FileType>.xml</uap:FileType>
               <uap:FileType>.json</uap:FileType>
               <uap:FileType>.txt</uap:FileType>
-              <uap:FileType>.cfg</uap:FileType>
               <uap:FileType>.csv</uap:FileType>
               <uap:FileType>.log</uap:FileType>
               <uap:FileType>.info</uap:FileType>
               <uap:FileType>.sha</uap:FileType>
               <uap:FileType>.sig</uap:FileType>
-              <uap:FileType>.db</uap:FileType>
-              <uap:FileType>.rco</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
         </uap:Extension>
