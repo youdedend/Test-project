@@ -1,5 +1,6 @@
 #include "bbport_write_log.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
+#include "bb_precompile.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "bbport_copy.h"
@@ -30,6 +31,7 @@
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "bloodborne_cam.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -194,10 +196,17 @@ bool g_window_ready;
 
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
+#ifdef BB_UWP
+        const char* env = std::getenv("BB_DISPLAY_HZ");
+        const u32 rate = env && *env ? u32(std::strtoul(env, nullptr, 10)) : 60u;
+        std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate ? rate : 60u);
+        return std::max<u32>(rate, 60u);
+#else
         const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
         const u32 rate = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 60;
         std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate);
         return std::max<u32>(rate, 60);
+#endif
     }();
     return hz;
 }
@@ -233,6 +242,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
 #endif
     Core::Emulator::FillElfInfo(*config);
+#ifdef BB_UWP
+    BbPrecompile::SyncPortableCacheToLocal();
+#endif
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
     g_window_thread = std::thread([title, width, height] {
@@ -245,7 +257,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         }
         g_window_cv.notify_all();
         while (window->PollEvents()) {
+#ifndef BB_UWP
             SDL_Delay(2);
+#endif
         }
         LOG_INFO(Frontend, "Window closed by user");
         std::fflush(stdout);
@@ -343,6 +357,15 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+extern "C" void bbgpu_flush_caches(void) {
+    if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
+        r->GetPipelineCache().FlushCaches();
+    } else {
+        Storage::DataBase::Instance().Flush();
+    }
+    BbPrecompile::ExportLocalCacheToPortable();
+}
+
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
@@ -367,6 +390,21 @@ extern "C" int bbgpu_text_input_poll(char* out, uint64_t size) {
         out[n] = 0;
     }
     return state;
+}
+
+extern "C" int bbgpu_choice_begin(const char* title, const char* const* items, int count, int focus) {
+    if (!g_window || count <= 0 || !items) return 0;
+    std::vector<std::string> labels;
+    labels.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        labels.emplace_back(items[i] ? items[i] : "");
+    }
+    BbOverlay::BeginChoice(title ? title : "", labels, {}, focus);
+    return 1;
+}
+
+extern "C" int bbgpu_choice_poll(void) {
+    return BbOverlay::PollChoice();
 }
 
 extern "C" void bbgpu_mouse_take(BbMouseInput* out) {
@@ -396,3 +434,21 @@ extern "C" int bbgpu_input_reload_requested(void) {
 extern "C" void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync) {
     Core::BloodborneCam::Instance().Configure(direct != 0, sensitivity, scale_x, scale_y, sync != 0);
 }
+
+#ifdef BB_UWP
+extern "C" int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total,
+                                                uint32_t* out_stage, uint64_t* out_hash,
+                                                uint64_t* out_partner_hash) {
+    const auto d = BbPrecompile::GetActiveShaderDiagnostic();
+    if (!d.active) {
+        return 0;
+    }
+    if (out_idx) *out_idx = d.index;
+    if (out_total) *out_total = d.total;
+    if (out_stage) *out_stage = d.stage;
+    if (out_hash) *out_hash = d.hash;
+    if (out_partner_hash) *out_partner_hash = d.partner_hash;
+    return 1;
+}
+#endif
+

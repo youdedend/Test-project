@@ -25,10 +25,24 @@ namespace {
 // ~2 ms per 16 MiB block. Streaming bursts a few seconds apart re-created the blocks trimmed
 // in between and copies into them ran at 0.3 GB/s (stutter). Blocks now live 30 s idle, the
 // upload ring keeps BB_STAGING_KEEP_MB (512) and is populated at startup.
+#ifdef BB_UWP
+// cosmo/gow3_xbox vk_staging_buffer_pool.cpp: a block lives 120 frames after its last use. The
+// GPU can still be reading a copy recorded two or three frames ago, and the kernel populates a
+// re-created 16 MiB block on first write (~2 ms), so trimming early costs both correctness and time.
+constexpr u64 RING_IDLE_FRAMES = 120;
+constexpr u64 VRAM_RING_IDLE_FRAMES = 120;
+constexpr u64 LARGE_IDLE_FRAMES = 120;
+constexpr u64 PREWARM_BLOCKS = 2;
+constexpr u64 DEFAULT_KEEP_MB = 32;
+constexpr u64 DEFAULT_KEEP_VRAM_MB = 16;
+#else
 constexpr u64 RING_IDLE_FRAMES = 3000;
 constexpr u64 VRAM_RING_IDLE_FRAMES = 600; ///< bbport: a few seconds
 constexpr u64 LARGE_IDLE_FRAMES = 3000;
 constexpr u64 PREWARM_BLOCKS = 8;
+constexpr u64 DEFAULT_KEEP_MB = 512;
+constexpr u64 DEFAULT_KEEP_VRAM_MB = 32;
+#endif
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
 
@@ -42,11 +56,13 @@ u64 RoundAllocationSize(u64 size) {
 StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& scheduler_)
     : instance{instance_}, scheduler{scheduler_} {
     const char* env = std::getenv("BB_STAGING_KEEP_MB");
-    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : 512) * 1_MB / BLOCK_SIZE;
+    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : DEFAULT_KEEP_MB) * 1_MB / BLOCK_SIZE;
     // bbport: the VRAM ring (scratch for detiling and copies) keeps far less: blocks kept for a
     // burst of uploads at an area load stayed in VRAM for good (~300 MiB on the test route).
     const char* vram_env = std::getenv("BB_STAGING_KEEP_VRAM_MB");
-    keep_vram_blocks = (vram_env ? std::strtoull(vram_env, nullptr, 10) : 32) * 1_MB / BLOCK_SIZE;
+    keep_vram_blocks =
+        (vram_env ? std::strtoull(vram_env, nullptr, 10) : DEFAULT_KEEP_VRAM_MB) * 1_MB /
+        BLOCK_SIZE;
     Ring& ring = rings[u32(MemoryType::HostUncached)];
     for (u64 i = 0; i < PREWARM_BLOCKS; ++i) {
         auto& block = ring.blocks.emplace_back(Block{
@@ -169,6 +185,11 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
+    // cosmo/gow3_xbox vk_staging_buffer_pool.cpp: no urgent pass. Trimming the rings down to one
+    // idle frame under memory pressure destroyed blocks that commands recorded a frame or two
+    // earlier still referenced (DrawPipe / BbCopy use-after-free) and re-created blocks the kernel
+    // then had to populate again. Guest memory is released on demand by the allocators instead
+    // (buffer.cpp and image.cpp page out before an allocation that would cross the app limit).
     for (u32 type = 0; type < rings.size(); ++type) {
         const bool vram = type == u32(MemoryType::DeviceLocal);
         TrimRing(rings[type], vram ? keep_vram_blocks : keep_blocks,

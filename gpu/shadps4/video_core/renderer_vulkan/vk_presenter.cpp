@@ -6,12 +6,20 @@
 #include "common/io_file.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
+#ifdef BB_UWP
+#include <thread>
+extern "C" void bb_uwp_game_folder_line(char* out, size_t size);
+extern "C" void bb_uwp_find_game_folders(char* out, size_t size);
+extern "C" void bb_uwp_use_game_folder(const char* dump, char* message, size_t size);
+extern "C" void bb_uwp_choose_game_folder(char* message, size_t size);
+#endif
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "bb_precompile.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
@@ -136,7 +144,11 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
       swapchain{instance, window}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
+#ifdef BB_UWP
+    const u32 num_images = std::max(3u, swapchain.GetImageCount());
+#else
     const u32 num_images = swapchain.GetImageCount();
+#endif
     const vk::Device device = instance.GetDevice();
 
     // Create presentation frames.
@@ -156,7 +168,11 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     fsr_settings.rcas_attenuation =
         static_cast<float>(EmulatorSettings.GetRcasAttenuation() / 1000.f);
 
+#ifndef BB_UWP
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
+#else
+    std::puts("UWP presentation: native resolution; FSR1 and RCAS disabled");
+#endif
     // bbport: frames are composed in RGBA8 (what frame generation reads and writes) and
     // blitted into the swapchain's format.
     pp_pass.Create(device, FrameGenerator::ColorFormat);
@@ -168,6 +184,84 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     frame_generator = std::make_unique<FrameGenerator>(instance, draw_scheduler);
     swapchain_frame_gen = frame_generator->Wanted();
     rasterizer->GetUpscaler().SetFrameGenerator(frame_generator.get());
+#ifdef BB_UWP
+    bool warmed_in_launcher = false;
+    if (const char* launcher = std::getenv("BB_UWP_LAUNCHER"); launcher && *launcher == '1') {
+        std::string title = "Bloodborne";
+        char folder_line[600]{};
+        bb_uwp_game_folder_line(folder_line, sizeof(folder_line));
+        const char* current = std::getenv("BB_UWP_DUMP");
+        const auto choose = [&](const std::string& heading, const std::vector<std::string>& items) {
+            BbOverlay::BeginChoice(heading, items, {}, 0);
+            int choice = -1;
+            while (choice == -1) {
+                PresentLoadingFrame();
+                choice = BbOverlay::PollChoice();
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            }
+            return choice;
+        };
+        for (;;) {
+            std::string heading = folder_line[0] ? (title + "\n" + folder_line) : title;
+            const int choice = choose(
+                heading,
+                {"Start Bloodborne", "Precompile & Warm Up Game Shaders", "Change game folder..."});
+            if (choice == 0) {
+                break;
+            }
+            if (choice == 1) {
+                title = BbPrecompile::RunFullVerifyAndWarmUp(
+                    *rasterizer, [this] { PresentLoadingFrame(); });
+                warmed_in_launcher = true;
+                continue;
+            }
+            char found_raw[4096]{};
+            bb_uwp_find_game_folders(found_raw, sizeof(found_raw));
+            std::vector<std::string> dumps;
+            std::vector<std::string> items;
+            for (const char* p = found_raw; *p;) {
+                const char* nl = std::strchr(p, '\n');
+                std::string line = nl ? std::string(p, nl) : std::string(p);
+                p = nl ? (nl + 1) : (p + line.size());
+                const auto tab = line.find('\t');
+                if (tab == std::string::npos) {
+                    continue;
+                }
+                const std::string dump = line.substr(0, tab);
+                std::string label = line.substr(tab + 1);
+                if (current && _stricmp(dump.c_str(), current) == 0) {
+                    label += " [current]";
+                }
+                dumps.push_back(dump);
+                items.push_back(label);
+            }
+            items.push_back("Browse USB / folder picker...");
+            items.push_back("Back");
+            const int pick = choose("Select Bloodborne dump folder", items);
+            if (pick >= 0 && static_cast<size_t>(pick) < dumps.size()) {
+                char msg[512]{};
+                bb_uwp_use_game_folder(dumps[static_cast<size_t>(pick)].c_str(), msg, sizeof(msg));
+                if (msg[0]) {
+                    title = msg;
+                }
+            } else if (pick == static_cast<int>(dumps.size())) {
+                char msg[512]{};
+                bb_uwp_choose_game_folder(msg, sizeof(msg));
+                if (msg[0]) {
+                    title = msg;
+                }
+            }
+        }
+    }
+    if (!warmed_in_launcher) {
+        BbPrecompile::WarmUpBeforeBoot(*rasterizer, [this] { PresentLoadingFrame(); });
+    }
+    BbOverlay::SetLoadingLabel("Starting Bloodborne...");
+    BbOverlay::SetLoading(true, 1, 1);
+    PresentLoadingFrame();
+    BbOverlay::SetLoading(false, 0, 0);
+    std::fflush(stdout);
+#endif
 }
 
 Presenter::~Presenter() {
@@ -554,6 +648,26 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     vk::ImageLayout::eTransferSrcOptimal, image.info.size.width,
                     image.info.size.height, "display", frame_dump_index);
         }
+#ifdef BB_UWP
+        const auto base_format = image.info.pixel_format;
+        const bool rgba = base_format == vk::Format::eR8G8B8A8Unorm ||
+                          base_format == vk::Format::eR8G8B8A8Srgb;
+        const bool bgra = base_format == vk::Format::eB8G8R8A8Unorm ||
+                          base_format == vk::Format::eB8G8R8A8Srgb;
+        const bool requested_rgba = view_info.format == vk::Format::eR8G8B8A8Unorm ||
+                                    view_info.format == vk::Format::eR8G8B8A8Srgb;
+        const bool requested_bgra = view_info.format == vk::Format::eB8G8R8A8Unorm ||
+                                    view_info.format == vk::Format::eB8G8R8A8Srgb;
+        if ((rgba && requested_bgra) || (bgra && requested_rgba)) {
+            const bool srgb = view_info.format == vk::Format::eR8G8B8A8Srgb ||
+                              view_info.format == vk::Format::eB8G8R8A8Srgb;
+            view_info.format = rgba
+                                   ? (srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm)
+                                   : (srgb ? vk::Format::eB8G8R8A8Srgb : vk::Format::eB8G8R8A8Unorm);
+            view_info.mapping.r = vk::ComponentSwizzle::eB;
+            view_info.mapping.b = vk::ComponentSwizzle::eR;
+        }
+#endif
         image_view = *image.FindView(view_info).image_view;
         image_size = vk::Extent2D{image.info.size.width, image.info.size.height};
         runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -563,11 +677,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     expected_ratio = static_cast<float>(image_size.width) / static_cast<float>(image_size.height);
 
+#ifndef BB_UWP
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
                                  fsr_settings, frame->is_hdr);
+#endif
 
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
+    pp_settings.gamma = BbSettings::Get().gamma.load(std::memory_order_relaxed);
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
@@ -611,9 +728,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                 .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
             };
             cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_target});
+#ifndef BB_UWP
             const auto scaled = fsr_pass.Render(cmdbuf, source, hudless_size,
                                                 {frame->width, frame->height}, fsr_settings,
                                                 frame->is_hdr);
+#else
+            const auto scaled = source;
+#endif
             pp_pass.Render(cmdbuf, scaled, hudless_size, hudless_target, pp_settings);
             hudless = hudless_target.image;
             hudless_view = hudless_target.image_view;
@@ -754,6 +875,60 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     SubmitInfo info{};
     scheduler.Flush(info);
     return frame;
+}
+
+void Presenter::PresentLoadingFrame() {
+    if (window.GetWidth() == 0 || window.GetHeight() == 0) {
+        return;
+    }
+    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    }
+    if (!swapchain.AcquireNextImage()) {
+        return;
+    }
+    const vk::Image image = swapchain.Image();
+    const vk::Extent2D extent = swapchain.GetExtent();
+    const auto cmdbuf = present_scheduler.CommandBuffer();
+    const vk::ImageSubresourceRange range{
+        .aspectMask = vk::ImageAspectFlagBits::eColor,
+        .levelCount = 1,
+        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+    };
+    const auto barrier = [&](vk::ImageLayout from, vk::ImageLayout to, vk::AccessFlags src,
+                             vk::AccessFlags dst) {
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+                               vk::PipelineStageFlagBits::eAllCommands, {}, {}, {},
+                               vk::ImageMemoryBarrier{
+                                   .srcAccessMask = src,
+                                   .dstAccessMask = dst,
+                                   .oldLayout = from,
+                                   .newLayout = to,
+                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .image = image,
+                                   .subresourceRange = range,
+                               });
+    };
+    barrier(vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, {},
+            vk::AccessFlagBits::eTransferWrite);
+    cmdbuf.clearColorImage(image, vk::ImageLayout::eTransferDstOptimal,
+                           vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}},
+                           range);
+    barrier(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
+            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eColorAttachmentWrite);
+    BbOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
+    barrier(vk::ImageLayout::eColorAttachmentOptimal, Swapchain::PresentLayout(),
+            vk::AccessFlagBits::eColorAttachmentWrite, {});
+    SubmitInfo info{};
+    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    info.AddSignal(swapchain.GetPresentReadySemaphore());
+    present_scheduler.Flush(info);
+    {
+        std::scoped_lock submit_lock{Scheduler::submit_mutex};
+        swapchain.Present(present_scheduler.ExecutionQueue());
+    }
+    present_scheduler.Finish();
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
@@ -1064,7 +1239,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
                                          : vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eTransferDstOptimal,
                 .newLayout = overlay ? vk::ImageLayout::eColorAttachmentOptimal
-                                     : vk::ImageLayout::ePresentSrcKHR,
+                                     : Swapchain::PresentLayout(),
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = swapchain_image,
@@ -1090,7 +1265,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                .newLayout = vk::ImageLayout::ePresentSrcKHR,
+                .newLayout = Swapchain::PresentLayout(),
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = swapchain_image,

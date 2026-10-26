@@ -24,6 +24,8 @@ void bbnet_set_image(unsigned char *image, uint64_t size);
 void bbnet_initialize(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
 int bbgpu_init(const BbGpuConfig *config);
+/* Flushes queued shader/pipeline cache blobs and driver cache to disk (UWP OnSuspending safe). */
+void bbgpu_flush_caches(void);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t bbgpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */
@@ -34,6 +36,10 @@ void bbgpu_dump_guest_writes(void *ucontext);
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
+/* Controller/keyboard modal choice dialog (launcher and save-slot selection).
+ * poll returns -1 while open, -2 cancelled, or 0..count-1 when chosen. */
+int bbgpu_choice_begin(const char *title, const char *const *items, int count, int focus);
+int bbgpu_choice_poll(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
 /* 1 while the game should be silent: bbport.ini mute_unfocused is on and the window does not
@@ -100,6 +106,9 @@ void bbgpu_uwp_on_suspending(void);
 void bbgpu_uwp_on_resuming(void);
 /* Evicts cold TextureSetMemo descriptor slices and staging pools down to target_bytes. */
 uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free);
+/* Returns 1 if shader precompilation is currently compiling an item, filling diagnostic fields. */
+int bbgpu_uwp_active_precompile_diag(uint32_t *out_idx, uint32_t *out_total, uint32_t *out_stage,
+                                     uint64_t *out_hash, uint64_t *out_partner_hash);
 #endif
 
 #ifdef __cplusplus

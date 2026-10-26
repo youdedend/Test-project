@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "bbport_toggles.h"
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
@@ -27,10 +28,22 @@
 
 #ifdef ARCH_X86_64
 
+#ifdef BB_UWP
+#include <windows.h>
+#endif
+
 using namespace Xbyak::util;
 
+#ifdef BB_UWP
+static constexpr size_t kSrtArenaSize = 64_MB;
+static constexpr size_t kSrtPageSize = 4096;
+static std::mutex g_srt_codegen_mutex;
+static u8* g_srt_codegen_start = nullptr;
+static std::atomic<size_t> g_srt_codegen_used{0};
+#else
 static Xbyak::CodeGenerator g_srt_codegen(32_MB);
 static const u8* g_srt_codegen_start = nullptr;
+#endif
 
 namespace {
 static bool SrtWalkerSignalHandler(void* context, void* fault_address);
@@ -45,7 +58,14 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address);
 static void RegisterSrtWalkerFaultHandler() {
     static std::once_flag once;
     std::call_once(once, [] {
+#ifdef BB_UWP
+        g_srt_codegen_start = static_cast<u8*>(
+            VirtualAllocFromApp(nullptr, kSrtArenaSize, MEM_RESERVE, PAGE_NOACCESS));
+        ASSERT_MSG(g_srt_codegen_start != nullptr,
+                   "Failed to reserve 64 MiB UWP SRT walker code arena");
+#else
         g_srt_codegen_start = g_srt_codegen.getCode();
+#endif
         // Call after the memory invalidation handler
         constexpr u32 priority = 1;
         Core::Signals::Instance()->RegisterAccessViolationHandler(SrtWalkerSignalHandler,
@@ -53,14 +73,63 @@ static void RegisterSrtWalkerFaultHandler() {
     });
 }
 
+#ifdef BB_UWP
+static Shader::PFN_SrtWalker PublishUwpWalkerSlot(const u8* code_bytes, size_t size) {
+    ASSERT_MSG(size > 0, "Empty SRT walker code");
+    RegisterSrtWalkerFaultHandler();
+    const size_t slot_bytes = (size + kSrtPageSize - 1) & ~(kSrtPageSize - 1);
+    const size_t offset = g_srt_codegen_used.fetch_add(slot_bytes, std::memory_order_acq_rel);
+    ASSERT_MSG(offset + slot_bytes <= kSrtArenaSize, "Exhausted 64 MiB UWP SRT walker arena");
+
+    u8* slot = g_srt_codegen_start + offset;
+    void* committed = VirtualAllocFromApp(slot, slot_bytes, MEM_COMMIT, PAGE_READWRITE);
+    ASSERT_MSG(committed == slot, "VirtualAllocFromApp(MEM_COMMIT) failed for SRT walker");
+    std::memcpy(slot, code_bytes, size);
+    if (slot_bytes > size) {
+        std::memset(slot + size, 0xCC, slot_bytes - size);
+    }
+    ULONG old_prot = 0;
+    const BOOL ok = VirtualProtectFromApp(slot, slot_bytes, PAGE_EXECUTE_READ, &old_prot);
+    ASSERT_MSG(ok != FALSE, "VirtualProtectFromApp(PAGE_EXECUTE_READ) failed for SRT walker");
+    FlushInstructionCache(GetCurrentProcess(), slot, slot_bytes);
+    return reinterpret_cast<Shader::PFN_SrtWalker>(slot);
+}
+#endif
+
 namespace Shader {
 
 PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
+#ifdef BB_UWP
+    std::scoped_lock lk{g_srt_codegen_mutex};
+    return PublishUwpWalkerSlot(ptr, size);
+#else
     RegisterSrtWalkerFaultHandler();
     const auto func_addr = (PFN_SrtWalker)g_srt_codegen.getCurr();
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
     return func_addr;
+#endif
+}
+
+size_t GetUwpSrtWalkerWatermark() {
+#ifdef BB_UWP
+    return g_srt_codegen_used.load(std::memory_order_acquire);
+#else
+    return 0;
+#endif
+}
+
+void RewindUwpSrtWalkerTo(size_t watermark) {
+#ifdef BB_UWP
+    std::scoped_lock lk{g_srt_codegen_mutex};
+    const size_t cur = g_srt_codegen_used.load(std::memory_order_acquire);
+    if (g_srt_codegen_start && cur > watermark) {
+        VirtualFree(g_srt_codegen_start + watermark, cur - watermark, MEM_DECOMMIT);
+        g_srt_codegen_used.store(watermark, std::memory_order_release);
+    }
+#else
+    (void)watermark;
+#endif
 }
 
 } // namespace Shader
@@ -95,7 +164,14 @@ static void DumpSrtProgram(const Shader::Info& info, const u8* code, size_t code
 static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
     // Only handle if the fault address is within the SRT code range
     const u8* code_start = g_srt_codegen_start;
+    if (!code_start) {
+        return false;
+    }
+#ifdef BB_UWP
+    const u8* code_end = code_start + g_srt_codegen_used.load(std::memory_order_acquire);
+#else
     const u8* code_end = code_start + g_srt_codegen.getSize();
+#endif
     const void* code = Common::GetRip(context);
     if (code < code_start || code >= code_end) {
         return false; // Not in SRT code range
@@ -108,6 +184,35 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
         return false;
     }
 
+#ifdef BB_UWP
+    auto* ep = static_cast<EXCEPTION_POINTERS*>(context);
+    if (!ep || !ep->ExceptionRecord || !ep->ContextRecord ||
+        ep->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
+        return false;
+    }
+    ZydisDecodedInstruction instruction;
+    ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+    const ZyanStatus status = Common::Decoder::Instance()->decodeInstruction(
+        instruction, operands, const_cast<void*>(code), 15);
+    if (!ZYAN_SUCCESS(status) || instruction.mnemonic != ZYDIS_MNEMONIC_MOV ||
+        operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        operands[1].type != ZYDIS_OPERAND_TYPE_MEMORY) {
+        return false;
+    }
+    auto* win_ctx = ep->ContextRecord;
+    switch (operands[0].reg.value) {
+    case ZYDIS_REGISTER_RDI:
+        win_ctx->Rdi = 0;
+        break;
+    case ZYDIS_REGISTER_R10D:
+        win_ctx->R10 = 0;
+        break;
+    default:
+        return false;
+    }
+    win_ctx->Rip += instruction.length;
+    return true;
+#else
     // bbport: upstream walks on one thread. With several, a thread that faulted on the mov
     // found the xor another thread had just written and the ASSERT below stopped the game
     // ("SrtWalkerSignalHandler: Assertion Failed!", code 23 while loading an area). One
@@ -171,6 +276,7 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
                 fault_address);
 
     return true;
+#endif
 }
 
 using namespace Shader;
@@ -621,6 +727,12 @@ static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& p
 
 static inline bool PushPtr(Xbyak::CodeGenerator& c, PassInfo& pass_info, const IR::Value& off_dw) {
     c.push(rdi);
+#ifdef BB_UWP
+    Xbyak::Label null_ptr;
+    Xbyak::Label done_ptr;
+    c.cmp(rdi, 0x10000);
+    c.jb(null_ptr, Xbyak::CodeGenerator::T_NEAR);
+#endif
     if (off_dw.IsImmediate()) {
         c.mov(rdi, ptr[rdi + (off_dw.U32() << 2)]);
     } else {
@@ -631,6 +743,17 @@ static inline bool PushPtr(Xbyak::CodeGenerator& c, PassInfo& pass_info, const I
     }
     c.mov(r10, 0xFFFFFFFFFFFFULL);
     c.and_(rdi, r10);
+#ifdef BB_UWP
+    c.cmp(rdi, 0x10000);
+    c.jb(null_ptr, Xbyak::CodeGenerator::T_NEAR);
+    c.mov(r10, 0x10000000000ULL);
+    c.cmp(rdi, r10);
+    c.jae(null_ptr, Xbyak::CodeGenerator::T_NEAR);
+    c.jmp(done_ptr, Xbyak::CodeGenerator::T_NEAR);
+    c.L(null_ptr);
+    c.xor_(edi, edi);
+    c.L(done_ptr);
+#endif
     return true;
 }
 
@@ -659,6 +782,12 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
     // TODO src and dst are contiguous. Optimize with wider loads/stores
     // TODO if this subtree is dynamically indexed, don't compact it (keep it sparse)
     for (auto [src_off_dw, use] : *use_list) {
+#ifdef BB_UWP
+        Xbyak::Label null_load;
+        Xbyak::Label done_load;
+        c.cmp(rdi, 0x10000);
+        c.jb(null_load, Xbyak::CodeGenerator::T_NEAR);
+#endif
         if (src_off_dw.IsImmediate()) {
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
@@ -670,6 +799,12 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
             c.mov(r10d, r10d);
             c.mov(r10d, dword[rdi + r10]);
         }
+#ifdef BB_UWP
+        c.jmp(done_load, Xbyak::CodeGenerator::T_NEAR);
+        c.L(null_load);
+        c.xor_(r10d, r10d);
+        c.L(done_load);
+#endif
         c.mov(ptr[rsi + (pass_info.dst_off_dw << 2)], r10d);
 
         SetFlatbufOffset(use, pass_info.dst_off_dw);
@@ -687,11 +822,31 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
 }
 
 static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
-    Xbyak::CodeGenerator& c = g_srt_codegen;
-
     if (pass_info.srt_roots.empty()) {
         return;
     }
+
+#ifdef BB_UWP
+    alignas(16) thread_local u8 s_scratch[64_KB];
+    Xbyak::CodeGenerator c(sizeof(s_scratch), s_scratch);
+
+    pass_info.dst_off_dw = NUM_USER_DATA_REGS;
+    ASSERT(pass_info.dst_off_dw == info.srt_info.flattened_bufsize_dw);
+
+    for (const auto& [sgpr_base, root] : pass_info.srt_roots) {
+        VisitPointer(IR::Value(static_cast<u32>(sgpr_base)), root, pass_info, c);
+    }
+
+    c.ret();
+    c.ready();
+
+    info.srt_info.walker_func_size = c.getSize();
+    {
+        std::scoped_lock lk{g_srt_codegen_mutex};
+        info.srt_info.walker_func = PublishUwpWalkerSlot(s_scratch, info.srt_info.walker_func_size);
+    }
+#else
+    Xbyak::CodeGenerator& c = g_srt_codegen;
 
     // Register the signal handler for SRT walker, if not already registered
     RegisterSrtWalkerFaultHandler();
@@ -709,6 +864,7 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
 
     info.srt_info.walker_func_size =
         c.getCurr() - reinterpret_cast<const u8*>(info.srt_info.walker_func);
+#endif
 
     if (EmulatorSettings.IsDumpShaders()) {
         DumpSrtProgram(info, reinterpret_cast<const u8*>(info.srt_info.walker_func),
@@ -876,8 +1032,10 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
             inst && inst->GetOpcode() == IR::Opcode::ReadFirstLane) {
             continue;
         }
-        ASSERT_MSG(IsReadConstSource(base->Arg(0)), "ReadConst base low not from constant memory");
-        ASSERT_MSG(IsReadConstSource(base->Arg(1)), "ReadConst base high not from constant memory");
+        if (!IsReadConstSource(base->Arg(0)) || !IsReadConstSource(base->Arg(1))) {
+            LOG_ERROR(Render_Recompiler, "Skipping non-constant ReadConst base in SRT pass");
+            continue;
+        }
 
         IR::Inst* ptr_lo = base->Arg(0).Inst();
         ptr_lo = pass_info.DeduplicateInstruction(ptr_lo);

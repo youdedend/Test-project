@@ -182,6 +182,12 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
     }
 
     if (info.uses_dma) {
+#ifdef BB_UWP
+        info.buffers.push_back({
+            .used_types = IR::Type::U32,
+            .buffer_type = BufferType::DmaBuffers,
+        });
+#endif
         info.buffers.push_back({
             .used_types = IR::Type::U64,
             .buffer_type = BufferType::BdaPagetable,

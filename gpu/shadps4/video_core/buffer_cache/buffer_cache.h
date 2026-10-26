@@ -6,6 +6,8 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <list>
+#include <mutex>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -40,8 +42,13 @@ class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
     // bbport: arena pages are 4 GiB unless the driver's buffer size limit is lower (AMD's
     // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
+#ifdef BB_UWP
+    static constexpr u64 MAX_ARENA_PAGE_BITS = 24;
+    static constexpr u64 MIN_ARENA_PAGE_BITS = 24;
+#else
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
+#endif
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
@@ -64,6 +71,13 @@ public:
     [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
         return bda_pagetable_buffer.get();
     }
+#ifdef BB_UWP
+    static constexpr u32 DmaViewCount = 176;
+    std::array<vk::DescriptorBufferInfo, DmaViewCount> GetDmaViews() const;
+    const Buffer* GetNullBuffer() const {
+        return null_buffer.get();
+    }
+#endif
 
     /// Retrieves the fault buffer.
     [[nodiscard]] Buffer* GetFaultBuffer() noexcept {
@@ -133,6 +147,26 @@ private:
     }
 
     const Buffer* GetArena(u64 first_block, u64 last_block);
+#ifdef BB_UWP
+    void InitializeDenseBuffers();
+    const Buffer* GetDenseArena(u64 first_block, u64 last_block);
+    void ReleaseRetiredArenas();
+    void EnsureDenseResident(const Buffer* arena, u64 first_block, u64 last_block);
+    struct DenseView {
+        const Buffer* arena{};
+        u64 offset{};
+    };
+    struct RetiredArena {
+        std::list<Buffer>::iterator arena;
+        u64 tick{};
+    };
+    std::list<Buffer> dense_arenas;
+    std::vector<RetiredArena> retired_arenas;
+    mutable std::mutex dense_arena_mutex;
+    std::array<DenseView, DmaViewCount> dense_views{};
+    std::unordered_map<u64, u32> dense_slots;
+    std::unique_ptr<Buffer> null_buffer;
+#endif
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 

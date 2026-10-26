@@ -2,7 +2,9 @@
 // bbport: the process's own memory, for the once-a-minute memory line in the log.
 #include "bbport_process_memory.h"
 
-#ifdef _WIN32
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+#elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <psapi.h>
@@ -15,7 +17,10 @@ namespace BbProcessMemory {
 
 Usage Get() {
     Usage usage{};
-#ifdef _WIN32
+#ifdef BB_UWP
+    usage.private_bytes = bb_uwp_app_memory_usage();
+    usage.working_set = usage.private_bytes;
+#elif defined(_WIN32)
     PROCESS_MEMORY_COUNTERS_EX counters{};
     counters.cb = sizeof(counters);
     if (K32GetProcessMemoryInfo(GetCurrentProcess(),

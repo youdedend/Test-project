@@ -11,6 +11,13 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 #include <vk_mem_alloc.h>
+#include <cstdio>
+
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage(void);
+extern "C" uint64_t bb_uwp_app_memory_limit(void);
+extern "C" size_t runtime_memory_page_out(size_t target_bytes);
+#endif
 
 namespace VideoCore {
 
@@ -83,6 +90,9 @@ void UniqueBuffer::Destroy() {
 
 void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                           VmaAllocationInfo* out_alloc_info) {
+#ifdef BB_UWP
+    buffer_ci.usage &= ~vk::BufferUsageFlagBits::eShaderDeviceAddress;
+#endif
     const bool with_bda = bool(buffer_ci.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
     if (mem_type != MemoryType::Sparse) {
         const VmaAllocationCreateFlags bda_flag =
@@ -98,9 +108,46 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         };
 
         const VkBufferCreateInfo buffer_ci_unsafe = static_cast<VkBufferCreateInfo>(buffer_ci);
+#ifdef BB_UWP
+        if (buffer_ci.size >= (256ULL << 10)) {
+            const uint64_t limit = bb_uwp_app_memory_limit();
+            if (limit > 0) {
+                for (unsigned pass = 0; pass < 6; ++pass) {
+                    const uint64_t usage = bb_uwp_app_memory_usage();
+                    if (usage + buffer_ci.size + (96ULL << 20) <= limit) {
+                        break;
+                    }
+                    const size_t paged = runtime_memory_page_out(64ULL << 20);
+                    if (paged == 0) {
+                        break;
+                    }
+                    std::printf("UWP buffer headroom pass %u: swap paged out %llu MiB "
+                                "(usage %llu/%llu MiB)\n",
+                                pass + 1, static_cast<unsigned long long>(paged >> 20),
+                                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                                static_cast<unsigned long long>(limit >> 20));
+                    std::fflush(stdout);
+                }
+            }
+        }
+#endif
         VkBuffer unsafe_buffer{};
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
+#ifdef BB_UWP
+        for (unsigned attempt = 0; result == VK_ERROR_OUT_OF_DEVICE_MEMORY && attempt < 6;
+             ++attempt) {
+            const size_t released = runtime_memory_page_out(64ULL << 20);
+            if (!released) {
+                break;
+            }
+            std::printf("UWP buffer allocation retry %u: swap released %llu MiB\n", attempt + 1,
+                        static_cast<unsigned long long>(released >> 20));
+            std::fflush(stdout);
+            result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
+                                     &allocation, out_alloc_info);
+        }
+#endif
         if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
             // bbport: VRAM full: past the budget, in system memory if need be (see image.cpp).
             Vulkan::NoteOverBudget("buffer");
@@ -108,7 +155,31 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
             over_budget.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
             result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &over_budget, &unsafe_buffer,
                                      &allocation, out_alloc_info);
+            if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+                over_budget.usage = VMA_MEMORY_USAGE_AUTO;
+                result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &over_budget,
+                                         &unsafe_buffer, &allocation, out_alloc_info);
+            }
         }
+#ifdef BB_UWP
+        if (result != VK_SUCCESS) {
+            VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+            vmaGetHeapBudgets(allocator, budgets);
+            std::printf("[uwp-vk] FATAL vmaCreateBuffer(%llu KiB, type=%.*s) -> %d; "
+                        "Xbox AppMemory %llu/%llu MiB; VMA heap[0] block=%llu MiB alloc=%llu MiB "
+                        "usage=%llu MiB budget=%llu MiB\n",
+                        static_cast<unsigned long long>(buffer_ci.size >> 10),
+                        static_cast<int>(BufferTypeName(mem_type).size()),
+                        BufferTypeName(mem_type).data(), static_cast<int>(result),
+                        static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                        static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                        static_cast<unsigned long long>(budgets[0].statistics.blockBytes >> 20),
+                        static_cast<unsigned long long>(budgets[0].statistics.allocationBytes >> 20),
+                        static_cast<unsigned long long>(budgets[0].usage >> 20),
+                        static_cast<unsigned long long>(budgets[0].budget >> 20));
+            std::fflush(stdout);
+        }
+#endif
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {}",
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};

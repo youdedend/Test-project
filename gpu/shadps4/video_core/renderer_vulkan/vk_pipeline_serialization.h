@@ -9,6 +9,13 @@
 
 namespace Vulkan {
 
+vk::ResultValue<vk::UniquePipeline> CreateCachedGraphicsPipeline(
+    const Instance& instance, vk::PipelineCache pipeline_cache,
+    const vk::GraphicsPipelineCreateInfo& pipeline_info);
+vk::ResultValue<vk::UniquePipeline> CreateCachedComputePipeline(
+    const Instance& instance, vk::PipelineCache pipeline_cache,
+    const vk::ComputePipelineCreateInfo& pipeline_info);
+
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata);
 void RegisterPipelineData(const GraphicsPipelineKey& key, u64 hash,

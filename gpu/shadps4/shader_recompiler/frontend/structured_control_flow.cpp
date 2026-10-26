@@ -298,6 +298,9 @@ public:
     }
 
 private:
+    static constexpr size_t kMaxGotoTransforms = 65536;
+    size_t transform_steps{0};
+
     void RemoveGoto(Node goto_stmt) {
         // Force goto_stmt and label_stmt to be directly related
         const Node label_stmt{goto_stmt->label};
@@ -305,6 +308,10 @@ private:
             // Move goto_stmt out using outward-movement transformation until it becomes
             // directly related to label_stmt
             while (!IsDirectlyRelated(goto_stmt, label_stmt)) {
+                if (++transform_steps > kMaxGotoTransforms) {
+                    goto_stmt->up->children.erase(goto_stmt);
+                    return;
+                }
                 goto_stmt = MoveOutward(goto_stmt);
             }
         }
@@ -315,26 +322,38 @@ private:
             if (goto_level > label_level) {
                 // Move goto_stmt out of its level using outward-movement transformations
                 while (goto_level > label_level) {
+                    if (++transform_steps > kMaxGotoTransforms) {
+                        goto_stmt->up->children.erase(goto_stmt);
+                        return;
+                    }
                     goto_stmt = MoveOutward(goto_stmt);
                     --goto_level;
                 }
             } else { // Level(goto_stmt) < Level(label_stmt)
                 if (NeedsLift(goto_stmt, label_stmt)) {
+                    if (++transform_steps > kMaxGotoTransforms) {
+                        goto_stmt->up->children.erase(goto_stmt);
+                        return;
+                    }
                     // Lift goto_stmt to above stmt containing label_stmt using goto-lifting
                     // transformations
                     goto_stmt = Lift(goto_stmt);
                 }
                 // Move goto_stmt into label_stmt's level using inward-movement transformation
                 while (goto_level < label_level) {
+                    if (++transform_steps > kMaxGotoTransforms) {
+                        goto_stmt->up->children.erase(goto_stmt);
+                        return;
+                    }
                     goto_stmt = MoveInward(goto_stmt);
                     ++goto_level;
                 }
             }
         }
-        // Expensive operation:
-        // if (!AreSiblings(goto_stmt, label_stmt)) {
-        //    UNREACHABLE_MSG("Goto is not a sibling with the label");
-        //}
+        if (goto_stmt->up != label_stmt->up) {
+            goto_stmt->up->children.erase(goto_stmt);
+            return;
+        }
         // goto_stmt and label_stmt are guaranteed to be siblings, eliminate
         if (std::next(goto_stmt) == label_stmt) {
             // Simply eliminate the goto if the label is next to it
@@ -530,12 +549,13 @@ private:
 
         Tree if_body;
         if_body.splice(if_body.begin(), body, std::next(goto_stmt), body.end());
-        if_body.pop_front();
         Statement* const cond{pool.Create(Variable{}, label_id, &root_stmt)};
         Statement* const neg_cond{pool.Create(Not{}, cond, &root_stmt)};
-        Statement* const if_stmt{pool.Create(If{}, neg_cond, std::move(if_body), &*parent)};
-        UpdateTreeUp(if_stmt);
-        body.insert(goto_stmt, *if_stmt);
+        if (!if_body.empty()) {
+            Statement* const if_stmt{pool.Create(If{}, neg_cond, std::move(if_body), &*parent)};
+            UpdateTreeUp(if_stmt);
+            body.insert(goto_stmt, *if_stmt);
+        }
 
         body.erase(goto_stmt);
 
@@ -578,14 +598,18 @@ private:
     return nullptr;
 }
 
-[[nodiscard]] IR::U1 VisitExpr(IR::IREmitter& ir, const Statement& stmt) {
+[[nodiscard]] IR::U1 VisitExpr(IR::IREmitter& ir, const Statement& stmt, u32 depth = 0) {
+    if (depth > 512u) {
+        return ir.Imm1(false);
+    }
     switch (stmt.type) {
     case StatementType::Identity:
         return stmt.cond_ref;
     case StatementType::Not:
-        return ir.LogicalNot(VisitExpr(ir, *stmt.op));
+        return ir.LogicalNot(VisitExpr(ir, *stmt.op, depth + 1u));
     case StatementType::Or:
-        return ir.LogicalOr(VisitExpr(ir, *stmt.op_a), VisitExpr(ir, *stmt.op_b));
+        return ir.LogicalOr(VisitExpr(ir, *stmt.op_a, depth + 1u),
+                            VisitExpr(ir, *stmt.op_b, depth + 1u));
     case StatementType::Variable:
         return ir.GetGotoVariable(stmt.id);
     default:
@@ -601,11 +625,25 @@ public:
                   IR::AbstractSyntaxList& syntax_list_)
         : stmt_pool{stmt_pool_}, inst_pool{inst_pool_}, block_pool{block_pool_},
           syntax_list{syntax_list_} {
-        Visit(root_stmt, nullptr, nullptr);
+        Visit(root_stmt, nullptr, nullptr, 0u);
     }
 
 private:
-    void Visit(Statement& parent, IR::Block* break_block, IR::Block* fallthrough_block) {
+    void Visit(Statement& parent, IR::Block* break_block, IR::Block* fallthrough_block,
+               u32 depth) {
+        if (depth > 512u) {
+            IR::Block* stub_block{block_pool.Create(inst_pool)};
+            auto& node{syntax_list.emplace_back()};
+            node.type = IR::AbstractSyntaxNode::Type::Block;
+            node.data.block = stub_block;
+            if (fallthrough_block) {
+                stub_block->AddBranch(fallthrough_block);
+            } else {
+                IR::IREmitter{*stub_block}.Epilogue();
+                syntax_list.emplace_back().type = IR::AbstractSyntaxNode::Type::Return;
+            }
+            return;
+        }
         IR::Block* current_block{};
         IR::Block::iterator insert_point{};
         Tree& tree{parent.children};
@@ -657,7 +695,7 @@ private:
 
                 // Visit children
                 const size_t then_block_index{syntax_list.size()};
-                Visit(stmt, break_block, merge_block);
+                Visit(stmt, break_block, merge_block, depth + 1u);
 
                 IR::Block* const then_block{syntax_list.at(then_block_index).data.block};
                 current_block->AddBranch(then_block);
@@ -693,7 +731,7 @@ private:
 
                 // Visit children
                 const size_t body_block_index{syntax_list.size()};
-                Visit(stmt, merge_block, continue_block);
+                Visit(stmt, merge_block, continue_block, depth + 1u);
 
                 // The continue block is located at the end of the loop
                 IR::IREmitter ir{*continue_block};

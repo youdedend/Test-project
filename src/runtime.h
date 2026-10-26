@@ -42,6 +42,8 @@ uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
+struct GuestThread;
+struct GuestThread *runtime_thread_current(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
@@ -75,6 +77,17 @@ void runtime_thread_keys_cleanup(void);
 /* Guest-visible errno values are FreeBSD's. */
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
+void *runtime_low_alloc(size_t size, size_t align);
+void *runtime_low_calloc(size_t count, size_t size);
+void runtime_low_free(void *ptr);
+void *runtime_low_stack_alloc(size_t size);
+void runtime_low_stack_free(void *ptr, size_t size);
+/* Guest/host thread wait & stall diagnostics (runtime_thread.c, probe.c). */
+void runtime_wait_begin(const char *kind, const char *object, const void *address, const void *holder, uintptr_t caller);
+void runtime_wait_end(void);
+void runtime_wait_report(void);
+void runtime_sample_threads(void);
+int runtime_entered_game(void);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);
@@ -90,6 +103,18 @@ const char *runtime_file_user_dir(void);
 void runtime_rebirth_set_image(unsigned char *base);
 int runtime_rebirth(void);
 int runtime_rebirth_free_level(int level);
+#if defined(BB_UWP) && !defined(BBPORT_UWP)
+#define BBPORT_UWP 1
+#endif
+#ifdef BB_UWP
+int runtime_memory_handle_commit_fault_at(uintptr_t address, int kind, int guest_code);
+uint64_t runtime_memory_page_out(uint64_t need);
+void runtime_memory_start_paging(void);
+/* The guest memory contract self-test (xbox/platform/guest_memory_test.inc): 0 when every
+ * check passed, else the number of the first failing one. Run with "memory" in run.txt. */
+int runtime_memory_selftest(void);
+void bb_uwp_request_quit(void);
+#endif
 void runtime_savedata_configure(const char *title);
 uintptr_t runtime_savedata_resolve(const char *name);
 void runtime_savedata_report(void);

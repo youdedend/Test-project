@@ -14,6 +14,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <SDL3/SDL.h>
+#ifdef BB_UWP
+#include "runtime_compat.h"
+#endif
 
 /* GUD-004: bound every line and every name before comparing against the tables below.
  * NAME_MAX must exceed the longest real output/input name; "hotkey_toggle_mouse_to_joystick"

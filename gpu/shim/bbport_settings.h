@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <utility>
 
 namespace BbSettings {
 
@@ -16,6 +17,19 @@ inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
+enum XboxScenePreset : int {
+    XboxScene360p = 0,
+    XboxScene540p = 1,
+    XboxScene636p = 2,
+    XboxScene720p = 3,
+    XboxScene900p = 4,
+    XboxScene1080p = 5,
+    XboxScene1440p = 6,
+    XboxSceneCount = 7
+};
+inline constexpr int XboxSceneWidths[XboxSceneCount] = {640, 960, 1128, 1280, 1600, 1920, 2560};
+inline constexpr int XboxSceneHeights[XboxSceneCount] = {360, 540, 636, 720, 900, 1080, 1440};
+inline constexpr int XboxOutputCount = 4; ///< 16:9 console outputs: 720p, 1080p, 1440p, 2160p
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 /// Frame generation (vk_frame_generation.h): frames generated between two of the game's.
 enum FrameGen : int { FrameGenOff = 0, FrameGenFsr3 = 1, FrameGenDlss = 2, FrameGenFsr401 = 3, FrameGenCount };
@@ -74,13 +88,22 @@ enum Prompts : int {
 inline constexpr int FovDefault = 43, FovMin = 30, FovMax = 90;
 
 struct Values {
+#ifdef BB_UWP
+    std::atomic<int> upscaler{UpscalerOff};
+    std::atomic<int> preset{Quality};
+#else
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
+#endif
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
     std::atomic<bool> jitter{true};
     std::atomic<bool> reactive{false};
+#ifdef BB_UWP
+    std::atomic<bool> object_motion{false};
+#else
     std::atomic<bool> object_motion{true};
+#endif
     /// Shared launcher/overlay preferences, applied on the next game start.
     std::atomic<int> fsr411_backend{Fsr411Vulkan};
     std::atomic<bool> object_motion_cache{false};
@@ -88,11 +111,19 @@ struct Values {
     std::atomic<float> reactive_threshold{0.2f};
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
+#ifdef BB_UWP
+    std::atomic<bool> show_fps{true};
+#else
     std::atomic<bool> show_fps{false};
+#endif
     /// Silence the game while its window does not have focus (bbgpu_audio_muted).
     std::atomic<bool> mute_unfocused{false};
     /// Keyboard and mouse button prompts: with the device in use (auto), or always one kind.
+#ifdef BB_UWP
+    std::atomic<int> button_prompts{PromptsXbox};
+#else
     std::atomic<int> button_prompts{PromptsAuto};
+#endif
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
@@ -147,6 +178,17 @@ struct Values {
     /// extra frame waits for the display and generation pauses.
     std::atomic<int> frame_gen_flip_limit{0};
 
+    /// Xbox Series X|S host settings (live scene resolution, V-Sync, frame limiter, gamma, and
+    /// 01.09 binary FPS patch selection).
+    std::atomic<int> xbox_scene_res{XboxScene720p};
+    std::atomic<bool> vsync{true};
+    std::atomic<int> fps_cap{60};       ///< 30, 60, 90, 120, or 0 (uncapped)
+    std::atomic<float> gamma{1.0f};     ///< post-processing gamma (0.60 .. 1.40)
+    std::atomic<int> xbox_fps_patch{60}; ///< 01.09 startup patch: 30, 60, 90, or 0 (uncap)
+    bool app_ver_is_0109 = false;
+    char app_ver_text[16] = "01.00";
+    int startup_xbox_fps_patch = 60;
+
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerFsr3;
@@ -186,5 +228,8 @@ float PresetScale(int preset);
 const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
 const char* FrameGenName(int frame_gen);
+std::pair<int, int> XboxSceneSize();
+const char* XboxSceneLabel(int xbox_preset);
+bool IsXboxSupportedEffect(int effect_index);
 
 } // namespace BbSettings

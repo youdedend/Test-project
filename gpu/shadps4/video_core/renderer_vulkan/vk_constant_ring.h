@@ -19,7 +19,11 @@ namespace Vulkan {
 
 class ConstantRing {
 public:
+#ifdef BB_UWP
+    static constexpr u64 Capacity = 16ull << 20;
+#else
     static constexpr u64 Capacity = 32ull << 20;
+#endif
 
     ConstantRing(const Instance& instance, Scheduler& scheduler_)
         : scheduler{scheduler_},

@@ -20,7 +20,10 @@
 
 #include <atomic>
 #include <cstdio>
-#ifdef _WIN32
+#ifdef BB_UWP
+#include "descriptor_fallback.h"
+#endif
+#if defined(_WIN32) && !defined(BB_UWP)
 #include "native_fsr411.h"
 #include "native_fg401.h"
 #include "fg401_support.h"
@@ -271,6 +274,39 @@ std::string Instance::GetDriverVersionName() {
     return GetReadableVersion(version);
 }
 
+namespace {
+
+bool PipelineBinaryCacheRequested() {
+    const char* setting = std::getenv("BB_PIPELINE_BINARIES");
+    return !setting || *setting != '0';
+}
+
+bool InitializePipelineBinaryCache(vk::Device device, bool supported,
+                                   vk::PipelineBinaryKeyKHR& global_key) {
+    global_key = vk::PipelineBinaryKeyKHR{};
+    if (!PipelineBinaryCacheRequested() || !supported) {
+        return false;
+    }
+    const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+    if (!dispatch.vkGetPipelineKeyKHR || !dispatch.vkCreatePipelineBinariesKHR ||
+        !dispatch.vkGetPipelineBinaryDataKHR || !dispatch.vkDestroyPipelineBinaryKHR ||
+        !dispatch.vkReleaseCapturedPipelineDataKHR) {
+        LOG_WARNING(Render_Vulkan, "Pipeline binary cache functions unavailable; using normal compilation");
+        return false;
+    }
+    const auto result = device.getPipelineKeyKHR(nullptr, &global_key);
+    if (result != vk::Result::eSuccess || !global_key.keySize ||
+        global_key.keySize > VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR) {
+        global_key = vk::PipelineBinaryKeyKHR{};
+        return false;
+    }
+    std::printf("GPU: VK_KHR_pipeline_binary disk cache enabled (global key %u bytes)\n",
+                global_key.keySize);
+    return true;
+}
+
+} // namespace
+
 bool Instance::CreateDevice() {
     const vk::StructureChain feature_chain = physical_device.getFeatures2<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features,
@@ -285,6 +321,8 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
         vk::PhysicalDeviceMutableDescriptorTypeFeaturesEXT,
         vk::PhysicalDeviceDescriptorBufferFeaturesEXT,
+        vk::PhysicalDeviceMaintenance5FeaturesKHR,
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR,
         vk::PhysicalDeviceFaultFeaturesEXT>();
     features = feature_chain.get().features;
 
@@ -320,13 +358,26 @@ bool Instance::CreateDevice() {
     };
 
     // Required
+#ifndef BB_UWP
     ASSERT_MSG(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     ASSERT_MSG(add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+#else
+    const bool native_push = add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    if (!native_push) {
+        push_descriptor_props.maxPushDescriptors = 0;
+    }
+    ASSERT(add_extension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME));
+    ASSERT(add_extension(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME));
+    ASSERT(add_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME));
+    ASSERT(add_extension(VK_KHR_MAINTENANCE_4_EXTENSION_NAME));
+    ASSERT(add_extension(VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME));
+#endif
     ASSERT_MSG(add_extension(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}",
                VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+#ifndef BB_UWP
     ASSERT_MSG(add_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 
@@ -337,9 +388,20 @@ bool Instance::CreateDevice() {
                "Required Vulkan feature unavailable: robustImageAccess2");
     ASSERT_MSG(robustness2_features.nullDescriptor,
                "Required Vulkan feature unavailable: nullDescriptor");
+#else
+    const auto robustness2_features = feature_chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
+    const bool native_robustness2 = robustness2_features.robustBufferAccess2 &&
+                                    robustness2_features.robustImageAccess2 &&
+                                    robustness2_features.nullDescriptor &&
+                                    add_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+#endif
 
     // Optional
-    maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
+    maintenance_5 = feature_chain.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5 &&
+                    add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
+    pipeline_binaries = PipelineBinaryCacheRequested() && maintenance_5 &&
+                        feature_chain.get<vk::PhysicalDevicePipelineBinaryFeaturesKHR>().pipelineBinaries &&
+                        add_extension(VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
     // bbport: after a device loss the driver says where the GPU faulted (ReportDeviceLost).
     device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
                    add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -429,7 +491,7 @@ bool Instance::CreateDevice() {
         feature_chain.get<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>()
             .shaderMixedFloatDotProductFloat16AccFloat32 &&
         add_extension(VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME);
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     const char* native_setting = std::getenv("BB_FSR411_NATIVE");
     const char* fsr411_backend = std::getenv("BB_FSR411_BACKEND");
     const bool native_requested = (native_setting && native_setting[0] == '1') ||
@@ -516,7 +578,7 @@ bool Instance::CreateDevice() {
     // (provider/INTEGRATION-CONTRACT.md) are standard features and two extensions; they are
     // requested only when the DLL is installed and the device has all of them, so nothing changes
     // for other paths.
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     const char* missing_fsr4vk_feature = Fsr411VulkanRequirement(physical_device,
         VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties,
         VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateDeviceExtensionProperties,
@@ -536,12 +598,14 @@ bool Instance::CreateDevice() {
 #else
     fsr4vk = false; // The original Vulkan implementation is used on Linux.
 #endif
+#if !defined(BB_UWP)
     if (fsr4vk) {
         add_extension(VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME);
         add_extension(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
         LOG_INFO(Render_Vulkan, "fsr4vk: {} found, its device features are enabled",
                  Fsr4Vk::LibraryPathUtf8());
     }
+#endif
     // bbport: DLSS (optional bridge DLL) needs its own device extensions on NVIDIA GPUs.
     const size_t renderer_extension_count = enabled_extensions.size();
     std::vector<const char*> dlss_extensions;
@@ -628,6 +692,12 @@ bool Instance::CreateDevice() {
             .shaderIntegerDotProduct = vk13_features.shaderIntegerDotProduct,
             .maintenance4 = vk13_features.maintenance4,
         },
+#ifdef BB_UWP
+        vk::PhysicalDeviceDynamicRenderingFeaturesKHR{.dynamicRendering = true},
+        vk::PhysicalDeviceSynchronization2FeaturesKHR{.synchronization2 = true},
+        vk::PhysicalDeviceMaintenance4FeaturesKHR{.maintenance4 = true},
+        vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR{.shaderIntegerDotProduct = true},
+#endif
         vk::PhysicalDeviceMutableDescriptorTypeFeaturesEXT{.mutableDescriptorType = fsr4vk},
         vk::PhysicalDeviceDescriptorBufferFeaturesEXT{.descriptorBuffer = fsr4vk},
         // Extensions
@@ -669,6 +739,9 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceMaintenance5FeaturesKHR{
             .maintenance5 = true,
+        },
+        vk::PhysicalDevicePipelineBinaryFeaturesKHR{
+            .pipelineBinaries = true,
         },
         vk::PhysicalDeviceFaultFeaturesEXT{
             .deviceFault = true,
@@ -749,6 +822,9 @@ bool Instance::CreateDevice() {
     if (!maintenance_5) {
         device_chain.unlink<vk::PhysicalDeviceMaintenance5FeaturesKHR>();
     }
+    if (!pipeline_binaries) {
+        device_chain.unlink<vk::PhysicalDevicePipelineBinaryFeaturesKHR>();
+    }
     if (!device_fault) {
         device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
     }
@@ -780,6 +856,19 @@ bool Instance::CreateDevice() {
     if (!mixed_float_dot_product) {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
     }
+#ifdef BB_UWP
+    if (properties.apiVersion < VK_API_VERSION_1_3) {
+        device_chain.unlink<vk::PhysicalDeviceVulkan13Features>();
+    } else {
+        device_chain.unlink<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>();
+        device_chain.unlink<vk::PhysicalDeviceSynchronization2FeaturesKHR>();
+        device_chain.unlink<vk::PhysicalDeviceMaintenance4FeaturesKHR>();
+        device_chain.unlink<vk::PhysicalDeviceShaderIntegerDotProductFeaturesKHR>();
+    }
+    if (!native_robustness2) {
+        device_chain.unlink<vk::PhysicalDeviceRobustness2FeaturesEXT>();
+    }
+#endif
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
     if (device_result != vk::Result::eSuccess && enabled_extensions.size() > renderer_extension_count) {
@@ -806,6 +895,13 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+#ifdef BB_UWP
+    if (!native_push) {
+        BbUwp::InstallDescriptorFallback(*device);
+    }
+#endif
+    pipeline_binaries =
+        InitializePipelineBinaryCache(*device, pipeline_binaries, pipeline_binary_global_key);
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }
@@ -856,9 +952,17 @@ void Instance::CreateAllocator() {
     };
 
     const VmaAllocatorCreateInfo allocator_info = {
-        .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+        .flags =
+#ifdef BB_UWP
+            0,
+#else
+            VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+#endif
         .physicalDevice = physical_device,
         .device = *device,
+#ifdef BB_UWP
+        .preferredLargeHeapBlockSize = 16_MB,
+#endif
         .pVulkanFunctions = &functions,
         .instance = *instance,
         .vulkanApiVersion = TargetVulkanApiVersion,
@@ -964,6 +1068,11 @@ void Instance::CollectImageFormatInfo() {
     const auto block_texel_view_props =
         physical_device.getImageFormatProperties2(block_texel_view_info);
     supports_block_texel_view = block_texel_view_props.result == vk::Result::eSuccess;
+#ifdef BB_UWP
+    // Dozen's reported compressed storage views fail D3D12 resource allocation.
+    // Use the existing buffer upload path for compressed textures.
+    supports_block_texel_view = false;
+#endif
     LOG_INFO(Render_Vulkan, "Block Texel View support: {}",
              supports_block_texel_view ? "Yes" : "No");
 

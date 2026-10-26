@@ -86,14 +86,19 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         const auto& param{ctx.input_params.at(param_index)};
         const Id value = [&] {
             if (param.is_array) {
-                ASSERT(param.num_components > 1);
                 if (param.is_loaded) {
-                    return ctx.OpCompositeExtract(param.component_type, param.id_array[index],
-                                                  comp);
-                } else {
+                    return param.num_components > 1
+                               ? ctx.OpCompositeExtract(param.component_type, param.id_array[index],
+                                                        comp)
+                               : param.id_array[index];
+                } else if (param.num_components > 1) {
                     return ctx.OpLoad(param.component_type,
                                       ctx.OpAccessChain(param.pointer_type, param.id,
                                                         ctx.ConstU32(index), ctx.ConstU32(comp)));
+                } else {
+                    return ctx.OpLoad(param.component_type,
+                                      ctx.OpAccessChain(param.pointer_type, param.id,
+                                                        ctx.ConstU32(index)));
                 }
             } else {
                 ASSERT(!param.is_loaded);
@@ -146,37 +151,55 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth,
                                                             ctx.ConstU32(comp)));
-        } else {
+        } else if (ctx.profile.supports_fragment_shader_barycentric) {
             return ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp);
+        } else {
+            return ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
         }
     case IR::Attribute::BaryCoordSmoothCentroid:
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1],
                               ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_centroid,
                                                 ctx.ConstU32(comp)));
-        } else {
+        } else if (ctx.profile.supports_fragment_shader_barycentric) {
             return ctx.OpCompositeExtract(
                 ctx.F32[1], ctx.OpInterpolateAtCentroid(ctx.F32[3], ctx.bary_coord), comp);
+        } else {
+            return ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
         }
     case IR::Attribute::BaryCoordSmoothSample:
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(
                 ctx.F32[1],
                 ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_sample, ctx.ConstU32(comp)));
-        } else {
+        } else if (ctx.profile.supports_fragment_shader_barycentric) {
             return ctx.OpCompositeExtract(
                 ctx.F32[1],
                 ctx.OpInterpolateAtSample(ctx.F32[3], ctx.bary_coord,
                                           ctx.OpLoad(ctx.U32[1], ctx.sample_index)),
                 comp);
+        } else {
+            return ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
         }
     case IR::Attribute::BaryCoordNoPersp:
-        return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp,
-                                                        ctx.ConstU32(comp)));
+    case IR::Attribute::BaryCoordNoPerspCentroid:
+        if (ctx.profile.supports_amd_shader_explicit_vertex_parameter ||
+            ctx.profile.supports_fragment_shader_barycentric) {
+            return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp,
+                                                            ctx.ConstU32(comp)));
+        } else {
+            return ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
+        }
     case IR::Attribute::BaryCoordNoPerspSample:
-        return ctx.OpLoad(
-            ctx.F32[1],
-            ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp_sample, ctx.ConstU32(comp)));
+        if (ctx.profile.supports_amd_shader_explicit_vertex_parameter ||
+            ctx.profile.supports_fragment_shader_barycentric) {
+            return ctx.OpLoad(
+                ctx.F32[1],
+                ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp_sample,
+                                  ctx.ConstU32(comp)));
+        } else {
+            return ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
+        }
     case IR::Attribute::BaryCoordPullModel: {
         ASSERT_MSG(comp < 3, "Invalid BaryCoordPullModel component {}", comp);
 
@@ -195,7 +218,10 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
             return inv_w;
         }
         const Id ij =
-            ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp + 1);
+            ctx.profile.supports_fragment_shader_barycentric
+                ? ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord),
+                                         comp + 1)
+                : ctx.Constant(ctx.F32[1], 1.0f / 3.0f);
         return ctx.OpFMul(ctx.F32[1], ij, inv_w);
     }
     default:

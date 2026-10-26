@@ -71,6 +71,10 @@ public:
         return *device;
     }
 
+    const vk::PipelineBinaryKeyKHR& GetPipelineBinaryGlobalKey() const {
+        return pipeline_binary_global_key;
+    }
+
     /// Returns the VMA allocator handle
     VmaAllocator GetAllocator() const {
         return allocator;
@@ -579,6 +583,7 @@ private:
     bool shader_atomic_float2{};
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
+    bool pipeline_binaries{};
     bool device_fault{};
     bool maintenance_8{};
     bool attachment_feedback_loop{};
@@ -596,6 +601,7 @@ private:
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;
+    vk::PipelineBinaryKeyKHR pipeline_binary_global_key{};
 };
 
 } // namespace Vulkan

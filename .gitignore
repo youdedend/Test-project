@@ -28,6 +28,7 @@ patches.json
 !launcher/bloodborne.png
 !launcher/assets/*.png
 !uwp/BBPort.UWP/Assets/*.png
+!xbox/Assets/*.png
 # IDE/session-local
 .claude/
 .vscode/
@@ -58,6 +59,7 @@ benchmarks/
 *.appxsym
 *.appxupload
 *.pfx
+!xbox/signing/bloodborne_xbox-signing.pfx
 *.cer
 *.pvk
 *.dxil

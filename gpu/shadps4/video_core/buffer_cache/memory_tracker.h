@@ -156,7 +156,7 @@ private:
         std::size_t remaining_size{size};
         std::size_t page_index{cpu_address >> TRACKER_HIGHER_PAGE_BITS};
         u64 page_offset{cpu_address & TRACKER_HIGHER_PAGE_MASK};
-        while (remaining_size > 0) {
+        while (remaining_size > 0 && page_index < NUM_HIGH_PAGES) {
             const std::size_t copy_amount{
                 std::min<std::size_t>(TRACKER_HIGHER_PAGE_SIZE - page_offset, remaining_size)};
             auto* manager{top_tier[page_index]};

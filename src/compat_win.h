@@ -14,6 +14,9 @@
 #include <io.h>
 #include <direct.h>
 #include <unistd.h>
+#ifdef BB_UWP
+#include "runtime_compat.h"
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -78,5 +81,8 @@ int compat_cpu_times(int who, int64_t *user_us, int64_t *kernel_us);
 typedef unsigned long long bb_jmp_buf[32];
 __attribute__((returns_twice)) int bb_setjmp(bb_jmp_buf buffer);
 __attribute__((noreturn)) void bb_longjmp(bb_jmp_buf buffer, int value);
+/* Execute fn(arg) on a pre-committed stack [stack_base, stack_base + stack_size) below 1 TiB,
+ * updating NT_TIB StackBase/StackLimit for __chkstk and SEH/C++ unwind, then restoring both. */
+void *compat_call_on_low_stack(void *(*fn)(void *), void *arg, void *stack_base, size_t stack_size);
 #endif
 #endif

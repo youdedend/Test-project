@@ -33,7 +33,39 @@ __asm__(".text\n"
         "    movups 128(%rcx),%xmm9\n    movups 144(%rcx),%xmm10\n    movups 160(%rcx),%xmm11\n"
         "    movups 176(%rcx),%xmm12\n    movups 192(%rcx),%xmm13\n    movups 208(%rcx),%xmm14\n"
         "    movups 224(%rcx),%xmm15\n    ldmxcsr 240(%rcx)\n    fldcw 244(%rcx)\n"
-        "    mov 64(%rcx),%rsp\n    jmp *72(%rcx)\n");
+        "    mov 64(%rcx),%rsp\n    jmp *72(%rcx)\n"
+        ".globl bb_switch_rsp_and_call\n"
+        ".def bb_switch_rsp_and_call; .scl 2; .type 32; .endef\n"
+        "bb_switch_rsp_and_call:\n"
+        "    push %rbp\n"
+        "    push %rbx\n"
+        "    mov %rsp,%rbx\n"
+        "    and $-16,%r8\n"
+        "    sub $32,%r8\n"
+        "    mov %r8,%rsp\n"
+        "    xor %ebp,%ebp\n"
+        "    mov %rcx,%rax\n"
+        "    mov %rdx,%rcx\n"
+        "    call *%rax\n"
+        "    mov %rbx,%rsp\n"
+        "    pop %rbx\n"
+        "    pop %rbp\n"
+        "    ret\n");
+
+void *bb_switch_rsp_and_call(void *(*fn)(void *), void *arg, void *new_rsp);
+
+void *compat_call_on_low_stack(void *(*fn)(void *), void *arg, void *stack_base, size_t stack_size) {
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    PVOID old_base = tib->StackBase;
+    PVOID old_limit = tib->StackLimit;
+    unsigned char *top = (unsigned char *)stack_base + stack_size;
+    tib->StackBase = top;
+    tib->StackLimit = stack_base;
+    void *ret = bb_switch_rsp_and_call(fn, arg, top - 64);
+    tib->StackBase = old_base;
+    tib->StackLimit = old_limit;
+    return ret;
+}
 
 int compat_errno_from_win32(unsigned long error) {
     switch (error) {

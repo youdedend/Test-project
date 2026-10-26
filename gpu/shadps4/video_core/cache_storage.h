@@ -18,6 +18,7 @@ enum class BlobType : u32 {
     ShaderBinary,
     PipelineKey,
     ShaderProfile,
+    DriverCache,
 };
 
 class DataBase {
@@ -28,12 +29,21 @@ public:
 
     void Open();
     void Close();
+    void Flush();
     [[nodiscard]] bool IsOpened() const {
         return opened;
+    }
+    [[nodiscard]] const std::filesystem::path& GetCachePath() const {
+        return cache_path;
     }
     void FinishPreload();
     /// bbport: removes every cached blob (an incompatible cache is rebuilt, not ignored).
     void Clear();
+
+    /// bbport: keeps a rejected blob for inspection as "<name>.<ext>.rejected" (one generation,
+    /// replacing the previous one). Used for driver.vkcache, whose identity is logged when it is
+    /// refused so a mismatch can be explained instead of guessed.
+    void RotateRejected(BlobType type, const std::string& name);
 
     bool Save(BlobType type, const std::string& name, std::vector<u8>&& data);
     bool Save(BlobType type, const std::string& name, std::vector<u32>&& data);
@@ -41,6 +51,7 @@ public:
     void Load(BlobType type, const std::string& name, std::vector<u8>& data);
     void Load(BlobType type, const std::string& name, std::vector<u32>& data);
 
+    [[nodiscard]] size_t CountBlobs(BlobType type) const;
     void ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func);
 
 private:

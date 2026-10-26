@@ -31,7 +31,7 @@
 static uint64_t pool_size_bytes(void) {
     static uint64_t size;
     if (!size) {
-#ifdef BBPORT_UWP
+#if defined(BBPORT_UWP) && !defined(BB_UWP)
         const char *env = getenv("BB_UWP_DMEM_MB");
         uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
         if (mb < 2048 || mb > 3840) mb = 3328;
@@ -70,26 +70,97 @@ _Static_assert(sizeof(BatchEntry)==32,"PS4 batch map entry layout");
 /* Region table lock. Lookups (GPU per-draw queries, VirtualQuery, GPU page
  * protection) share it; map/unmap/protect take it exclusively. Both nest: code
  * under the lock may write guest memory, and a GPU-tracked page then faults into
- * runtime_memory_gpu_protect on the same thread. Readers nest because glibc's
- * default rwlock prefers readers; a thread holding it exclusively skips relocking. */
+ * runtime_memory_gpu_protect on the same thread. UWP counts nested readers around
+ * its native SRW lock; POSIX readers nest with the default reader-preferring rwlock.
+ * A thread holding the table exclusively skips relocking. */
+#ifdef BB_UWP
+static SRWLOCK lock=SRWLOCK_INIT;
+static __thread unsigned shared_depth;
+#else
 static pthread_rwlock_t lock=PTHREAD_RWLOCK_INITIALIZER;
+#endif
 static __thread unsigned exclusive_depth;
 /* Odd while a writer holds the lock; readers' region caches are valid for one even value. */
 static uint64_t table_generation;
-static void write_lock(void) {
-    if (!exclusive_depth++) { pthread_rwlock_wrlock(&lock); __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL); }
+#ifdef BB_UWP
+/* cosmo/gow3_xbox runtime_memory.c: the operations that keep the region table for tens of
+ * milliseconds are what guest threads and the GPU thread stall on (GPU page tracking protects
+ * 256 KiB windows under this lock, and a map/unmap walks every page of its range).
+ * BB_IO_STATS=1 prints each operation that held the table for 40 ms or more. */
+static __thread uint64_t profile_write_started;
+static __thread const char *profile_write_operation;
+static int profile_memory_lock(void) {
+    static int value = -1;
+    if (value < 0) {
+        const char *env = getenv("BB_IO_STATS");
+        value = (env && *env == '1') ? 1 : 0;
+    }
+    return value;
 }
+#endif
+static void write_lock_at(const char *operation) {
+    if (!exclusive_depth++) {
+#ifdef BB_UWP
+        AcquireSRWLockExclusive(&lock);
+#else
+        pthread_rwlock_wrlock(&lock);
+#endif
+        __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL);
+#ifdef BB_UWP
+        profile_write_started = profile_memory_lock() ? GetTickCount64() : 0;
+        profile_write_operation = operation;
+#else
+        (void)operation;
+#endif
+    }
+}
+/* Every caller uses write_lock(); the wrapper names the operation for the stall report. */
+#define write_lock() write_lock_at(__func__)
 static void write_unlock(void) {
-    if (!--exclusive_depth) { __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE); pthread_rwlock_unlock(&lock); }
+    if (!--exclusive_depth) {
+#ifdef BB_UWP
+        const uint64_t elapsed =
+            profile_write_started ? GetTickCount64() - profile_write_started : 0;
+#endif
+        __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE);
+#ifdef BB_UWP
+        ReleaseSRWLockExclusive(&lock);
+#else
+        pthread_rwlock_unlock(&lock);
+#endif
+#ifdef BB_UWP
+        if (elapsed >= 40) {
+            printf("Memory lock: %s held the region table for %llu ms\n", profile_write_operation,
+                   (unsigned long long)elapsed);
+            fflush(stdout);
+        }
+#endif
+    }
 }
-static void read_lock(void) { if (!exclusive_depth) pthread_rwlock_rdlock(&lock); }
-static void read_unlock(void) { if (!exclusive_depth) pthread_rwlock_unlock(&lock); }
+static void read_lock(void) {
+    if (exclusive_depth) return;
+#ifdef BB_UWP
+    if (!shared_depth++) AcquireSRWLockShared(&lock);
+#else
+    pthread_rwlock_rdlock(&lock);
+#endif
+}
+static void read_unlock(void) {
+    if (exclusive_depth) return;
+#ifdef BB_UWP
+    if (!--shared_depth) ReleaseSRWLockShared(&lock);
+#else
+    pthread_rwlock_unlock(&lock);
+#endif
+}
 static Block blocks[LIMIT];
 static Vma *vmas; static size_t vma_count, vma_capacity;
 #ifndef _WIN32
 static int pool_fd=-1;
 #endif
+#ifndef BB_UWP
 static unsigned char *backing_base; /* second view of the pool: host writes bypass guest/GPU page protection */
+#endif
 #define FLEX_SPAN (UINT64_C(1024) * 1024 * 1024)
 static uint64_t flex_bitmap[FLEX_SPAN/PAGE/64];
 /* GPU hooks (bbgpu): notified outside the lock, in order, after each operation. */
@@ -107,7 +178,9 @@ static int host_prot(int prot) {
     /* GPU read/write bits (0x10/0x20) need host access for the future GPU backend. */
     return ((prot & 0x11) ? PROT_READ : 0) | ((prot & 0x22) ? PROT_WRITE|PROT_READ : 0) | ((prot & 4) ? PROT_EXEC|PROT_READ : 0);
 }
-#ifdef _WIN32
+#ifdef BB_UWP
+#include "guest_memory.inc"
+#elif defined(_WIN32)
 /* ---- host mappings (Windows) ----
  * [USER_MIN,USER_MAX) is covered by regions, each one placeholder or one view of the
  * section. Mapping a range carves it out as a single placeholder first: views overlapping
@@ -396,7 +469,7 @@ static int split_at(uintptr_t a) {
     if (i==vma_count || vmas[i].start>=a) return 0;
     Vma right=vmas[i];
     right.start=a;
-    if (right.kind==KIND_DIRECT) right.phys+=a-vmas[i].start;
+    if (right.kind==KIND_DIRECT || right.kind==KIND_FLEXIBLE) right.phys+=a-vmas[i].start;
     vmas[i].end=a;
     return vma_insert(i+1,right);
 }
@@ -421,10 +494,21 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
 /* First-fit search in the PS4 user range, starting from the hint. */
 static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
     uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
+#ifdef BB_UWP
+    while (size<=USER_MAX-at) {
+        size_t i=vma_index(at);
+        if (i<vma_count && vmas[i].start<at+size) { at=align_up(vmas[i].end,alignment); continue; }
+        uintptr_t available=uwp_available(at,size);
+        if (!available) return 0;
+        if (available!=at) { at=align_up(available,alignment); continue; }
+        return at;
+    }
+#else
     for (size_t i=vma_index(at); at+size<=USER_MAX; ++i) {
         if (i==vma_count || vmas[i].start>=at+size) return at;
         at=align_up(vmas[i].end,alignment);
     }
+#endif
     return 0;
 }
 static void drop_range(uintptr_t start, uintptr_t end) {
@@ -731,7 +815,15 @@ static uintptr_t low_next=LOW_MIN;
 void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
-#ifdef _WIN32
+#ifdef BB_UWP
+    void *p=NULL;
+    while (!p && low_next+size<=USER_MIN) {
+        p=VirtualAllocFromApp((void *)low_next,size,MEM_RESERVE|MEM_COMMIT,uwp_low_prot(prot));
+        low_next+=size+UINT64_C(65536);
+    }
+    write_unlock();
+    return p;
+#elif defined(_WIN32)
     void *p=NULL;
     while (!p && low_next+size<=USER_MIN) {
         p=VirtualAlloc((void *)low_next,size,MEM_RESERVE|MEM_COMMIT,win_prot(prot));
@@ -748,6 +840,152 @@ void *runtime_low_map(size_t size, int prot) {
     }
     write_unlock();
     return p==MAP_FAILED ? NULL : p;
+#endif
+}
+
+/* Segregated 64-byte-aligned allocator inside [LOW_MIN, USER_MIN) (< 64 GiB < 1 TiB).
+ * On Xbox/Windows UWP (/APPCONTAINER), Windows forces 64-bit high-entropy ASLR on UCRT heaps
+ * and PE sections (> 1 TiB), whereas Bloodborne's FD4 engine packs scePthreadSelf() and guest-
+ * visible handles/stacks into 40-bit fields (addr & 0xffffffffff). Keeping all guest-visible
+ * runtime objects and stacks in [LOW_MIN, USER_MIN) preserves all 40-bit pointer invariants. */
+#define LOW_BLOCK_MAGIC UINT64_C(0x42424c4f574d454d)
+typedef struct LowBlock {
+    uint64_t magic;
+    size_t bin;
+    size_t map_bytes;
+    struct LowBlock *next;
+    uint64_t reserved[4];
+} LowBlock;
+_Static_assert(sizeof(LowBlock) == 64, "LowBlock header must keep 64-byte payload alignment");
+
+static pthread_mutex_t low_alloc_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Bins 0..9 cover payload capacities 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768. */
+static LowBlock *low_bins[10];
+
+void *runtime_low_alloc(size_t size, size_t align) {
+    if (align > 64) {
+        fprintf(stderr, "STOP: unsupported runtime_low_alloc align=%zu\n", align);
+        exit(21);
+    }
+    if (!size) size = 1;
+    size_t bin = 0, cap = 64;
+    while (bin < 10 && cap < size) {
+        cap <<= 1;
+        ++bin;
+    }
+    if (bin >= 10) {
+        size_t total = align_up(sizeof(LowBlock) + size, 65536);
+        LowBlock *b = (LowBlock *)runtime_low_map(total, PROT_READ | PROT_WRITE);
+        if (!b) return NULL;
+        b->magic = LOW_BLOCK_MAGIC;
+        b->bin = 10;
+        b->map_bytes = total;
+        b->next = NULL;
+        return (void *)(b + 1);
+    }
+    pthread_mutex_lock(&low_alloc_lock);
+    if (!low_bins[bin]) {
+        const size_t slab_bytes = 65536;
+        unsigned char *slab = (unsigned char *)runtime_low_map(slab_bytes, PROT_READ | PROT_WRITE);
+        if (slab) {
+            const size_t stride = sizeof(LowBlock) + cap;
+            for (size_t off = 0; off + stride <= slab_bytes; off += stride) {
+                LowBlock *b = (LowBlock *)(slab + off);
+                b->magic = LOW_BLOCK_MAGIC;
+                b->bin = bin;
+                b->map_bytes = 0;
+                b->next = low_bins[bin];
+                low_bins[bin] = b;
+            }
+        }
+    }
+    LowBlock *out = low_bins[bin];
+    if (out) {
+        low_bins[bin] = out->next;
+        out->next = NULL;
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+    return out ? (void *)(out + 1) : NULL;
+}
+
+void *runtime_low_calloc(size_t count, size_t size) {
+    if (count && size > SIZE_MAX / count) return NULL;
+    const size_t total = count * size;
+    void *p = runtime_low_alloc(total ? total : 1, 64);
+    if (p) memset(p, 0, total ? total : 1);
+    return p;
+}
+
+void runtime_low_free(void *ptr) {
+    if (!ptr) return;
+    LowBlock *b = ((LowBlock *)ptr) - 1;
+    if (b->magic != LOW_BLOCK_MAGIC) {
+        fprintf(stderr, "STOP: invalid runtime_low_free pointer %p\n", ptr);
+        exit(21);
+    }
+    if (b->bin >= 10) {
+#ifdef _WIN32
+        VirtualFree(b, 0, MEM_RELEASE);
+#else
+        munmap(b, b->map_bytes);
+#endif
+        return;
+    }
+    pthread_mutex_lock(&low_alloc_lock);
+    b->next = low_bins[b->bin];
+    low_bins[b->bin] = b;
+    pthread_mutex_unlock(&low_alloc_lock);
+}
+
+#ifdef _WIN32
+typedef struct {
+    uintptr_t addr;
+    size_t size;
+} LowStackSlot;
+static LowStackSlot low_stack_free_list[128];
+static size_t low_stack_free_count;
+#endif
+
+void *runtime_low_stack_alloc(size_t size) {
+    size = align_up(size, 65536);
+#ifdef _WIN32
+    pthread_mutex_lock(&low_alloc_lock);
+    for (size_t i = 0; i < low_stack_free_count;) {
+        if (low_stack_free_list[i].size != size) {
+            ++i;
+            continue;
+        }
+        uintptr_t cand = low_stack_free_list[i].addr;
+        low_stack_free_list[i] = low_stack_free_list[--low_stack_free_count];
+#ifdef BB_UWP
+        void *reused = VirtualAllocFromApp((void *)cand, size, MEM_RESERVE | MEM_COMMIT,
+                                           uwp_low_prot(PROT_READ | PROT_WRITE));
+#else
+        void *reused = VirtualAlloc((void *)cand, size, MEM_RESERVE | MEM_COMMIT,
+                                    win_prot(PROT_READ | PROT_WRITE));
+#endif
+        if (reused) {
+            pthread_mutex_unlock(&low_alloc_lock);
+            return reused;
+        }
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+#endif
+    return runtime_low_map(size, PROT_READ | PROT_WRITE);
+}
+
+void runtime_low_stack_free(void *ptr, size_t size) {
+    if (!ptr) return;
+    size = align_up(size, 65536);
+#ifdef _WIN32
+    pthread_mutex_lock(&low_alloc_lock);
+    VirtualFree(ptr, 0, MEM_RELEASE);
+    if (low_stack_free_count < sizeof(low_stack_free_list) / sizeof(*low_stack_free_list)) {
+        low_stack_free_list[low_stack_free_count++] = (LowStackSlot){(uintptr_t)ptr, size};
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+#else
+    munmap(ptr, size);
 #endif
 }
 /* ---- GPU library interface (gpu/shim/bbgpu.cpp) ---- */
@@ -807,7 +1045,11 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
         size_t i=vma_index(at);
         if (i==vma_count || vmas[i].start>at || vmas[i].kind==KIND_RESERVED) { ok=0; break; }
         uint64_t n=(vmas[i].end<end ? vmas[i].end : end)-at;
+#ifdef BB_UWP
+        if (!uwp_backing_write(at, (const unsigned char *)data + (at - address), n)) { ok = 0; break; }
+#else
         memcpy(backing_base+vmas[i].phys+(at-vmas[i].start),(const unsigned char *)data+(at-address),n);
+#endif
         at+=n;
     }
     read_unlock();
@@ -825,7 +1067,11 @@ void runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
         uint64_t n;
         if (i<vma_count && vmas[i].start<=at && vmas[i].kind!=KIND_RESERVED) {
             n=(vmas[i].end<end ? vmas[i].end : end)-at;
+#ifdef BB_UWP
+            uwp_backing_read(at, out + (at - address), n);
+#else
             memcpy(out+(at-address),backing_base+vmas[i].phys+(at-vmas[i].start),n);
+#endif
         } else {
             const uintptr_t next=i==vma_count ? end : vmas[i].start>at ? vmas[i].start : vmas[i].end;
             n=(next<end ? next : end)-at;
@@ -908,9 +1154,18 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
     return result;
 }
 void runtime_memory_report(void) {
+#ifdef BB_UWP
+    uwp_memory_report();
+#endif
     printf("Runtime: direct memory allocations=%zu, maps=%zu, live=%" PRIu64 ", budget=%" PRIu64 "\n",
            allocations, maps, live_bytes, POOL_SIZE);
     printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu\n",
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
 
+/* The guest memory contract self-test (cosmo/gow3_xbox xbox/platform/guest_memory_test.inc).
+ * It is compiled here, after every mapping function it exercises, and only runs when
+ * LocalState\run.txt asks for the "memory" mode. */
+#ifdef BB_UWP
+#include "../xbox/platform/guest_memory_test.inc"
+#endif

@@ -116,11 +116,14 @@ struct PreparedDraw;
 
 class PipelineCache {
 public:
+    using WarmUpProgressCallback = std::function<void(u32 done, u32 total, u32 ok)>;
+
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,
                            AmdGpu::Liverpool* liverpool, u32 sparse_page_shift);
     ~PipelineCache();
 
-    void WarmUp();
+    void WarmUp(const WarmUpProgressCallback& progress = {});
+    void FlushCaches();
     void Sync();
 
     bool LoadComputePipeline(Serialization::Archive& ar);
@@ -160,6 +163,19 @@ public:
         return profile;
     }
 
+    const Instance& GetInstance() const noexcept {
+        return instance;
+    }
+
+    bool PrecompileArchiveCompute(const Shader::Info& info, std::span<const u32> spv);
+    bool PrecompileArchiveGraphics(const Shader::Info* vs_info, const Shader::RuntimeInfo& vs_rt,
+                                   std::span<const u32> vs_spv,
+                                   const std::optional<Shader::Gcn::FetchShaderData>& fetch,
+                                   const Shader::Info* fs_info, const Shader::RuntimeInfo& fs_rt,
+                                   std::span<const u32> fs_spv, const GraphicsPipelineKey& key,
+                                   GraphicsPipeline::SerializationSupport& sdata);
+    size_t GetDriverCacheBytes() const;
+
 private:
     bool RefreshGraphicsKey(PipelineSelection& sel);
     bool RefreshGraphicsStages(PipelineSelection& sel);
@@ -198,6 +214,8 @@ private:
     PipelineSelection sel{}; ///< GPU thread selection state
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
+    u32 num_flushed_pipelines{};
+    bool driver_cache_dirty{};
 
     // Only if Config::collectShadersForDebug()
     tsl::robin_map<vk::ShaderModule,

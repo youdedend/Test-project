@@ -72,7 +72,11 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
                          Bindings& binding_)
     : Sirit::Module(profile_.supported_spirv), info{info_}, runtime_info{runtime_info_},
       profile{profile_}, hw_stage{info.hw_stage}, sw_stage{info.sw_stage}, binding{binding_} {
-    if (info.uses_dma || VertexMotion()) {
+    if (
+#ifndef BB_UWP
+        info.uses_dma ||
+#endif
+        VertexMotion()) {
         SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
     } else {
         SetMemoryModel(spv::AddressingModel::Logical, spv::MemoryModel::GLSL450);
@@ -173,7 +177,9 @@ void EmitContext::DefineArithmeticTypes() {
         frexp_result_f64 = Name(TypeStruct(F64[1], S32[1]), "frexp_result_f64");
     }
     if (info.uses_dma) {
+#ifndef BB_UWP
         physical_pointer_type_u32 = TypePointer(spv::StorageClass::PhysicalStorageBuffer, U32[1]);
+#endif
     }
 }
 
@@ -364,6 +370,11 @@ void EmitContext::DefineInputs() {
             output_layer = DefineVariable(U32[1], spv::BuiltIn::Layer, spv::StorageClass::Input);
             Decorate(output_layer, spv::Decoration::Flat);
         }
+        if (info.loads.GetAny(IR::Attribute::PrimitiveId)) {
+            primitive_id =
+                DefineVariable(U32[1], spv::BuiltIn::PrimitiveId, spv::StorageClass::Input);
+            Decorate(primitive_id, spv::Decoration::Flat);
+        }
         if (info.loads.Get(IR::Attribute::SampleIndex)) {
             sample_index = DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
             Decorate(sample_index, spv::Decoration::Flat);
@@ -418,11 +429,12 @@ void EmitContext::DefineInputs() {
                 }
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) ||
+            info.loads.GetAny(IR::Attribute::BaryCoordNoPerspCentroid)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_nopersp = DefineVariable(F32[2], spv::BuiltIn::BaryCoordNoPerspAMD,
                                                     spv::StorageClass::Input);
-            } else if (profile.supports_fragment_shader_barycentric) {
+            } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord_nopersp)) {
                 bary_coord_nopersp = DefineVariable(F32[3], spv::BuiltIn::BaryCoordNoPerspKHR,
                                                     spv::StorageClass::Input);
             }
@@ -442,6 +454,9 @@ void EmitContext::DefineInputs() {
         // Clip distances attribute vector is the last in inputs array
         const auto num_inputs = runtime_info.hw.fs.num_inputs - (has_clip_distance_inputs ? 1 : 0);
 
+        const bool can_per_vertex = profile.supports_amd_shader_explicit_vertex_parameter ||
+                                    profile.supports_fragment_shader_barycentric;
+
         for (s32 i = 0; i < num_inputs; i++) {
             const auto& input = runtime_info.hw.fs.inputs[i];
             if (input.IsDefault()) {
@@ -449,7 +464,13 @@ void EmitContext::DefineInputs() {
             }
             const IR::Attribute param = IR::Attribute::Param0 + i;
             const u32 num_components = info.loads.NumComponents(param);
-            const auto [primary, auxiliary] = info.fs_interpolation[i];
+            if (num_components == 0) {
+                continue;
+            }
+            const auto [raw_primary, auxiliary] = info.fs_interpolation[i];
+            const Qualifier primary =
+                (raw_primary == Qualifier::PerVertex && !can_per_vertex) ? Qualifier::Flat
+                                                                         : raw_primary;
             const Id type = F32[num_components];
             const Id attr_id = [&] {
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
@@ -825,7 +846,10 @@ EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_written, bool is_cohere
     }
     // Define buffer binding interface.
     constexpr auto storage_class = spv::StorageClass::StorageBuffer;
-    const Id struct_pointer_type{TypePointer(storage_class, struct_type)};
+    const Id interface_type = buffer_type == BufferType::DmaBuffers
+                                  ? TypeArray(struct_type, ConstU32(NUM_DMA_BUFFERS))
+                                  : struct_type;
+    const Id struct_pointer_type{TypePointer(storage_class, interface_type)};
     const Id pointer_type = TypePointer(storage_class, data_type);
     const Id id{AddGlobalVariable(struct_pointer_type, storage_class)};
     Decorate(id, spv::Decoration::Binding, binding.unified);
@@ -879,6 +903,8 @@ void EmitContext::DefineBuffers() {
             bda_pagetable_index = buffers.size();
         } else if (desc.buffer_type == BufferType::FaultBuffer) {
             fault_buffer_index = buffers.size();
+        } else if (desc.buffer_type == BufferType::DmaBuffers) {
+            dma_buffers_index = buffers.size();
         }
 
         // Define aliases depending on the shader usage.
@@ -1296,6 +1322,13 @@ Id EmitContext::DefineReadConst(bool dynamic) {
 }
 
 void EmitContext::DefineFunctions() {
+    if (info.has_discard && !profile.support_demote) {
+        kill_function = OpFunction(void_id, spv::FunctionControlMask::MaskNone, TypeFunction(void_id));
+        Name(kill_function, "discard_fragment");
+        AddLabel();
+        OpKill();
+        OpFunctionEnd();
+    }
     if (info.uses_pack_10_11_11) {
         f32_to_uf11 = DefineFloat32ToUfloatM5(6, "f32_to_uf11");
         f32_to_uf10 = DefineFloat32ToUfloatM5(5, "f32_to_uf10");

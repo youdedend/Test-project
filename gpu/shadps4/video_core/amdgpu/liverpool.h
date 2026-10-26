@@ -130,6 +130,10 @@ public:
         rasterizer = rasterizer_;
     }
 
+    static bool OnProcessorThread() noexcept {
+        return on_processor_thread;
+    }
+
     template <bool wait_done = false>
     void SendCommand(auto&& func) {
         if constexpr (wait_done) {
@@ -263,6 +267,7 @@ private:
     std::mutex submit_mutex;
     std::condition_variable_any submit_cv;
     std::queue<Common::UniqueFunction<void>> command_queue{};
+    static inline thread_local bool on_processor_thread = false;
     std::thread::id gpu_id;
 #if defined(__linux__) || defined(_WIN32)
     u32 gpu_tid{};

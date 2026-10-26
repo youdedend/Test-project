@@ -11,7 +11,7 @@
 
 #include "common/logging/log.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
 #include <windows.h>
 #endif
 
@@ -22,7 +22,7 @@
 // writing the angles from the mouse thread at any moment split it unevenly between frames (a
 // turn that judders by a pixel). The game's registers are kept: the red zone is skipped, and
 // what the Windows ABI lets bbcam_apply change (rax, rcx, rdx, r8-r11, xmm0-5, flags) is saved.
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
 extern "C" {
 uintptr_t bbcam_return;
 void bbcam_apply(uintptr_t camera);
@@ -63,7 +63,7 @@ static constexpr uintptr_t MONOCULAR_BASE_ORIG = 0x80553E8D0;
 static constexpr size_t CAMERA_REGION_SIZE_MIN = 0x5000000;
 static constexpr size_t CAMERA_REGION_SIZE_MAX = 0x5200000;
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
 static bool CanAccess(uintptr_t addr, size_t len, bool write) {
     if (!addr || !len || addr + len < addr) {
         return false;
@@ -240,7 +240,7 @@ bool BloodborneCam::InitializeAddresses() {
         return false; // scanned once already; the result will not change
     }
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     static constexpr size_t CAM_PATTERN_LEN = 18;
     const u8 pattern[CAM_PATTERN_LEN] = {
         0xC4, 0xC1, 0x7A, 0x10, 0x85, 0x40, 0x01, 0x00, 0x00,
@@ -326,7 +326,7 @@ bool BloodborneCam::SetEnabled(bool enabled) {
         return enabled;
     }
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     static const u8 NOP9[CAM_NOP_LEN] = {
         0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90
     };
@@ -552,7 +552,7 @@ void BloodborneCam::Turn(uintptr_t pitch, float xrel, float yrel) {
 // whole in the next frame. From Ryan Sousa's keyboard and mouse fork (src/runtime_camhook.c):
 // the drawn position is pivot - direction * r, direction = (sin y cos p, -sin p, cos y cos p).
 void BloodborneCam::TurnDrawnPosition(uintptr_t camera, float turnPitch, float turnYaw) {
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     if (!CanAccessCached(camera + 0xD0, 0x40, true)) {
         return;
     }

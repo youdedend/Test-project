@@ -885,6 +885,18 @@ static void touch_ids(PadData *d) {
     else if (!since) since=d->timestamp;
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
+#ifdef BBPORT_UWP
+/* The UWP window has no SDL controller events: dialogs and the L3+R3 overlay menu sample
+ * controller buttons directly, even before scePadOpen or while guest reads pause. */
+uint32_t runtime_pad_dialog_buttons(void) {
+    uint32_t buttons = 0;
+    uint8_t axes[6] = {128, 128, 128, 128, 0, 0};
+    int touch_side = -1;
+    uint8_t count = 1;
+    bbport_uwp_gamepad_poll(&buttons, axes, &touch_side, &count);
+    return buttons;
+}
+#endif
 static void sample(PadData *d) {
 #ifdef BBPORT_UWP
     memset(d, 0, sizeof(*d));

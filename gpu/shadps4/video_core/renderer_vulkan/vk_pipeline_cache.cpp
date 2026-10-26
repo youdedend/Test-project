@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -13,6 +14,7 @@
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
+#include "common/scope_exit.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -29,6 +31,12 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
+#ifdef BB_UWP
+#include <malloc.h>
+#include <winrt/Windows.System.h>
+extern "C" uint64_t runtime_memory_page_out(uint64_t bytes);
+#endif
+
 namespace Vulkan {
 
 using Shader::HwStage;
@@ -36,13 +44,14 @@ using Shader::Output;
 using Shader::SwStage;
 
 constexpr static auto SpirvVersion1_6 = 0x00010600U;
+constexpr static auto SpirvVersion1_5 = 0x00010500U;
 
 constexpr static std::array DescriptorHeapSizes = {
     vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 512},
-    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 8192},
+    vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 16384},
     vk::DescriptorPoolSize{vk::DescriptorType::eSampledImage, 8192},
     vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 1024},
-    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1024},
+    vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 2048},
 };
 
 static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs, const AmdGpu::VsOutputControl& ctl) {
@@ -287,7 +296,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),
-        .supported_spirv = SpirvVersion1_6,
+        .supported_spirv =
+            instance.ApiVersion() >= VK_API_VERSION_1_3 ? SpirvVersion1_6 : SpirvVersion1_5,
         .subgroup_size = instance.SubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
         .support_int8 = instance.IsShaderInt8Supported(),
@@ -295,6 +305,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .support_int64 = instance.IsShaderInt64Supported(),
         .support_float16 = instance.IsShaderFloat16Supported(),
         .support_float64 = instance.IsShaderFloat64Supported(),
+        .support_demote = instance.ApiVersion() >= VK_API_VERSION_1_3,
         .supports_denorm_behavior_independence =
             vk12_props.denormBehaviorIndependence != vk::ShaderFloatControlsIndependence::eNone,
         .supports_rounding_mode_independence =
@@ -345,15 +356,108 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
-    WarmUp();
 
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    std::vector<u8> driver_cache_data;
+    if (EmulatorSettings.IsPipelineCacheEnabled()) {
+        Storage::DataBase::Instance().Open();
+        Storage::DataBase::Instance().Load(Storage::BlobType::DriverCache, "driver",
+                                           driver_cache_data);
+    }
+    if (!driver_cache_data.empty()) {
+        // The first 32 bytes of a Vulkan pipeline cache are the standard header:
+        //   headerSize, headerVersion, vendorID, deviceID, pipelineCacheUUID[16].
+        // Dozen's pipelineCacheUUID is derived from the device properties, so a Mesa rebuild (every
+        // CI package) or a GPU driver update legitimately changes it and the blobs are unusable.
+        // Log both identities and keep the refused file so the next hardware report can say *why*
+        // a cache was dropped instead of leaving "UUID/device mismatch" to guesswork.
+        const auto dev_props = instance.GetPhysicalDevice().getProperties();
+        u32 hdr_size = 0, hdr_ver = 0, vendor = 0, dev_id = 0;
+        bool valid_hdr = driver_cache_data.size() >= 32;
+        if (valid_hdr) {
+            std::memcpy(&hdr_size, driver_cache_data.data() + 0, 4);
+            std::memcpy(&hdr_ver, driver_cache_data.data() + 4, 4);
+            std::memcpy(&vendor, driver_cache_data.data() + 8, 4);
+            std::memcpy(&dev_id, driver_cache_data.data() + 12, 4);
+            valid_hdr = hdr_size >= 32 && hdr_ver == 1 && vendor == dev_props.vendorID &&
+                        dev_id == dev_props.deviceID &&
+                        std::memcmp(driver_cache_data.data() + 16,
+                                    dev_props.pipelineCacheUUID.data(), 16) == 0;
+        }
+        const auto uuid_text = [](const u8* uuid) {
+            std::string text;
+            char part[3];
+            for (int i = 0; i < 16; ++i) {
+                std::snprintf(part, sizeof(part), "%02x", uuid[i]);
+                text += part;
+            }
+            return text;
+        };
+        std::printf("GPU: driver.vkcache identity: file vendor=%#x device=%#x uuid=%s | current "
+                    "vendor=%#x device=%#x uuid=%s\n",
+                    vendor, dev_id,
+                    driver_cache_data.size() >= 32 ? uuid_text(driver_cache_data.data() + 16).c_str()
+                                                   : "<none>",
+                    dev_props.vendorID, dev_props.deviceID,
+                    uuid_text(dev_props.pipelineCacheUUID.data()).c_str());
+        if (!valid_hdr) {
+            std::printf("GPU: discarding stale driver.vkcache (%zu KiB, %s)\n",
+                        driver_cache_data.size() >> 10,
+                        driver_cache_data.size() < 32 ? "truncated header"
+                        : (vendor != dev_props.vendorID || dev_id != dev_props.deviceID)
+                            ? "device mismatch"
+                            : "pipeline cache UUID changed (Mesa or GPU driver update)");
+            // One generation is kept as driver.vkcache.rejected for support: the identity line
+            // above then shows the two UUIDs side by side.
+            Storage::DataBase::Instance().RotateRejected(Storage::BlobType::DriverCache, "driver");
+            std::vector<u8>().swap(driver_cache_data);
+        }
+    }
+    vk::PipelineCacheCreateInfo cache_ci{};
+    if (!driver_cache_data.empty()) {
+        cache_ci.initialDataSize = driver_cache_data.size();
+        cache_ci.pInitialData = driver_cache_data.data();
+        std::printf("GPU: loaded driver.vkcache (%zu KiB)\n", driver_cache_data.size() >> 10);
+    }
+    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_ci);
+    if (cache_result != vk::Result::eSuccess && !driver_cache_data.empty()) {
+        auto retry = instance.GetDevice().createPipelineCacheUnique({});
+        cache_result = retry.result;
+        cache = std::move(retry.value);
+    }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+    std::vector<u8>().swap(driver_cache_data);
+#ifdef BB_UWP
+    _heapmin();
+#endif
+
+#ifndef BB_UWP
+    WarmUp();
+#endif
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    FlushCaches();
+    Sync();
+}
+
+namespace {
+void ReclaimMemoryBeforeRuntimePsoCompile() {
+#ifdef BB_UWP
+    try {
+        using winrt::Windows::System::MemoryManager;
+        const u64 used = MemoryManager::AppMemoryUsage();
+        const u64 limit = MemoryManager::AppMemoryUsageLimit();
+        if (limit > 0 && used + 640_MB >= limit) {
+            runtime_memory_page_out(32_MB);
+            _heapmin();
+        }
+    } catch (...) {
+    }
+#endif
+}
+} // namespace
 
 // bbport: shader/pipeline compile time on the GPU thread, reported by BB_FRAME_STATS.
 std::atomic<u64> g_bb_compile_ns;
@@ -429,6 +533,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
         LOG_INFO(Render_Vulkan, "Compiling graphics pipeline {:#x}", pipeline_hash);
         CompileTimer timer;
+        ReclaimMemoryBeforeRuntimePsoCompile();
 
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
@@ -444,6 +549,11 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
+#ifdef BB_UWP
+        if ((num_new_pipelines % 128u) == 0u) {
+            FlushCaches();
+        }
+#endif
 
         if (EmulatorSettings.IsShaderCollect()) {
             for (auto stage = 0; stage < MaxShaderStages; ++stage) {
@@ -467,6 +577,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
         LOG_INFO(Render_Vulkan, "Compiling compute pipeline {:#x}", pipeline_hash);
         CompileTimer timer;
+        ReclaimMemoryBeforeRuntimePsoCompile();
 
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
@@ -479,6 +590,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         }
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+#ifdef BB_UWP
+        if ((num_new_pipelines % 128u) == 0u) {
+            FlushCaches();
+        }
+#endif
 
         if (EmulatorSettings.IsShaderCollect()) {
             auto& m = sel.modules[0];
@@ -691,11 +807,32 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
 
-        const auto params = AmdGpu::GetParams(*pgm);
+        std::optional<Shader::ShaderParams> params;
+        if (sel.worker) {
+            sigjmp_buf recover;
+            if (sigsetjmp(recover, 0)) {
+                runtime_fault_recover = nullptr;
+                sel.worker->failed = true;
+                key.stage_hashes[stage_out_idx] = 0;
+                sel.infos[stage_out_idx] = nullptr;
+                return false;
+            }
+            runtime_fault_recover = &recover;
+            params = AmdGpu::TryGetParams(*pgm);
+            runtime_fault_recover = nullptr;
+            if (!params) {
+                sel.worker->failed = true;
+                key.stage_hashes[stage_out_idx] = 0;
+                sel.infos[stage_out_idx] = nullptr;
+                return false;
+            }
+        } else {
+            params.emplace(AmdGpu::GetParams(*pgm));
+        }
         std::optional<Shader::Gcn::FetchShaderData> fetch_shader_;
         std::tie(sel.infos[stage_out_idx], sel.modules[stage_out_idx], fetch_shader_,
                  key.stage_hashes[stage_out_idx]) =
-            GetProgram(sel, stage_in, stage_out, params, binding);
+            GetProgram(sel, stage_in, stage_out, *params, binding);
         if (fetch_shader_) {
             sel.fetch_shader = fetch_shader_;
         }
@@ -825,6 +962,9 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
+#ifdef BB_UWP
+    pools = Shader::Pools{};
+#endif
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
     vk::ShaderModule module;
@@ -874,6 +1014,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         // thread. A jump out of the specialization leaks its partial allocations (rare).
         sigjmp_buf recover;
         if (sigsetjmp(recover, 0)) {
+            runtime_fault_recover = nullptr;
             worker.failed = true;
             return {};
         }
@@ -1028,4 +1169,100 @@ std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::
     file.Read(code);
     return code;
 }
+
+bool PipelineCache::PrecompileArchiveCompute(const Shader::Info& info,
+                                             std::span<const u32> spv) {
+    if (!pipeline_cache || spv.empty()) {
+        return false;
+    }
+    const vk::Device device = instance.GetDevice();
+    const vk::ShaderModule mod = CompileSPV(spv, device);
+    if (!mod) {
+        return false;
+    }
+    SCOPE_EXIT {
+        device.destroyShaderModule(mod);
+    };
+    ComputePipelineKey key{.value = info.pgm_hash};
+    ComputePipeline::SerializationSupport sdata{};
+    ComputePipeline pipe{instance, scheduler, desc_heap, profile, *pipeline_cache,
+                         key,      info,      mod,       sdata,   true};
+    if (!pipe.IsValid()) {
+        return false;
+    }
+    driver_cache_dirty = true;
+    return true;
+}
+
+bool PipelineCache::PrecompileArchiveGraphics(
+    const Shader::Info* vs_info, const Shader::RuntimeInfo& vs_rt, std::span<const u32> vs_spv,
+    const std::optional<Shader::Gcn::FetchShaderData>& fetch, const Shader::Info* fs_info,
+    const Shader::RuntimeInfo& fs_rt, std::span<const u32> fs_spv, const GraphicsPipelineKey& key,
+    GraphicsPipeline::SerializationSupport& sdata) {
+    if (!pipeline_cache) {
+        return false;
+    }
+    const vk::Device device = instance.GetDevice();
+    vk::ShaderModule vs_mod{};
+    vk::ShaderModule fs_mod{};
+    SCOPE_EXIT {
+        if (fs_mod) {
+            device.destroyShaderModule(fs_mod);
+        }
+        if (vs_mod) {
+            device.destroyShaderModule(vs_mod);
+        }
+    };
+    if (vs_info) {
+        if (vs_spv.empty()) {
+            return false;
+        }
+        vs_mod = CompileSPV(vs_spv, device);
+        if (!vs_mod) {
+            return false;
+        }
+    }
+    if (fs_info) {
+        if (fs_spv.empty()) {
+            return false;
+        }
+        fs_mod = CompileSPV(fs_spv, device);
+        if (!fs_mod) {
+            return false;
+        }
+    }
+
+    std::array<const Shader::Info*, MaxShaderStages> infos{};
+    std::array<Shader::RuntimeInfo, MaxShaderStages> rts{};
+    std::array<vk::ShaderModule, MaxShaderStages> mods{};
+    if (vs_info) {
+        constexpr u32 v = static_cast<u32>(Shader::SwStage::Vertex);
+        infos[v] = vs_info;
+        rts[v] = vs_rt;
+        mods[v] = vs_mod;
+    }
+    if (fs_info) {
+        constexpr u32 f = static_cast<u32>(Shader::SwStage::Fragment);
+        infos[f] = fs_info;
+        rts[f] = fs_rt;
+        mods[f] = fs_mod;
+    }
+
+    GraphicsPipeline pipe{instance, scheduler, desc_heap, profile, key,   *pipeline_cache,
+                          infos,    rts,       fetch,     mods,    sdata, true};
+    if (!pipe.IsValid()) {
+        return false;
+    }
+    driver_cache_dirty = true;
+    return true;
+}
+
+size_t PipelineCache::GetDriverCacheBytes() const {
+    if (!pipeline_cache) {
+        return 0;
+    }
+    auto [res, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    return res == vk::Result::eSuccess ? data.size() : 0;
+}
+
 } // namespace Vulkan

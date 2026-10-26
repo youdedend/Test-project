@@ -133,6 +133,8 @@ private:
     void ScannerLoop(std::stop_token stop);
     void WorkerLoop(std::stop_token stop, u32 index);
     void Collect();
+    std::shared_ptr<Submission> FindSubmissionLocked(u64 seq) const;
+    bool HasContiguousRangeLocked(u64 from_seq, u64 to_seq) const;
 
     PipelineCache& pipeline_cache;
     std::unique_ptr<AmdGpu::Regs> initial_regs; ///< state at the start of `baseline_seq`

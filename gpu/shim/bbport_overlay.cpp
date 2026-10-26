@@ -16,10 +16,17 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+extern "C" uint64_t bb_uwp_app_memory_limit();
+extern "C" void bb_uwp_request_quit();
+#endif
+
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
-#ifdef _WIN32
+#if defined(_WIN32)
 asm(".section .rdata,\"dr\"\n"
     ".balign 16\n"
     ".global bb_font_ttf\n"
@@ -57,17 +64,28 @@ bool dirty = false; // settings changed while open: saved on close
 // The game's text dialog (SetTextEntry), guarded by imgui_mutex.
 bool text_entry_active = false;
 std::string text_entry_prompt, text_entry_text;
+std::atomic<bool> loading{false};
+std::atomic<u32> loading_done{0}, loading_total{0};
+std::string loading_label = "Preparing graphics pipelines...";
+bool choice_active = false;
+std::string choice_title;
+std::vector<std::string> choice_items, choice_notes;
+int choice_index = 0;
+std::atomic<int> choice_result{-1};
 float base_scale = 1.0f;
 
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f, last_present_ms = 0.0f;
+std::atomic<uint64_t> present_frame_count{0};
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
+#ifndef BB_UWP
     ImGui::GetIO().MouseDrawCursor = value;
+#endif
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -146,7 +164,7 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, changed);
 }
 
-void Hint(const char* text) {
+[[maybe_unused]] void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::BeginItemTooltip()) {
@@ -174,7 +192,218 @@ std::string FpsText() {
     return text;
 }
 
+#ifdef BB_UWP
+void MenuXbox() {
+    auto& s = BbSettings::Get();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
+                                   viewport->WorkPos.y + 40.0f * base_scale),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(640.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(0.0f, 0.0f),
+        ImVec2(FLT_MAX, std::max(viewport->WorkSize.y - 60.0f * base_scale, 200.0f * base_scale)));
+    bool keep_open = true;
+    if (!ImGui::Begin("Bloodborne - Xbox Settings (L3+R3)", &keep_open,
+                      ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Text("%s   |   RAM: %llu / %llu MiB   |   Game v%s", FpsText().c_str(),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20), s.app_ver_text);
+    ImGui::TextDisabled("D-Pad / Left Stick: Navigate   A: Select   B / L3+R3: Save & Close");
+
+    ImGui::SeparatorText("Resolution & Display");
+    const int scene_res =
+        std::clamp(s.xbox_scene_res.load(), 0, BbSettings::XboxSceneCount - 1);
+    if (ImGui::BeginCombo("Scene resolution (3D)", BbSettings::XboxSceneLabel(scene_res))) {
+        for (int i = 0; i < BbSettings::XboxSceneCount; ++i) {
+            if (ImGui::Selectable(BbSettings::XboxSceneLabel(i), i == scene_res)) {
+                Store(s.xbox_scene_res, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::Text("Active 3D scene: %d x %d   |   HUD & menus: 1920 x 1080",
+                s.active_render_width.load(), s.active_render_height.load());
+    ImGui::TextDisabled("Applies immediately on the next frame (lower scene resolution boosts FPS).");
+
+    static const char* xbox_outputs[BbSettings::XboxOutputCount] = {
+        "1280 x 720 (720p)",
+        "1920 x 1080 (1080p)",
+        "2560 x 1440 (1440p)",
+        "3840 x 2160 (4K)",
+    };
+    const int output = std::clamp(s.output_res.load(), 0, BbSettings::XboxOutputCount - 1);
+    if (ImGui::BeginCombo("Display output", xbox_outputs[output])) {
+        for (int i = 0; i < BbSettings::XboxOutputCount; ++i) {
+            if (ImGui::Selectable(xbox_outputs[i], i == output)) {
+                Store(s.output_res, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    Checkbox("V-Sync", s.vsync);
+
+    if (s.app_ver_is_0109) {
+        static constexpr int cap_values[] = {30, 60, 90, 120, 0};
+        static const char* cap_labels[] = {"30 FPS", "60 FPS", "90 FPS", "120 FPS", "Uncapped"};
+        int cap_idx = 1;
+        const int cur_cap = s.fps_cap.load();
+        for (int i = 0; i < 5; ++i) {
+            if (cap_values[i] == cur_cap) cap_idx = i;
+        }
+        if (ImGui::BeginCombo("Frame-rate limit", cap_labels[cap_idx])) {
+            for (int i = 0; i < 5; ++i) {
+                if (ImGui::Selectable(cap_labels[i], i == cap_idx)) {
+                    Store(s.fps_cap, cap_values[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    Slider("Brightness (gamma)", s.gamma, 0.60f, 1.40f);
+    if (std::abs(s.gamma.load() - 1.0f) > 0.005f) {
+        ImGui::SameLine();
+        if (ImGui::Button("Reset###gamma_reset")) {
+            Store(s.gamma, 1.0f, true);
+        }
+    }
+
+    ImGui::SeparatorText("Interface & Audio");
+    Checkbox("Show FPS & memory counter", s.show_fps);
+    Checkbox("Mute audio when unfocused", s.mute_unfocused);
+
+    static constexpr int xbox_prompt_vals[] = {BbSettings::PromptsXbox,
+                                               BbSettings::PromptsPlayStation};
+    static const char* xbox_prompt_labels[] = {"Xbox", "PlayStation"};
+    int prompt_idx = (s.button_prompts.load() == BbSettings::PromptsPlayStation) ? 1 : 0;
+    if (ImGui::BeginCombo("Button prompts", xbox_prompt_labels[prompt_idx])) {
+        for (int i = 0; i < 2; ++i) {
+            if (ImGui::Selectable(xbox_prompt_labels[i], i == prompt_idx)) {
+                Store(s.button_prompts, xbox_prompt_vals[i], true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    if (s.app_ver_is_0109) {
+        ImGui::SeparatorText("Game Patches (v01.09 - restart required)");
+        static constexpr int fps_patch_vals[] = {30, 60, 90, 0};
+        static const char* fps_patch_labels[] = {
+            "30 FPS (Original)",
+            "60 FPS++",
+            "90 FPS++",
+            "Uncap FPS++",
+        };
+        int fps_patch_idx = 1;
+        const int cur_fps_patch = s.xbox_fps_patch.load();
+        for (int i = 0; i < 4; ++i) {
+            if (fps_patch_vals[i] == cur_fps_patch) fps_patch_idx = i;
+        }
+        if (ImGui::BeginCombo("Engine FPS patch", fps_patch_labels[fps_patch_idx])) {
+            for (int i = 0; i < 4; ++i) {
+                if (ImGui::Selectable(fps_patch_labels[i], i == fps_patch_idx)) {
+                    Store(s.xbox_fps_patch, fps_patch_vals[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        static const char* lods[] = {"Highest (-2)", "Original", "Lower (+1)", "Lowest (+2)"};
+        static constexpr int lod_values[] = {-2, 0, 1, 2};
+        int lod_index = 1;
+        for (int i = 0; i < 4; ++i) {
+            if (lod_values[i] == s.model_lod) lod_index = i;
+        }
+        if (ImGui::BeginCombo("Model detail (LOD)", lods[lod_index])) {
+            for (int i = 0; i < 4; ++i) {
+                if (ImGui::Selectable(lods[i], i == lod_index)) {
+                    Store(s.model_lod, lod_values[i], true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (ImGui::CollapsingHeader("Visual & gameplay patches (v01.09)")) {
+            for (int e = 0; e < BbSettings::EffectCount; ++e) {
+                if (!BbSettings::IsXboxSupportedEffect(e)) continue;
+                Checkbox(BbSettings::Effects[e].label, s.effects[e]);
+            }
+        }
+
+        bool restart_needed = (s.xbox_fps_patch != s.startup_xbox_fps_patch) ||
+                              (s.model_lod != s.startup_model_lod);
+        for (int e = 0; e < BbSettings::EffectCount; ++e) {
+            if (BbSettings::IsXboxSupportedEffect(e)) {
+                restart_needed |= (s.effects[e] != s.startup_effects[e]);
+            }
+        }
+        if (restart_needed) {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                               "Startup patch changes apply after restarting the game");
+            if (ImGui::Button("Apply and restart")) {
+                dirty = false;
+                BbSettings::Save();
+                runtime_restart();
+            }
+        }
+    } else {
+        ImGui::Separator();
+        ImGui::TextDisabled(
+            "Game dump v%s: 60 FPS++ & engine-effect patches require Bloodborne update v01.09.",
+            s.app_ver_text);
+    }
+
+    if (dirty) {
+        dirty = false;
+        BbSettings::Save();
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Close")) {
+        keep_open = false;
+    }
+    static bool quit_armed = false;
+    ImGui::SameLine();
+    if (ImGui::Button(quit_armed ? "Press again to quit###bb_quit" : "Quit game###bb_quit")) {
+        if (quit_armed) {
+            BbSettings::Save();
+            bb_uwp_request_quit();
+        }
+        quit_armed = !quit_armed;
+    }
+    if (quit_armed && !ImGui::IsItemFocused() && !ImGui::IsItemHovered()) {
+        quit_armed = false;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Saved to LocalState\\bbport.ini");
+
+    static bool popup_was_open = false;
+    const bool any_popup =
+        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !any_popup && !popup_was_open) {
+        keep_open = false;
+    }
+    popup_was_open = any_popup;
+
+    ImGui::End();
+    if (!keep_open) {
+        popup_was_open = false;
+        SetOpen(false);
+    }
+}
+#endif
+
 void Menu() {
+#ifdef BB_UWP
+    MenuXbox();
+    return;
+#else
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
@@ -228,7 +457,7 @@ void Menu() {
         }
         ImGui::EndCombo();
     }
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     const bool fsr411_selected = s.upscaler == BbSettings::UpscalerFsr411;
     static const char* fsr411_backends[] = {"Vulkan (fsr4vk)", "AMD DX12"};
     ImGui::BeginDisabled(!fsr411_selected);
@@ -356,6 +585,7 @@ void Menu() {
     Hint("Red/green: horizontal/vertical motion (8 pixels = full brightness). Blue: the pixel has accurate object motion, beyond camera motion. A moving object with no blue or red/green is treated as stationary and may leave trails.");
     ImGui::EndDisabled(); // upscaler off
 
+#ifndef BB_UWP
     ImGui::SeparatorText("Frame generation");
     static const char* frame_gens[] = {"Off", "FSR 3.1 (any GPU)", "DLSS (NVIDIA RTX 40/50)", "AMD ML-FG 4.0.1 (RX 9000, 2x SDR, experimental)"};
     const int frame_gen = s.frame_gen;
@@ -420,6 +650,7 @@ void Menu() {
     if (const char* problem = s.frame_gen_problem.load(); problem && !s.frame_gen_hdr) {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s", problem);
     }
+#endif
 
     ImGui::SeparatorText("Output resolution");
     static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160",
@@ -542,6 +773,7 @@ void Menu() {
     if (!keep_open) {
         SetOpen(false);
     }
+#endif
 }
 
 // The game's text dialog: what is typed, and how to finish (keyboard or controller).
@@ -563,8 +795,14 @@ void TextEntryBox() {
     ImGui::Text("%s_", text_entry_text.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
+#ifdef BB_UWP
+    ImGui::TextDisabled("Controller: A / Menu = Confirm, B = Cancel");
+    ImGui::TextDisabled("D-Pad: Up/Down = Letter, Right = Add, Left / X = Backspace");
+    ImGui::TextDisabled("USB Keyboard: type, Backspace, Enter = Confirm, Esc = Cancel");
+#else
     ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
     ImGui::TextDisabled("Controller: Cross (A) = OK, Circle (B) = cancel");
+#endif
     ImGui::End();
 }
 
@@ -579,6 +817,12 @@ void FpsCounter() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
+#ifdef BB_UWP
+    const auto& s = BbSettings::Get();
+    ImGui::Text("%s  %dp  %llu/%llu MiB", FpsText().c_str(), s.active_render_height.load(),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20));
+#else
     const auto& s = BbSettings::Get();
     ImGui::Text("%s  %s", FpsText().c_str(),
                 s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
@@ -587,6 +831,66 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                                                          : "");
+#endif
+    ImGui::End();
+}
+
+void LoadingScreen() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x * 0.48f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::Begin("##loading", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "Bloodborne");
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", loading_label.c_str());
+    const u32 done = loading_done.load(), total = loading_total.load();
+    if (total > 0) {
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%u / %u", done, total);
+        ImGui::ProgressBar(float(done) / float(total), ImVec2(-1.0f, 0.0f), overlay);
+    }
+    ImGui::End();
+}
+
+void ChoiceBox() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(viewport->WorkSize.x * 0.46f, 0.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.86f, viewport->WorkSize.y * 0.84f));
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGui::Begin("##choice", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoNav);
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", choice_title.c_str());
+    ImGui::Separator();
+    for (int i = 0; i < int(choice_items.size()); ++i) {
+        const bool selected = (i == choice_index);
+        if (selected) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.55f, 0.22f, 0.18f, 0.90f));
+        }
+        if (ImGui::Selectable(choice_items[size_t(i)].c_str(), selected)) {
+            choice_index = i;
+            choice_result = i;
+            choice_active = false;
+        }
+        if (selected) {
+            ImGui::PopStyleColor();
+        }
+        if (selected && size_t(i) < choice_notes.size() && !choice_notes[size_t(i)].empty()) {
+            ImGui::TextDisabled("  %s", choice_notes[size_t(i)].c_str());
+        }
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("D-Pad Up/Down: select   A: confirm   B: back");
     ImGui::End();
 }
 
@@ -618,13 +922,35 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                    int(bb_font_ttf_end - bb_font_ttf), 18.0f, &font_config);
 
     const vk::Instance vk_instance = instance.GetInstance();
-    ImGui_ImplVulkan_LoadFunctions(
-        instance.ApiVersion(),
+    struct LoaderContext {
+        VkInstance instance;
+        VkDevice device;
+    };
+    LoaderContext loader{vk_instance, static_cast<VkDevice>(instance.GetDevice())};
+    const bool functions_loaded = ImGui_ImplVulkan_LoadFunctions(
+        std::min(instance.ApiVersion(), Vulkan::TargetVulkanApiVersion),
         [](const char* name, void* user) {
-            return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(
-                *static_cast<const vk::Instance*>(user), name);
+            auto& loader = *static_cast<LoaderContext*>(user);
+            auto proc = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr(loader.device, name);
+            if (!proc) {
+                proc = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(loader.instance, name);
+            }
+#ifdef BB_UWP
+            if (!proc && (std::strstr(name, "Surface") || std::strstr(name, "Swapchain"))) {
+                return reinterpret_cast<PFN_vkVoidFunction>(+[] {
+                    std::fputs("Overlay: ImGui called an unsupported WSI function on UWP\n", stderr);
+                    std::abort();
+                });
+            }
+#endif
+            return proc;
         },
-        const_cast<vk::Instance*>(&vk_instance));
+        &loader);
+    if (!functions_loaded) {
+        std::puts("Overlay: required Vulkan functions unavailable, disabled");
+        ImGui::DestroyContext();
+        return;
+    }
 
     const VkFormat color_format = static_cast<VkFormat>(format);
     ImGui_ImplVulkan_InitInfo info{};
@@ -678,6 +1004,23 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
+        if (choice_active) {
+            if (down && !event.key.repeat && !choice_items.empty()) {
+                if (event.key.key == SDLK_UP) {
+                    choice_index = (choice_index + int(choice_items.size()) - 1) % int(choice_items.size());
+                } else if (event.key.key == SDLK_DOWN) {
+                    choice_index = (choice_index + 1) % int(choice_items.size());
+                } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
+                           event.key.key == SDLK_SPACE) {
+                    choice_result = choice_index;
+                    choice_active = false;
+                } else if (event.key.key == SDLK_ESCAPE) {
+                    choice_result = int(choice_items.size()) - 1;
+                    choice_active = false;
+                }
+            }
+            return true;
+        }
         if (down && !event.key.repeat &&
             (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);
@@ -698,6 +1041,22 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
         const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         const u8 button = event.gbutton.button;
+        if (choice_active) {
+            if (down && !choice_items.empty()) {
+                if (button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                    choice_index = (choice_index + int(choice_items.size()) - 1) % int(choice_items.size());
+                } else if (button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                    choice_index = (choice_index + 1) % int(choice_items.size());
+                } else if (button == SDL_GAMEPAD_BUTTON_SOUTH || button == SDL_GAMEPAD_BUTTON_START) {
+                    choice_result = choice_index;
+                    choice_active = false;
+                } else if (button == SDL_GAMEPAD_BUTTON_EAST) {
+                    choice_result = int(choice_items.size()) - 1;
+                    choice_active = false;
+                }
+            }
+            return true;
+        }
         if (button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
             l3_down = down;
         } else if (button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
@@ -758,11 +1117,38 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps);
+    return initialized &&
+           (loading || choice_active || menu_open || text_entry_active || BbSettings::Get().show_fps);
 }
 
 bool CapturesInput() {
-    return menu_open || text_entry_active;
+    return menu_open || text_entry_active || choice_active;
+}
+
+void SetLoading(bool active, u32 done, u32 total) {
+    loading_done = done;
+    loading_total = total;
+    loading = active;
+}
+
+void SetLoadingLabel(const std::string& label) {
+    std::scoped_lock lock{imgui_mutex};
+    loading_label = label;
+}
+
+void BeginChoice(const std::string& prompt, const std::vector<std::string>& items,
+                 const std::vector<std::string>& notes, int default_index) {
+    std::scoped_lock lock{imgui_mutex};
+    choice_title = prompt;
+    choice_items = items;
+    choice_notes = notes;
+    choice_index = (default_index >= 0 && default_index < int(items.size())) ? default_index : 0;
+    choice_result = -1;
+    choice_active = true;
+}
+
+int PollChoice() {
+    return choice_result.load();
 }
 
 void SetTextEntry(bool active, const std::string& prompt, const std::string& text) {
@@ -774,6 +1160,7 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 
 // Called for every presented image: the interval for the FPS readout and BB_FPS_LOG.
 void NotePresent() {
+    present_frame_count.fetch_add(1, std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
@@ -795,6 +1182,7 @@ void NotePresent() {
         const float elapsed = std::chrono::duration<float>(now - window_start).count();
         if (elapsed >= 5.0f) {
             std::printf("Frame rate: %.1f FPS, slowest frame %.1f ms\n", frames / elapsed, worst);
+            std::fflush(stdout);
             window_start = now;
             frames = 0;
             worst = 0.0f;
@@ -822,10 +1210,16 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
 
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if (loading) {
+        LoadingScreen();
+    }
+    if (choice_active) {
+        ChoiceBox();
+    }
     if (menu_open) {
         Menu();
     }
-    if (BbSettings::Get().show_fps && !menu_open) {
+    if (BbSettings::Get().show_fps && !menu_open && !loading && !choice_active) {
         FpsCounter();
     }
     if (text_entry_active) {
@@ -854,3 +1248,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
 }
 
 } // namespace BbOverlay
+
+extern "C" uint64_t bbgpu_uwp_present_count(void) {
+    return BbOverlay::present_frame_count.load(std::memory_order_relaxed);
+}

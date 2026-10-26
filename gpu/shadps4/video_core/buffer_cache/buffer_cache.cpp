@@ -28,7 +28,11 @@
 namespace VideoCore {
 
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
+#ifdef BB_UWP
+static constexpr size_t STREAM_BUFFER_SIZE = 48_MB;
+#else
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
+#endif
 
 static constexpr auto ARENA_USAGE =
     vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
@@ -60,6 +64,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
+#ifdef BB_UWP
+    InitializeDenseBuffers();
+    return;
+#endif
     while (arena_page_bits > MIN_ARENA_PAGE_BITS &&
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
@@ -160,6 +168,10 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
+#ifdef BB_UWP
+    BbCopy::QueueCopy(item);
+    return;
+#endif
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
         return;
@@ -329,6 +341,12 @@ void PrintBufferStats() {
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
+#ifdef BB_UWP
+    if (size == 0 || device_addr >= (u64{1} << ADDRESS_SPACE_BITS) ||
+        size > (u64{1} << ADDRESS_SPACE_BITS) - device_addr) {
+        return {null_buffer.get(), 0};
+    }
+#endif
     const bool stats = BufferStatsEnabled();
     if (stats) {
         PrintBufferStats();
@@ -427,14 +445,32 @@ void BufferCache::ProcessFaultBuffer() {
 
 void BufferCache::SynchronizeDmaBuffers() {
     for (const auto& range : resident_ranges) {
+#ifdef BB_UWP
+        const VAddr end_addr = range.end << block_shift;
+        for (VAddr cur = range.start << block_shift; cur < end_addr;) {
+            const auto* arena = address_space[cur >> arena_page_bits];
+            if (!arena) {
+                cur = ((cur >> arena_page_bits) + 1) << arena_page_bits;
+                continue;
+            }
+            const u64 arena_end = arena->cpu_addr + arena->size_bytes;
+            const u64 step = std::min<u64>({end_addr - cur, arena_end - cur, u64{1} << 30});
+            SynchronizeMemory(arena, cur, static_cast<u32>(step), false, false);
+            cur += step;
+        }
+#else
         const u64 page = range.start >> (arena_page_bits - block_shift);
         const VAddr device_addr = range.start << block_shift;
         const u64 size = (range.end - range.start) << block_shift;
         SynchronizeMemory(address_space[page], device_addr, size, false, false);
+#endif
     }
 }
 
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
+#ifdef BB_UWP
+    return GetDenseArena(first_block, last_block);
+#endif
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
     ASSERT_MSG(last_page - first_page <= 1,
@@ -489,6 +525,10 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
 }
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+#ifdef BB_UWP
+    EnsureDenseResident(arena, first_block, last_block);
+    return;
+#endif
     u32 resident_blocks{};
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1, [&](u64 start, u64 end) {
@@ -761,6 +801,9 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
 }
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
+#ifdef BB_UWP
+    ReleaseRetiredArenas();
+#endif
     if (pending_binds.empty()) {
         return;
     }

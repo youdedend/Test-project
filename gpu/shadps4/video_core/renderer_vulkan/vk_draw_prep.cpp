@@ -9,12 +9,17 @@
 
 #include "bbport_threads.h"
 #include "bbport_toggles.h"
+#include "dense_arena_lifetime.h"
 #include "common/thread.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include <xxhash.h>
+
+#ifdef BB_UWP
+#include <winrt/Windows.System.h>
+#endif
 
 namespace Vulkan {
 
@@ -51,16 +56,20 @@ u32 DefaultWorkerCount() {
     if (const char* env = std::getenv("BB_PREP_WORKERS")) {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
+#ifdef BB_UWP
+    return 0;
+#else
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
     return std::clamp<u32>(BbThreads::Available() / 2, 1, 8);
+#endif
 }
 
 /// Flattened user data of one submission: chunks never move, so the GPU thread can read a
 /// prepared draw's data while the worker keeps appending.
 struct FlatArena {
     static constexpr size_t ChunkWords = 16 * 1024;
-    std::vector<std::unique_ptr<u32[]>> chunks;
+    std::vector<std::unique_ptr<u32[]>>* chunks = nullptr;
     size_t used = ChunkWords;
 
     const u32* Append(const std::vector<u32>& data) {
@@ -73,11 +82,11 @@ struct FlatArena {
         static_assert(std::is_trivially_copyable_v<T> && alignof(T) <= 8);
         const size_t words = (count * sizeof(T) + sizeof(u32) - 1) / sizeof(u32);
         used = (used + 1) & ~size_t(1);
-        if (chunks.empty() || words > ChunkWords - std::min(used, ChunkWords)) {
-            chunks.push_back(std::make_unique<u32[]>(std::max(ChunkWords, words)));
+        if (chunks->empty() || words > ChunkWords - std::min(used, ChunkWords)) {
+            chunks->push_back(std::make_unique<u32[]>(std::max(ChunkWords, words)));
             used = 0;
         }
-        u32* dst = chunks.back().get() + used;
+        u32* dst = chunks->back().get() + used;
         if (count) {
             std::memcpy(dst, data, count * sizeof(T));
         }
@@ -221,11 +230,46 @@ DrawPreparation::~DrawPreparation() {
     scanner = {};
 }
 
+std::shared_ptr<DrawPreparation::Submission> DrawPreparation::FindSubmissionLocked(u64 seq) const {
+    const auto it = std::ranges::lower_bound(submissions, seq, {}, &Submission::seq);
+    if (it != submissions.end() && (*it)->seq == seq) {
+        return *it;
+    }
+    return {};
+}
+
+bool DrawPreparation::HasContiguousRangeLocked(u64 from_seq, u64 to_seq) const {
+    if (from_seq >= to_seq) {
+        return true;
+    }
+    const auto it = std::ranges::lower_bound(submissions, from_seq, {}, &Submission::seq);
+    if (it == submissions.end() || (*it)->seq != from_seq) {
+        return false;
+    }
+    const u64 count = to_seq - from_seq;
+    const auto rem = static_cast<u64>(std::distance(it, submissions.end()));
+    if (rem < count) {
+        return false;
+    }
+    return (*(it + static_cast<std::ptrdiff_t>(count - 1)))->seq == to_seq - 1;
+}
+
 std::shared_ptr<DrawPreparation::Submission> DrawPreparation::Build(
     std::span<const u32> commands) {
     if (!Enabled()) {
         return {};
     }
+#ifdef BB_UWP
+    try {
+        using winrt::Windows::System::MemoryManager;
+        const u64 used = MemoryManager::AppMemoryUsage();
+        const u64 limit = MemoryManager::AppMemoryUsageLimit();
+        if (limit > 0 && used + 256_MB >= limit) {
+            return {};
+        }
+    } catch (...) {
+    }
+#endif
     auto submission = std::make_shared<Submission>();
     submission->commands.assign(commands.begin(), commands.end());
     ForEachPacket(submission->commands, [&](const AmdGpu::PM4Header* header) {
@@ -263,11 +307,15 @@ void DrawPreparation::BeginSubmission(u64 seq, const AmdGpu::Regs& regs, u64 reg
         baseline_ready = true;
         cv.notify_all();
     }
-    // Idle helpers can starve on a busy CPU. Rather than queueing without bound, restart
-    // them from the GPU thread's own state (one register copy) once the scanner lags.
+    // Idle helpers can starve on a busy CPU, and UWP memory pressure can skip individual Build()
+    // copies. Restart from the GPU thread's live state whenever the scanner lags or a skipped
+    // sequence number left a gap before `seq`.
     constexpr u64 MaxScanLag = 64;
-    if (!submissions.empty() && seq > tail_seq + MaxScanLag &&
-        submissions.front()->seq < seq && !submissions.front()->scanned.load()) {
+    const bool lag_exceeded = !submissions.empty() && seq > tail_seq + MaxScanLag &&
+                              submissions.front()->seq < seq &&
+                              !submissions.front()->scanned.load(std::memory_order_acquire);
+    const bool gap_before_seq = seq > tail_seq && !HasContiguousRangeLocked(tail_seq, seq);
+    if (lag_exceeded || gap_before_seq) {
         *tail_regs = regs;
         tail_seq = seq;
         tail_checksum = reg_checksum;
@@ -277,10 +325,7 @@ void DrawPreparation::BeginSubmission(u64 seq, const AmdGpu::Regs& regs, u64 reg
         ++rebases;
         cv.notify_all();
     }
-    if (!submissions.empty() && seq >= submissions.front()->seq &&
-        seq - submissions.front()->seq < submissions.size()) {
-        current = submissions[seq - submissions.front()->seq];
-    }
+    current = FindSubmissionLocked(seq);
 }
 
 void DrawPreparation::EndSubmission() {
@@ -346,8 +391,11 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
         {
             std::unique_lock lk{mutex};
             cv.wait(lk, stop, [&] {
-                return next_seq < tail_seq ||
-                       (!submissions.empty() && submissions.back()->seq >= next_seq);
+                if (next_seq < tail_seq) {
+                    return true;
+                }
+                submission = FindSubmissionLocked(next_seq);
+                return submission != nullptr;
             });
             if (stop.stop_requested()) {
                 return;
@@ -357,16 +405,17 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
                 *regs = *tail_regs;
                 checksum = tail_checksum;
                 next_seq = tail_seq;
+                submission.reset();
                 continue;
             }
-            // Unscanned buffers are only collected by a rebase, so `next_seq` is still queued.
-            submission = submissions[next_seq - submissions.front()->seq];
         }
         submission->start_checksum = checksum;
         dirty.Clear();
+        BbUwp::DenseArenas().Retain();
         ForEachPacket(submission->commands, [&](const AmdGpu::PM4Header* header) {
             AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(*regs, header, checksum, &dirty);
         });
+        BbUwp::DenseArenas().Release();
         submission->delta.Capture(*regs, dirty);
         submission->end_checksum = checksum;
         {
@@ -388,7 +437,6 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
     sel.regs = regs.get();
     PrepWorker prep_worker{};
     sel.worker = &prep_worker;
-    FlatArena arena;
     std::vector<std::shared_ptr<Submission>> path;
 
     // The nearest scanned buffer the GPU thread has not reached and no worker has claimed.
@@ -397,7 +445,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         for (const auto& submission : submissions) {
             if (submission->seq >= gpu && submission->seq >= tail_seq &&
                 submission->scanned.load(std::memory_order_acquire) &&
-                !submission->claimed.load(std::memory_order_relaxed)) {
+                !submission->claimed.load(std::memory_order_relaxed) &&
+                HasContiguousRangeLocked(tail_seq, submission->seq)) {
                 return submission;
             }
         }
@@ -406,6 +455,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
 
     while (!stop.stop_requested()) {
         std::shared_ptr<Submission> target;
+        bool path_ok = true;
         {
             std::unique_lock lk{mutex};
             // gpu_seq moves without the lock: keep the candidate the predicate found.
@@ -418,16 +468,26 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             target->claimed.store(true, std::memory_order_relaxed);
             // Buffers between this worker's state and the target: their deltas. A position
-            // already collected (or past the target) restarts from the queue's tail state.
-            if (position == NoPosition || position < tail_seq || position > target->seq) {
+            // already collected (or past the target, or across a gap) restarts from tail_regs.
+            if (position == NoPosition || position < tail_seq || position > target->seq ||
+                !HasContiguousRangeLocked(position, target->seq)) {
                 *regs = *tail_regs;
                 position = tail_seq;
             }
-            const u64 front = submissions.front()->seq;
             path.clear();
             for (u64 seq = position; seq < target->seq; ++seq) {
-                path.push_back(submissions[seq - front]);
+                auto step = FindSubmissionLocked(seq);
+                if (!step || !step->scanned.load(std::memory_order_acquire)) {
+                    path_ok = false;
+                    break;
+                }
+                path.push_back(std::move(step));
             }
+        }
+        if (!path_ok) {
+            path.clear();
+            position = NoPosition;
+            continue;
         }
         for (const auto& step : path) {
             step->delta.Apply(*regs);
@@ -435,7 +495,12 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         path.clear();
         u64 checksum = target->start_checksum;
         u32 ordinal = 0;
-        arena = FlatArena{};
+        // The worker walks table pointers and fetch-shader memory belonging to this submission:
+        // hold the dense arenas it may reference until its draws are prepared. Released on both
+        // the normal path and after a fault jumps back to the recovery point below.
+        BbUwp::DenseArenas().Retain();
+        target->flat_chunks.clear();
+        FlatArena arena{&target->flat_chunks};
         ForEachPacket(target->commands, [&](const AmdGpu::PM4Header* header) {
             AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(*regs, header, checksum);
             if (!IsDirectDraw(header->type3.opcode)) {
@@ -448,37 +513,53 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                 prep_worker.stages.clear();
                 prep_worker.failed = false;
                 sel.draw_indirect_params = {};
-                if (pipeline_cache.PrepareGraphicsPipeline(sel)) {
-                    draw.reg_checksum = checksum;
-                    draw.key = sel.graphics_key;
-                    draw.num_stages = static_cast<u32>(prep_worker.stages.size());
-                    for (u32 i = 0; i < draw.num_stages; ++i) {
-                        const auto& stage = prep_worker.stages[i];
-                        draw.stages[i] = {
-                            .program = stage.program,
-                            .hash = stage.hash,
-                            .hw_stage = stage.hw_stage,
-                            .pgm_base = stage.pgm_base,
-                            .flat = arena.Append(*stage.flat),
-                            .flat_size = static_cast<u32>(stage.flat->size()),
-                        };
-                        PrepareResources(prep_worker.infos.at(stage.program), draw.stages[i],
-                                         arena);
+                // Every guest-memory read this draw preparation performs (resource sharp walks,
+                // image/sampler descriptor hashes, the fetch-shader attributes) runs under a
+                // recovery point: ahead of the GPU thread the guest may already have reused that
+                // memory, and a speculative read must leave the draw to the GPU thread instead of
+                // faulting bb:DrawPrep<N>. The pipeline-cache part has its own nested recovery
+                // point; this one covers the flat copies and vertex-input preparation as well.
+                const bool prepared = [&]() -> bool {
+                    sigjmp_buf recover;
+                    if (sigsetjmp(recover, 0) != 0) {
+                        runtime_fault_recover = nullptr;
+                        return false;
                     }
-                    draw.vertex.valid = false;
-                    const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
-                    if (vs && sel.fetch_shader) {
-                        PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
+                    runtime_fault_recover = &recover;
+                    bool ready = false;
+                    if (pipeline_cache.PrepareGraphicsPipeline(sel)) {
+                        draw.reg_checksum = checksum;
+                        draw.key = sel.graphics_key;
+                        draw.num_stages = static_cast<u32>(prep_worker.stages.size());
+                        for (u32 i = 0; i < draw.num_stages; ++i) {
+                            const auto& stage = prep_worker.stages[i];
+                            draw.stages[i] = {
+                                .program = stage.program,
+                                .hash = stage.hash,
+                                .hw_stage = stage.hw_stage,
+                                .pgm_base = stage.pgm_base,
+                                .flat = arena.Append(*stage.flat),
+                                .flat_size = static_cast<u32>(stage.flat->size()),
+                            };
+                            PrepareResources(prep_worker.infos.at(stage.program), draw.stages[i],
+                                             arena);
+                        }
+                        draw.vertex.valid = false;
+                        const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
+                        if (vs && sel.fetch_shader) {
+                            PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
+                        }
+                        ready = true;
                     }
-                    draw.state.store(PreparedDraw::Ready, std::memory_order_release);
-                } else {
-                    draw.state.store(PreparedDraw::Unavailable, std::memory_order_release);
-                }
+                    runtime_fault_recover = nullptr;
+                    return ready;
+                }();
+                draw.state.store(prepared ? PreparedDraw::Ready : PreparedDraw::Unavailable,
+                                 std::memory_order_release);
             }
             ++ordinal;
         });
-        // The arena's chunks live as long as the submission.
-        target->flat_chunks = std::move(arena.chunks);
+        BbUwp::DenseArenas().Release();
         position = target->seq + 1;
     }
 }

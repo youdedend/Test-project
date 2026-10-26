@@ -13,16 +13,18 @@
 
 #include <miniz.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <queue>
 
 namespace {
 
 std::mutex submit_mutex{};
-u32 num_requests{};
+std::atomic<u32> num_requests{0};
 std::condition_variable_any request_cv{};
 std::queue<std::packaged_task<void()>> req_queue{};
 std::mutex m_request{};
@@ -40,30 +42,34 @@ void ProcessIO(const std::stop_token& stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
+            Common::CondvarWait(request_cv, lk, stoken, [&] {
+                return num_requests.load(std::memory_order_acquire) != 0;
+            });
         }
 
         if (stoken.stop_requested()) {
             break;
         }
 
-        while (num_requests) {
+        while (num_requests.load(std::memory_order_acquire) != 0) {
             std::packaged_task<void()> request{};
             {
                 std::scoped_lock lock{m_request};
                 if (req_queue.empty()) {
-                    continue;
+                    break;
                 }
                 request = std::move(req_queue.front());
                 req_queue.pop();
             }
 
             if (request.valid()) {
-                request();
-                request.get_future().wait();
+                try {
+                    request();
+                } catch (...) {
+                }
             }
 
-            --num_requests;
+            num_requests.fetch_sub(1, std::memory_order_acq_rel);
         }
     }
 }
@@ -81,6 +87,9 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     }
     case BlobType::ShaderProfile: {
         return "bin";
+    }
+    case BlobType::DriverCache: {
+        return "vkcache";
     }
     default:
         UNREACHABLE();
@@ -120,11 +129,31 @@ void DataBase::Open() {
     opened = true;
 }
 
+void DataBase::Flush() {
+    if (!IsOpened()) {
+        return;
+    }
+    auto prom = std::make_shared<std::promise<void>>();
+    auto done = prom->get_future();
+    std::packaged_task<void()> fence{[prom] { prom->set_value(); }};
+    {
+        std::scoped_lock lock{m_request};
+        req_queue.emplace(std::move(fence));
+    }
+    {
+        std::scoped_lock lk{submit_mutex};
+        num_requests.fetch_add(1, std::memory_order_acq_rel);
+        request_cv.notify_one();
+    }
+    done.wait();
+}
+
 void DataBase::Close() {
     if (!IsOpened()) {
         return;
     }
 
+    Flush();
     io_worker.request_stop();
     io_worker.join();
 
@@ -164,7 +193,12 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                     }
                 }
                 std::error_code error;
+                std::filesystem::remove(path, error);
+                error.clear();
                 std::filesystem::rename(temp, path, error);
+                if (error) {
+                    std::filesystem::remove(temp, error);
+                }
             }
         }};
         std::scoped_lock lock{m_request};
@@ -172,7 +206,7 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
     }
 
     std::scoped_lock lk{submit_mutex};
-    ++num_requests;
+    num_requests.fetch_add(1, std::memory_order_acq_rel);
     request_cv.notify_one();
     return true;
 }
@@ -194,8 +228,34 @@ void LoadVector(BlobType type, std::filesystem::path& path, std::vector<T>& v) {
         mz_zip_reader_extract_to_mem(&zip_ar, index, v.data(), stat.m_uncomp_size, 0);
     } else {
         const auto file = IOFile{path, FileAccessMode::Read};
-        v.resize(file.GetSize() / sizeof(T));
-        file.Read(v);
+        if (!file.IsOpen()) {
+            return;
+        }
+        const u64 byte_size = file.GetSize();
+        if (byte_size == 0 || (byte_size % sizeof(T)) != 0) {
+            return;
+        }
+        v.resize(static_cast<size_t>(byte_size / sizeof(T)));
+        if (file.Read(v) != v.size()) {
+            v.clear();
+        }
+    }
+}
+
+void DataBase::RotateRejected(BlobType type, const std::string& name) {
+    if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
+        return;
+    }
+    std::filesystem::path path = cache_path / name;
+    path.replace_extension(GetBlobFileExtension(type));
+    auto rejected = path;
+    rejected += ".rejected";
+    std::error_code error;
+    std::filesystem::remove(rejected, error);
+    error.clear();
+    std::filesystem::rename(path, rejected, error);
+    if (error) {
+        std::filesystem::remove(path, error);
     }
 }
 
@@ -239,7 +299,34 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& da
     return LoadVector(type, path, data);
 }
 
+size_t DataBase::CountBlobs(BlobType type) const {
+    if (!opened) {
+        return 0;
+    }
+    const auto ext = "." + GetBlobFileExtension(type);
+    size_t count = 0;
+    if (EmulatorSettings.IsPipelineCacheArchived()) {
+        const auto num_files = mz_zip_reader_get_num_files(&zip_ar);
+        for (int index = 0; index < num_files; ++index) {
+            std::array<char, MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE> file_name{};
+            mz_zip_reader_get_filename(&zip_ar, index, file_name.data(), file_name.size());
+            count += std::string_view{file_name.data()}.ends_with(ext);
+        }
+        return count;
+    }
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
+        if (entry.is_regular_file(ec) && entry.path().extension().string() == ext) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u8>&& data)>& func) {
+    if (!opened) {
+        return;
+    }
     const auto& ext = GetBlobFileExtension(type);
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         const auto num_files = mz_zip_reader_get_num_files(&zip_ar);
@@ -256,14 +343,23 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
-            if (file_name.path().extension().string().ends_with(ext)) {
+        const std::string dot_ext = "." + ext;
+        std::error_code ec;
+        for (const auto& file_name : std::filesystem::directory_iterator{cache_path, ec}) {
+            if (!file_name.is_regular_file(ec)) {
+                continue;
+            }
+            if (file_name.path().extension().string() == dot_ext) {
                 using namespace Common::FS;
-                const auto& file = IOFile{file_name, FileAccessMode::Read};
+                const auto file = IOFile{file_name.path(), FileAccessMode::Read};
                 if (file.IsOpen()) {
-                    std::vector<u8> data(file.GetSize());
-                    file.Read(data);
-                    func(std::move(data));
+                    const u64 sz = file.GetSize();
+                    if (sz > 0) {
+                        std::vector<u8> data(static_cast<size_t>(sz));
+                        if (file.Read(data) == data.size()) {
+                            func(std::move(data));
+                        }
+                    }
                 }
             }
         }

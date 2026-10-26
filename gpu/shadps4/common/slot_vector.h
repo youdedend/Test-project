@@ -121,8 +121,8 @@ public:
         return values[id.index].object;
     }
 
-    bool is_allocated(SlotId id) const {
-        return ReadStorageBit(id.index);
+    bool is_allocated(SlotId id) const noexcept {
+        return id && id.index < values_capacity && ReadStorageBit(id.index);
     }
 
     template <typename... Args>
@@ -135,6 +135,9 @@ public:
     }
 
     void erase(SlotId id) noexcept {
+        if (!is_allocated(id)) {
+            return;
+        }
         values[id.index].object.~T();
         free_list.push_back(id.index);
         ResetStorageBit(id.index);
@@ -217,10 +220,9 @@ private:
         return ((stored_bitset[index / 64] >> (index % 64)) & 1) != 0;
     }
 
-    void ValidateIndex([[maybe_unused]] SlotId id) const noexcept {
-        DEBUG_ASSERT(id);
-        DEBUG_ASSERT(id.index / 64 < stored_bitset.size());
-        DEBUG_ASSERT(((stored_bitset[id.index / 64] >> (id.index % 64)) & 1) != 0);
+    void ValidateIndex(SlotId id) const noexcept {
+        ASSERT_MSG(is_allocated(id), "SlotVector invalid or freed slot index={} capacity={}",
+                   id.index, values_capacity);
     }
 
     [[nodiscard]] u32 FreeValueIndex() noexcept {

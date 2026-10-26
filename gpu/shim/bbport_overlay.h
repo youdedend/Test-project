@@ -6,6 +6,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -41,5 +42,12 @@ bool CapturesInput();
 /// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
 /// `active` is false; typing goes to the window (sdl_window), the box only displays it.
 void SetTextEntry(bool active, const std::string& prompt, const std::string& text);
+
+/// Present thread: startup / pipeline-cache loading bar and controller choice menu (UWP launcher).
+void SetLoading(bool active, u32 done = 0, u32 total = 0);
+void SetLoadingLabel(const std::string& label);
+void BeginChoice(const std::string& prompt, const std::vector<std::string>& items,
+                 const std::vector<std::string>& notes = {}, int default_index = 0);
+int PollChoice();
 
 } // namespace BbOverlay

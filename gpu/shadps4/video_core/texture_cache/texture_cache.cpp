@@ -25,6 +25,10 @@
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/texture_cache/tile_manager.h"
 #include <vk_mem_alloc.h>
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+extern "C" uint64_t bb_uwp_app_memory_limit();
+#endif
 
 namespace VideoCore {
 
@@ -38,6 +42,51 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
       buffer_cache{buffer_cache_}, tracker{tracker_}, blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
       readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
+#ifdef BB_UWP
+    null_image = UniqueImage(instance.GetDevice(), instance.GetAllocator());
+    null_image.Create({
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .extent = {1, 1, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eOptimal,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+                 vk::ImageUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    null_view = Vulkan::Check(instance.GetDevice().createImageViewUnique({
+        .image = null_image.image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    }));
+    scheduler.Record([image = null_image.image](vk::CommandBuffer cmd) {
+        vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                            vk::ImageMemoryBarrier{
+                                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+                                .oldLayout = vk::ImageLayout::eUndefined,
+                                .newLayout = vk::ImageLayout::eGeneral,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = image,
+                                .subresourceRange = range,
+                            });
+        cmd.clearColorImage(image, vk::ImageLayout::eGeneral,
+                            vk::ClearColorValue{std::array<float, 4>{0, 0, 0, 0}}, range);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                            vk::PipelineStageFlagBits::eAllCommands, {},
+                            vk::MemoryBarrier{
+                                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                                .dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                                                 vk::AccessFlagBits::eShaderWrite,
+                            },
+                            {}, {});
+    });
+#endif
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
@@ -179,12 +228,11 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     });
 }
 
-void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
+void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
-        // Only consider images that match base address.
-        // TODO: Maybe also consider subresources
-        if (image.info.guest_address != address) {
+        // Only consider images that match base address unless invalidating a whole DMA range.
+        if (!whole_range && image.info.guest_address != address) {
             return;
         }
         // Ensure image is reuploaded when accessed again.
@@ -1112,6 +1160,20 @@ void TextureCache::ReportMemory() {
 }
 
 void TextureCache::GarbageCollectImages() {
+#ifdef BB_UWP
+    // CPU guest pages and GPU heaps share the UWP app limit on Xbox.
+    total_used_memory = bb_uwp_app_memory_usage();
+    static const u64 test_budget = [] {
+        const char* env = std::getenv("BB_GC_BUDGET_MB");
+        const u64 mb = env ? std::strtoull(env, nullptr, 10) : 0;
+        return mb >= 1024 && mb <= 65536 ? mb << 20 : 0;
+    }();
+    const u64 app_budget = test_budget ? std::min(test_budget, bb_uwp_app_memory_limit())
+                                       : bb_uwp_app_memory_limit();
+    trigger_gc_memory = app_budget > 1152_MB ? app_budget - 1152_MB : app_budget / 2;
+    pressure_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget * 3 / 4;
+    critical_gc_memory = app_budget > 448_MB ? app_budget - 448_MB : app_budget * 7 / 8;
+#else
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
         // bbport: the buffer cache's reserve (512 MiB of VRAM allocated at start for the game's
@@ -1139,6 +1201,7 @@ void TextureCache::GarbageCollectImages() {
             }
         }
     }
+#endif
     // bbport: gc_tick (one per guest submission, hundreds a second) at each of the last 64
     // seconds, for ages in seconds. The usage compared is all of our VRAM, not only images: on a
     // discrete GPU it stays over the trigger, where an age of 16 ticks (~3 frames) would evict
@@ -1158,7 +1221,12 @@ void TextureCache::GarbageCollectImages() {
     }
     static const u64 idle_seconds = [] {
         const char* env = std::getenv("BB_GC_IDLE_SECONDS");
-        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : 20, 1, 63);
+#ifdef BB_UWP
+        constexpr u64 kDefaultIdleSeconds = 8;
+#else
+        constexpr u64 kDefaultIdleSeconds = 20;
+#endif
+        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : kDefaultIdleSeconds, 1, 63);
     }();
     // Under pressure an image goes once unused for BB_GC_PRESSURE_IDLE_SECONDS (5), over the
     // critical mark for 1 s first, and only then by submissions (a fraction of a second). On
@@ -1167,7 +1235,13 @@ void TextureCache::GarbageCollectImages() {
     // ran. (bbport 0.5, deadinside28/bloodborne_pc c7e3e55, via parsifal295's PR #63.)
     static const u64 pressure_idle_seconds = [] {
         const char* env = std::getenv("BB_GC_PRESSURE_IDLE_SECONDS");
-        return std::clamp<u64>(env ? std::strtoull(env, nullptr, 10) : 5, 0, 63);
+#ifdef BB_UWP
+        constexpr u64 kDefaultPressureIdleSeconds = 2;
+#else
+        constexpr u64 kDefaultPressureIdleSeconds = 5;
+#endif
+        return std::clamp<u64>(
+            env ? std::strtoull(env, nullptr, 10) : kDefaultPressureIdleSeconds, 0, 63);
     }();
     // The tick at the start of that second (an older one where no submission came then).
     const auto tick_seconds_ago = [&](u64 seconds) {
@@ -1175,7 +1249,13 @@ void TextureCache::GarbageCollectImages() {
     };
     const u64 idle_tick = tick_seconds_ago(idle_seconds);
     // Last used a minute ago or more (lru_touched_tick: real use, not the collector's Touch).
+#ifdef BB_UWP
+    const u64 minute_tick = gc_tick_at_second[(second - 45) % gc_tick_at_second.size()];
+#else
     const u64 minute_tick = gc_tick_at_second[(second - 60) % gc_tick_at_second.size()];
+#endif
+    bool evicted_any = false;
+    {
     std::scoped_lock lock{mutex};
     bool pressured = false;
     bool aggresive = false;
@@ -1194,7 +1274,11 @@ void TextureCache::GarbageCollectImages() {
         } else if (!emergency) {
             below_tick = std::min(below_tick, tick_seconds_ago(aggresive ? 1 : pressure_idle_seconds));
         }
+#ifdef BB_UWP
+        num_deletions = aggresive ? 64 : pressured ? 32 : 16;
+#else
         num_deletions = aggresive ? 40 : pressured ? 20 : 10;
+#endif
         visited = 0;
     };
     const auto clean_up = [&](ImageId image_id) {
@@ -1216,7 +1300,11 @@ void TextureCache::GarbageCollectImages() {
         // 6 GB cards). Kept, an image past the VRAM budget goes to system memory (UniqueImage).
         static const bool drop_old = [] {
             const char* env = std::getenv("BB_GC_DROP_OLD");
+#ifdef BB_UWP
+            return !env || env[0] != '0';
+#else
             return env && env[0] == '1';
+#endif
         }();
         const bool drop = drop_old && tiled && download && aggresive &&
                           image.lru_touched_tick < minute_tick;
@@ -1239,6 +1327,7 @@ void TextureCache::GarbageCollectImages() {
             ++gc_downloads;
         }
         ++gc_evictions;
+        evicted_any = true;
         FreeImage(image_id);
         if (total_used_memory < critical_gc_memory) {
             if (aggresive) {
@@ -1287,6 +1376,13 @@ void TextureCache::GarbageCollectImages() {
             gc_evictions = gc_downloads = gc_dropped = 0;
         }
     }
+    }
+#ifdef BB_UWP
+    (void)evicted_any;
+    scheduler.PopPendingOperations();
+#else
+    (void)evicted_any;
+#endif
 }
 
 void TextureCache::GarbageCollectSamplers() {
@@ -1446,7 +1542,24 @@ void TextureCache::DeleteImage(ImageId image_id, bool now) {
 
     // Reclaim image and any image views it references.
     if (now) {
-        EraseImage(image_id);
+        std::vector<ImageViewId> deferred_views;
+        for (auto& backing : image.backing_images) {
+            for (const ImageViewId image_view_id : backing.image_view_ids) {
+                if (slot_image_views.is_allocated(image_view_id)) {
+                    slot_image_views[image_view_id].image_view.reset();
+                    deferred_views.push_back(image_view_id);
+                }
+            }
+            backing.image_view_ids.clear();
+        }
+        image.backing_images.clear();
+        image.backing = nullptr;
+        scheduler.DeferOperation([this, image_id, views = std::move(deferred_views)] {
+            for (const ImageViewId view_id : views) {
+                slot_image_views.erase(view_id);
+            }
+            EraseImage(image_id);
+        });
         return;
     }
     scheduler.DeferOperation([this, image_id] { EraseImage(image_id); });

@@ -8,7 +8,10 @@
 #include "common/assert.h"
 #include "common/slot_vector.h"
 
-#ifdef _WIN32
+#ifdef BB_UWP
+#include <windows.h>
+#include <memoryapi.h>
+#elif defined(_WIN32)
 #include <windows.h>
 #else
 #include <sys/mman.h>
@@ -17,7 +20,10 @@
 namespace Common {
 
 void* SlotVectorReservePages(std::size_t size) noexcept {
-#ifdef _WIN32
+#ifdef BB_UWP
+    void* const base = VirtualAllocFromApp(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
+    ASSERT_MSG(base, "SlotVector: reserving address space failed");
+#elif defined(_WIN32)
     void* const base = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
     ASSERT_MSG(base, "SlotVector: reserving address space failed");
 #else
@@ -28,13 +34,19 @@ void* SlotVectorReservePages(std::size_t size) noexcept {
 }
 
 void SlotVectorCommitPages(void* address, std::size_t size) noexcept {
-#ifdef _WIN32
+#ifdef BB_UWP
+    void* const result = VirtualAllocFromApp(address, size, MEM_COMMIT, PAGE_READWRITE);
+    ASSERT_MSG(result == address, "SlotVector: committing %zu bytes at %p failed (err=%lu)", size,
+               address, GetLastError());
+#elif defined(_WIN32)
     void* const result = VirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE);
+    ASSERT_MSG(result == address, "SlotVector: committing %zu bytes at %p failed (err=%lu)", size,
+               address, GetLastError());
 #else
     void* const result =
         mmap(address, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-#endif
     ASSERT_MSG(result == address, "SlotVector: committing memory failed");
+#endif
 }
 
 void SlotVectorReleasePages(void* base, [[maybe_unused]] std::size_t size) noexcept {

@@ -3,12 +3,24 @@
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
 typedef struct { int type; } GuestAttr;
-typedef struct { pthread_mutex_t native; } GuestMutex;
+typedef struct {
+    /* PS4's linked libc.prx stores internal heap-mutex flags directly at *mutex + 0x20.
+     * On Windows winpthreads sizeof(pthread_mutex_t) is 8 bytes, so without this prefix
+     * libc.prx writes past the allocation and corrupts adjacent heap blocks. */
+    unsigned char guest_reserved[0x20];
+    uint32_t libc_flags;
+    pthread_mutex_t native;
+    void *owner;
+    unsigned depth;
+    char name[32];
+} GuestMutex;
+_Static_assert(offsetof(GuestMutex, libc_flags) == 0x20, "libc.prx accesses *mutex + 0x20");
 static size_t created, locks, unlocks;
 static int32_t orbis_error(int e) {
     if (!e) return 0;
@@ -26,7 +38,7 @@ static int32_t orbis_error(int e) {
 }
 static ABI int32_t attr_init(GuestAttr **out) {
     if (!out) return orbis_error(EINVAL);
-    GuestAttr *attr = malloc(sizeof(*attr));
+    GuestAttr *attr = runtime_low_calloc(1, sizeof(*attr));
     if (!attr) return orbis_error(ENOMEM);
     attr->type = 1; *out = attr; return 0;
 }
@@ -41,24 +53,26 @@ static ABI int32_t attr_protocol(GuestAttr **attr, int protocol) {
 }
 static ABI int32_t attr_destroy(GuestAttr **attr) {
     if (!attr || !*attr) return orbis_error(EINVAL);
-    free(*attr); *attr = NULL; return 0;
+    runtime_low_free(*attr); *attr = NULL; return 0;
 }
 static ABI int32_t mutex_init(GuestMutex **out, GuestAttr **attr, const char *name) {
-    (void)name;
     if (!out || (attr && !*attr)) return orbis_error(EINVAL);
     int type = attr ? (*attr)->type : 1;
     if (type < 1 || type > 4) return orbis_error(EINVAL);
-    GuestMutex *mutex = malloc(sizeof(*mutex));
+    GuestMutex *mutex = runtime_low_calloc(1, sizeof(*mutex));
     if (!mutex) return orbis_error(ENOMEM);
+    if (name) snprintf(mutex->name, sizeof(mutex->name), "%s", name);
     pthread_mutexattr_t native_attr;
     int e = pthread_mutexattr_init(&native_attr);
-    if (e) { free(mutex); return orbis_error(e); }
+    if (e) { runtime_low_free(mutex); return orbis_error(e); }
     int native_type = type == 2 ? PTHREAD_MUTEX_RECURSIVE : type == 3 ? PTHREAD_MUTEX_NORMAL : PTHREAD_MUTEX_ERRORCHECK;
     e = pthread_mutexattr_settype(&native_attr, native_type);
     if (!e) e = pthread_mutex_init(&mutex->native, &native_attr);
     pthread_mutexattr_destroy(&native_attr);
-    if (e) { free(mutex); return orbis_error(e); }
-    *out = mutex; ++created; return 0;
+    if (e) { runtime_low_free(mutex); return orbis_error(e); }
+    *out = mutex;
+    __atomic_fetch_add(&created, 1, __ATOMIC_RELAXED);
+    return 0;
 }
 static pthread_mutex_t static_init = PTHREAD_MUTEX_INITIALIZER;
 /* Statically initialized handles (0/1) are created once, even under contention. */
@@ -80,29 +94,49 @@ static int32_t ensure_mutex(GuestMutex **mutex) {
 static ABI int32_t mutex_lock(GuestMutex **mutex) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
-    e = orbis_error(pthread_mutex_lock(&(*mutex)->native));
-    if (!e) ++locks;
+    GuestMutex *m = *mutex;
+    int rc = pthread_mutex_trylock(&m->native);
+    if (rc == EBUSY) {
+        void *holder = __atomic_load_n(&m->owner, __ATOMIC_RELAXED);
+        runtime_wait_begin("mutex", m->name, mutex, holder, (uintptr_t)__builtin_return_address(0));
+        rc = pthread_mutex_lock(&m->native);
+        runtime_wait_end();
+    }
+    e = orbis_error(rc);
+    if (!e) {
+        __atomic_store_n(&m->owner, (void *)runtime_thread_current(), __ATOMIC_RELAXED);
+        ++m->depth;
+        __atomic_fetch_add(&locks, 1, __ATOMIC_RELAXED);
+    }
     return e;
 }
 static ABI int32_t mutex_trylock(GuestMutex **mutex) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
-    e = orbis_error(pthread_mutex_trylock(&(*mutex)->native));
-    if (!e) ++locks;
+    GuestMutex *m = *mutex;
+    e = orbis_error(pthread_mutex_trylock(&m->native));
+    if (!e) {
+        __atomic_store_n(&m->owner, (void *)runtime_thread_current(), __ATOMIC_RELAXED);
+        ++m->depth;
+        __atomic_fetch_add(&locks, 1, __ATOMIC_RELAXED);
+    }
     return e;
 }
 static ABI int32_t mutex_unlock(GuestMutex **mutex) {
     if (!mutex || (uintptr_t)*mutex == 2) return orbis_error(EINVAL);
     if ((uintptr_t)*mutex < 2) return orbis_error(EPERM);
-    int32_t e = orbis_error(pthread_mutex_unlock(&(*mutex)->native));
-    if (!e) ++unlocks;
+    GuestMutex *m = *mutex;
+    if (m->depth <= 1) __atomic_store_n(&m->owner, (void *)NULL, __ATOMIC_RELAXED);
+    if (m->depth > 0) --m->depth;
+    int32_t e = orbis_error(pthread_mutex_unlock(&m->native));
+    if (!e) __atomic_fetch_add(&unlocks, 1, __ATOMIC_RELAXED);
     return e;
 }
 static ABI int32_t mutex_destroy(GuestMutex **mutex) {
     if (!mutex || (uintptr_t)*mutex == 2) return orbis_error(EINVAL);
     if ((uintptr_t)*mutex < 2) return 0;
     int e = pthread_mutex_destroy(&(*mutex)->native);
-    if (!e) { free(*mutex); *mutex = (GuestMutex *)(uintptr_t)2; }
+    if (!e) { runtime_low_free(*mutex); *mutex = (GuestMutex *)(uintptr_t)2; }
     return orbis_error(e);
 }
 static int deadline_after(struct timespec *end, uint64_t usec) {
@@ -118,22 +152,36 @@ static ABI int32_t mutex_timedlock(GuestMutex **mutex, uint32_t usec) {
     if (e) return e;
     struct timespec end;
     if (deadline_after(&end, usec)) return orbis_error(EINVAL);
-    e = timed_error(pthread_mutex_timedlock(&(*mutex)->native, &end));
-    if (!e) ++locks;
+    GuestMutex *m = *mutex;
+    runtime_wait_begin("mutex", m->name, mutex, __atomic_load_n(&m->owner, __ATOMIC_RELAXED),
+                       (uintptr_t)__builtin_return_address(0));
+    e = timed_error(pthread_mutex_timedlock(&m->native, &end));
+    runtime_wait_end();
+    if (!e) {
+        __atomic_store_n(&m->owner, (void *)runtime_thread_current(), __ATOMIC_RELAXED);
+        ++m->depth;
+        __atomic_fetch_add(&locks, 1, __ATOMIC_RELAXED);
+    }
     return e;
 }
 /* Condition variables: opaque handles over host pthread_cond (CLOCK_REALTIME,
  * like FreeBSD's default), sharing the host mutex behind GuestMutex. */
-typedef struct { pthread_cond_t native; } GuestCond;
+typedef struct {
+    pthread_cond_t native;
+    char name[32];
+} GuestCond;
 static size_t conds, waits, wakeups;
 static ABI int32_t cond_init(GuestCond **out, void **attr, const char *name) {
-    (void)attr; (void)name;
+    (void)attr;
     if (!out) return orbis_error(EINVAL);
-    GuestCond *c = malloc(sizeof(*c));
+    GuestCond *c = runtime_low_calloc(1, sizeof(*c));
     if (!c) return orbis_error(ENOMEM);
+    if (name) snprintf(c->name, sizeof(c->name), "%s", name);
     int e = pthread_cond_init(&c->native, NULL);
-    if (e) { free(c); return orbis_error(e); }
-    *out = c; ++conds; return 0;
+    if (e) { runtime_low_free(c); return orbis_error(e); }
+    *out = c;
+    __atomic_fetch_add(&conds, 1, __ATOMIC_RELAXED);
+    return 0;
 }
 static int32_t ensure_cond(GuestCond **cond) {
     if (!cond) return orbis_error(EINVAL);
@@ -152,44 +200,64 @@ static ABI int32_t cond_destroy(GuestCond **cond) {
     if (!cond) return orbis_error(EINVAL);
     if ((uintptr_t)*cond < 2) return 0;
     int e = pthread_cond_destroy(&(*cond)->native);
-    if (!e) { free(*cond); *cond = NULL; }
+    if (!e) { runtime_low_free(*cond); *cond = NULL; }
     return orbis_error(e);
 }
 static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3) return orbis_error(EINVAL);
-    ++waits;
-    return orbis_error(pthread_cond_wait(&(*cond)->native, &(*mutex)->native));
+    GuestMutex *m = *mutex;
+    unsigned saved_depth = m->depth;
+    m->depth = 0;
+    __atomic_store_n(&m->owner, (void *)NULL, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&waits, 1, __ATOMIC_RELAXED);
+    runtime_wait_begin("cond", (*cond)->name, cond, NULL, (uintptr_t)__builtin_return_address(0));
+    int rc = pthread_cond_wait(&(*cond)->native, &m->native);
+    runtime_wait_end();
+    __atomic_store_n(&m->owner, (void *)runtime_thread_current(), __ATOMIC_RELAXED);
+    m->depth = saved_depth ? saved_depth : 1;
+    return orbis_error(rc);
 }
-static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, const struct timespec *end) {
+static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, const struct timespec *end, uintptr_t caller) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3 || !end) return orbis_error(EINVAL);
-    ++waits;
-    return timed_error(pthread_cond_timedwait(&(*cond)->native, &(*mutex)->native, end));
+    GuestMutex *m = *mutex;
+    unsigned saved_depth = m->depth;
+    m->depth = 0;
+    __atomic_store_n(&m->owner, (void *)NULL, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&waits, 1, __ATOMIC_RELAXED);
+    runtime_wait_begin("cond", (*cond)->name, cond, NULL, caller);
+    int rc = pthread_cond_timedwait(&(*cond)->native, &m->native, end);
+    runtime_wait_end();
+    __atomic_store_n(&m->owner, (void *)runtime_thread_current(), __ATOMIC_RELAXED);
+    m->depth = saved_depth ? saved_depth : 1;
+    return timed_error(rc);
 }
 static ABI int32_t cond_timedwait(GuestCond **cond, GuestMutex **mutex, uint32_t usec) {
     struct timespec end;
     if (deadline_after(&end, usec)) return orbis_error(EINVAL);
-    return cond_wait_until(cond, mutex, &end);
+    return cond_wait_until(cond, mutex, &end, (uintptr_t)__builtin_return_address(0));
 }
 static ABI int32_t cond_signal(GuestCond **cond) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
-    ++wakeups; return orbis_error(pthread_cond_signal(&(*cond)->native));
+    __atomic_fetch_add(&wakeups, 1, __ATOMIC_RELAXED);
+    return orbis_error(pthread_cond_signal(&(*cond)->native));
 }
 static ABI int32_t cond_broadcast(GuestCond **cond) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
-    ++wakeups; return orbis_error(pthread_cond_broadcast(&(*cond)->native));
+    __atomic_fetch_add(&wakeups, 1, __ATOMIC_RELAXED);
+    return orbis_error(pthread_cond_broadcast(&(*cond)->native));
 }
 /* PS4 struct timespec is {int64 sec, int64 nsec}, identical to Linux x86-64. */
 typedef struct { int64_t sec, nsec; } GuestTimespec;
 static ABI int32_t cond_abs_timedwait(GuestCond **cond, GuestMutex **mutex, const GuestTimespec *abs) {
     if (!abs || abs->nsec < 0 || abs->nsec >= 1000000000) return orbis_error(EINVAL);
     struct timespec end = {.tv_sec = (time_t)abs->sec, .tv_nsec = (long)abs->nsec};
-    return cond_wait_until(cond, mutex, &end);
+    return cond_wait_until(cond, mutex, &end, (uintptr_t)__builtin_return_address(0));
 }
 /* POSIX pthread APIs return positive guest errno values, unlike scePthread. */
 static int32_t posix_result(int32_t result) { return result ? (int32_t)((uint32_t)result & 0xffff) : 0; }
@@ -241,7 +309,9 @@ uintptr_t runtime_mutex_resolve(const char *name) {
     return 0;
 }
 void runtime_mutex_report(void) {
-    printf("Runtime: mutexes created=%zu, locks=%zu, unlocks=%zu\n", created, locks, unlocks);
-    printf("Runtime: condition variables created=%zu, waits=%zu, wakeups=%zu\n", conds, waits, wakeups);
+    printf("Runtime: mutexes created=%zu, locks=%zu, unlocks=%zu\n",
+           (size_t)created, (size_t)locks, (size_t)unlocks);
+    printf("Runtime: condition variables created=%zu, waits=%zu, wakeups=%zu\n",
+           (size_t)conds, (size_t)waits, (size_t)wakeups);
 }
 

@@ -1,0 +1,35 @@
+Bloodborne Xbox Series X|S UWP loader started
+Device model: 0x1d27fabb; app memory budget: 5120 MiB; gamepads: 0
+AppContainer codeGeneration + sysv_abi smoke: PASS (42)
+UWP lifecycle: visible=1
+USB dump found: E:\dumps\Bloodborne
+Active Bloodborne dump: E:\dumps\Bloodborne (USB drive)
+DLC root configured: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\dlc
+Prepared boot image cached: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\Prepared (app_ver=01.00)
+Compiled startup patches: game version 01.00 != 01.09; running unpatched 30 FPS (24 bytes)
+UWP memory: reserving guest windows on demand; 16 KiB commit-on-touch pages
+UWP swap: temporary sparse disk backing ready; 64 MiB mapped-window limit
+UWP swap: pager active, app budget=5120 MiB, pressure headroom=896 MiB
+Handing off to Bloodborne sysv_abi loader + shadPS4/Dozen GPU runtime...
+Online: Xbox UWP offline profile (CUSA03173 Bloodborne™ 01.00)
+Settings: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\bbport.ini
+[uwp-vk] Upgraded UMA VkMemoryHeap[0] size from 1280 MiB -> 5120 MiB (Xbox AppMemoryUsageLimit)
+GPU: Microsoft Direct3D12 (SraKmd_arden) (integrated), 5120 MiB VRAM, driver Dozen 26.2.99 (Mesa 26.3.0-devel (git-a76cd3caa2)), Vulkan 1.2.363
+UWP host push bindings: ordinary descriptor sets, fence-safe command-buffer pools
+CoreWindow presentation bridge: 1280x720, shared image 3904 KiB
+UWP buffer cache: ordinary buffers, 16 MiB pages, 176 logical DMA views
+GPU: discarding stale driver.vkcache (172154 KiB, UUID/device mismatch)
+GPU: draw preparation workers: 1 (+1 scanner, 8 hardware threads)
+Object motion: off (enable in menu or BB_OBJECT_MOTION=1)
+Scene resolution: raster 640x360, half-resolution targets 320x180, UI 1920x1080 (live)
+Xbox scene resolution: live 640x360 ready (HUD 1920x1080)
+UWP presentation: native resolution; FSR1 and RCAS disabled
+Overlay: menu ready (Insert or L3+R3)
+CoreWindow first frame presented
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1002/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1002/5120 MiB (level=0, presents=0)

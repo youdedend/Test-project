@@ -75,12 +75,16 @@ static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset)
     return span.subspan(offset);
 }
 
+static std::atomic<Liverpool*> g_liverpool{nullptr};
+
 Liverpool::Liverpool() : guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
     num_counter_pairs = Libraries::Kernel::sceKernelIsNeoMode() ? 16 : 8;
     process_thread = std::jthread{std::bind_front(&Liverpool::Process, this)};
 }
 
 Liverpool::~Liverpool() {
+    BbCopy::SetDeferredPoster(nullptr);
+    g_liverpool.store(nullptr, std::memory_order_release);
     process_thread.request_stop();
     process_thread.join();
 }
@@ -110,7 +114,10 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-#ifndef _WIN32
+    on_processor_thread = true;
+#ifdef _WIN32
+    BbStats::gpu_thread_id.store(static_cast<unsigned long>(gettid()));
+#else
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
         BbStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
@@ -119,6 +126,12 @@ void Liverpool::Process(std::stop_token stoken) {
 #if defined(__linux__) || defined(_WIN32)
     gpu_tid = gettid();
 #endif
+    g_liverpool.store(this, std::memory_order_release);
+    BbCopy::SetDeferredPoster([] {
+        if (auto* lp = g_liverpool.load(std::memory_order_acquire)) {
+            lp->SendCommand([] { BbCopy::RunDeferred(); });
+        }
+    });
 
     while (!stoken.stop_requested()) {
         {
@@ -458,6 +471,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
                 YIELD_CE();
                 RESUME_CE(task);
             }
+            task.handle.destroy();
             break;
         }
         default:
@@ -1280,6 +1294,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     YIELD_GFX();
                     RESUME_GFX(task);
                 }
+                task.handle.destroy();
                 break;
             }
             case PM4ItOpcode::IncrementDeCounter: {
@@ -1438,6 +1453,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 YIELD_ASC(vqid);
                 RESUME_ASC(task, vqid);
             }
+            task.handle.destroy();
             break;
         }
         case PM4ItOpcode::DmaData: {

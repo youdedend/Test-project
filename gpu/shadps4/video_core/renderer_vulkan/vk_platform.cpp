@@ -23,6 +23,9 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#ifdef BB_UWP
+#include "descriptor_fallback.h"
+#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -61,6 +64,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
 }
 
 vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& emu_window) {
+#ifdef BB_UWP
+    return vk::SurfaceKHR{};
+#endif
     const auto& window_info = emu_window.GetWindowInfo();
     vk::SurfaceKHR surface{};
 
@@ -168,13 +174,19 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     // Add the windowing system specific extension
     std::vector<const char*> extensions;
     extensions.reserve(7);
+#ifdef BB_UWP
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
+#endif
 
     switch (window_type) {
     case Frontend::WindowSystemType::Headless:
         break;
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
     case Frontend::WindowSystemType::Windows:
+#ifndef BB_UWP
         extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
         break;
 #elif defined(VK_USE_PLATFORM_XLIB_KHR) || defined(VK_USE_PLATFORM_WAYLAND_KHR)
     case Frontend::WindowSystemType::X11:
@@ -271,9 +283,23 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     setenv("VK_DRIVER_FILES", icd_path.c_str(), true);
 #endif
 
+#ifdef BB_UWP
+    LoadPackagedLibrary(L"dxil.dll", 0);
+    HMODULE dozen = LoadPackagedLibrary(L"vulkan_dzn.dll", 0);
+    ASSERT_MSG(dozen != nullptr, "Failed to load packaged vulkan_dzn.dll ({})", GetLastError());
+    auto get_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+        GetProcAddress(dozen, "vk_icdGetInstanceProcAddr"));
+    if (!get_proc) {
+        get_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+            GetProcAddress(dozen, "vkGetInstanceProcAddr"));
+    }
+    ASSERT_MSG(get_proc != nullptr, "vulkan_dzn.dll has no vkGetInstanceProcAddr entry point");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(BbUwp::WrapUwpGetInstanceProcAddr(get_proc));
+#else
     static vk::detail::DynamicLoader dl;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(
         dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr"));
+#endif
 
     const auto [available_version_result, available_version] =
         VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion

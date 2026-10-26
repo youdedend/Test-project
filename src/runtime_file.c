@@ -107,7 +107,7 @@ void runtime_file_unmount(const char *guest) {
 }
 static char user_root[512]="user";
 const char *runtime_file_user_dir(void) { return user_root; }
-#ifdef BBPORT_UWP
+#if defined(BBPORT_UWP) && !defined(BB_UWP)
 /* Implemented in uwp/BBPort.UWP/Platform/StorageLayer.cpp: resolves LocalFolder & TemporaryFolder. */
 extern int bbport_uwp_storage_get_roots(char *app0_out, size_t app0_cap,
                                         char *user_out, size_t user_cap,
@@ -115,7 +115,7 @@ extern int bbport_uwp_storage_get_roots(char *app0_out, size_t app0_cap,
 #endif
 void runtime_file_configure(const char *app0,const char *user) {
     char path[600];
-#ifdef BBPORT_UWP
+#if defined(BBPORT_UWP) && !defined(BB_UWP)
     char uwp_app0[512]="", uwp_user[512]="", uwp_temp[512]="";
     if (bbport_uwp_storage_get_roots(uwp_app0, sizeof(uwp_app0),
                                      uwp_user, sizeof(uwp_user),
@@ -134,7 +134,7 @@ void runtime_file_configure(const char *app0,const char *user) {
     mkdir(user,0755);
 #endif
     for (int i=0;i<3;++i) {
-#ifdef BBPORT_UWP
+#if defined(BBPORT_UWP) && !defined(BB_UWP)
         if (i==0 && uwp_temp[0]) snprintf(path,sizeof(path),"%s",uwp_temp);
         else snprintf(path,sizeof(path),"%s/%s",user,writable[i]);
 #else
@@ -429,6 +429,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
         if (host<0) {
             e=errno;
             if (e==ENOENT) { ++missing; printf("Runtime: open(%s) -> not found\n",guest); }
+            else printf("Runtime: open(%s -> %s, flags=0x%x) -> failed (errno=%d)\n",guest,path,flags,e);
             return -e;
         }
         if (host_fstat(host,&s)) memset(&s,0,sizeof(s));
@@ -468,6 +469,11 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     snprintf(files[fd].path,sizeof(files[fd].path),"%s",guest);
     ++opens;
     pthread_mutex_unlock(&lock);
+    if (strstr(guest,"dvdroot_ps4/")) {
+        static unsigned logged_assets;
+        if (__atomic_fetch_add(&logged_assets,1,__ATOMIC_RELAXED)<12)
+            printf("Runtime: opened game asset %s -> fd %d (%lld bytes)\n",guest,fd,(long long)s.st_size);
+    }
     if (audio_trace() && strstr(guest,"sound/")) printf("Audio trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
     const char *mod_trace=getenv("BB_MOD_TRACE"), *mod_root=getenv("BB_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
@@ -531,28 +537,127 @@ static void touch_for_write(void *buffer,uint64_t size) {
         *b=*b;
     }
 }
+static ssize_t read_retrying(int handle, void *buffer, size_t size, int64_t offset, int positioned) {
+    for (int attempt = 0;; ++attempt) {
+        ssize_t n = positioned ? pread(handle, buffer, size, offset) : host_read(handle, buffer, size);
+        if (n >= 0 || attempt >= 3 || (errno != EIO && errno != EACCES && errno != EINTR)) {
+            return n;
+        }
+#ifdef _WIN32
+        compat_sleep_ns((uint64_t)(attempt + 1) * 25000000ULL);
+#endif
+    }
+}
+#ifdef BB_UWP
+/* On Xbox UWP, guest pages are lazy-committed and may be paged out to LocalState swap or
+ * protected for GPU tracking. Kernel ReadFile/WriteFile fails with ERROR_NOACCESS instead of
+ * raising a user-mode exception, and could race the swap pager on large USB streaming reads.
+ * Route mapped guest buffers through a bounded 1 MiB heap bounce buffer so kernel I/O touches
+ * only pinned host heap while user-mode memcpy faults pages in cleanly. */
+static ssize_t paged_io(int handle, void *buffer, uint64_t size, int64_t offset, int positioned, int writing) {
+    if (size > 0x7ffff000) size = 0x7ffff000;
+    size_t capacity = (size_t)(size > (UINT64_C(1) << 20) ? (UINT64_C(1) << 20) : size);
+    if (!capacity) return 0;
+    unsigned char *bounce = (unsigned char *)malloc(capacity);
+    if (!bounce) { errno = ENOMEM; return -1; }
+    uint64_t total = 0;
+    int error = 0;
+    while (total < size) {
+        size_t count = (size_t)(size - total < capacity ? size - total : capacity);
+        if (writing) memcpy(bounce, (const unsigned char *)buffer + total, count);
+        ssize_t n = writing ? (positioned ? pwrite(handle, bounce, count, offset + (int64_t)total)
+                                          : host_write(handle, bounce, count))
+                            : read_retrying(handle, bounce, count, offset + (int64_t)total, positioned);
+        if (n < 0) { error = errno; break; }
+        if (!n) break;
+        if (!writing) memcpy((unsigned char *)buffer + total, bounce, (size_t)n);
+        total += (uint64_t)n;
+        if ((size_t)n < count) break;
+    }
+    free(bounce);
+    if (!total && error) { errno = error; return -1; }
+    return (ssize_t)total;
+}
+/* Cosmo/gow3_xbox: a guest read and write whose buffer spans more than the swap window. The
+ * memory self-test calls it on a paged guest range; the file lives beside the swap file. */
+int runtime_file_paged_selftest(void *buffer, uint64_t size) {
+    const char *swap = getenv("BB_UWP_SWAP_FILE");
+    if (!swap || !*swap) return 1;
+    char path[4096];
+    snprintf(path, sizeof(path), "%s", swap);
+    char *slash = strrchr(path, '/');
+    if (!slash) slash = strrchr(path, '\\');
+    if (slash) slash[1] = 0;
+    else path[0] = 0;
+    const size_t used = strlen(path);
+    snprintf(path + used, sizeof(path) - used, "bloodborne-pager-io-selftest.bin");
+    FILE *file = fopen(path, "w+b");
+    if (!file) return 2;
+    const int fd = _fileno(file);
+    int result = 0;
+    if (paged_io(fd, buffer, size, 0, 1, 1) != (ssize_t)size) result = 3;
+    if (!result) {
+        memset(buffer, 0, (size_t)size);
+        if (paged_io(fd, buffer, size, 0, 1, 0) != (ssize_t)size) result = 4;
+    }
+    fclose(file);
+    remove(path);
+    return result;
+}
+#endif
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
+    File *f=get(fd);
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
-    ssize_t n=host_read(h,buffer,size);
-    if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
+    ssize_t n;
+    runtime_wait_begin("file read", f ? f->path : "fd", buffer, NULL, (uintptr_t)__builtin_return_address(0));
+#ifdef BB_UWP
+    if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, buffer, size, 0, 0, 0);
+    else
+#endif
+    {
+        touch_for_write(buffer,size);
+        n=read_retrying(h,buffer,(size_t)(size>0x7ffff000 ? 0x7ffff000 : size),0,0);
+    }
+    runtime_wait_end();
+    if (n<0) {
+        printf("Runtime: read(fd %d [%s], %llu) failed, errno %d\n",fd,f ? f->path : "?",(unsigned long long)size,errno);
+        return -errno;
+    }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;
 }
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
+    File *f=get(fd);
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
-    ssize_t n=pread(h,buffer,size,offset);
-    if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
+    ssize_t n;
+    runtime_wait_begin("file pread", f ? f->path : "fd", buffer, NULL, (uintptr_t)__builtin_return_address(0));
+#ifdef BB_UWP
+    if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, buffer, size, offset, 1, 0);
+    else
+#endif
+    {
+        touch_for_write(buffer,size);
+        n=read_retrying(h,buffer,(size_t)(size>0x7ffff000 ? 0x7ffff000 : size),offset,1);
+    }
+    runtime_wait_end();
+    if (n<0) {
+        printf("Runtime: pread(fd %d [%s], %llu @%lld) failed, errno %d\n",fd,f ? f->path : "?",(unsigned long long)size,(long long)offset,errno);
+        return -errno;
+    }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;
 }
 static int64_t do_write(int fd,const void *buffer,uint64_t size) {
     int h=host_fd_written(fd);
     if (h<0) return -EBADF;
-    ssize_t n=host_write(h,buffer,size);
+    ssize_t n;
+#ifdef BB_UWP
+    if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, (void *)buffer, size, 0, 0, 1);
+    else
+#endif
+    n=host_write(h,buffer,size);
     if (n<0) return -errno;
     __atomic_add_fetch(&writes,1,__ATOMIC_RELAXED);
     return n;
@@ -560,7 +665,12 @@ static int64_t do_write(int fd,const void *buffer,uint64_t size) {
 static int64_t do_pwrite(int fd,const void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd_written(fd);
     if (h<0) return -EBADF;
-    ssize_t n=pwrite(h,buffer,size,offset);
+    ssize_t n;
+#ifdef BB_UWP
+    if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, (void *)buffer, size, offset, 1, 1);
+    else
+#endif
+    n=pwrite(h,buffer,size,offset);
     return n<0 ? -errno : n;
 }
 static int64_t do_lseek(int fd,int64_t offset,int whence) {

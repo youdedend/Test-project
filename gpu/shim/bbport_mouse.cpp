@@ -73,6 +73,9 @@ void ThreadMain() {
 } // namespace
 
 void Start() {
+#ifdef BB_UWP
+    return;
+#endif
     if (g_running.exchange(true, std::memory_order_acq_rel)) {
         return;
     }

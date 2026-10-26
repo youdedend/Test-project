@@ -6,6 +6,7 @@
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 namespace Vulkan {
@@ -42,7 +43,8 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         bindings.push_back({
             .binding = binding++,
             .descriptorType = vk::DescriptorType::eStorageBuffer,
-            .descriptorCount = 1,
+            .descriptorCount =
+                buffer.buffer_type == Shader::BufferType::DmaBuffers ? Shader::NUM_DMA_BUFFERS : 1u,
             .stageFlags = vk::ShaderStageFlagBits::eCompute,
         });
     }
@@ -107,7 +109,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         .layout = *pipeline_layout,
     };
     auto [pipeline_result, pipe] =
-        instance.GetDevice().createComputePipelineUnique(pipeline_cache, compute_pipeline_ci);
+        CreateCachedComputePipeline(instance, pipeline_cache, compute_pipeline_ci);
     // bbport: as for graphics pipelines, a driver failure skips its dispatches.
     if (pipeline_result != vk::Result::eSuccess) {
         LOG_ERROR(Render_Vulkan, "Failed to create compute pipeline {}: {}; its dispatches are skipped",

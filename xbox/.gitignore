@@ -1,0 +1,11 @@
+/.local/
+/build/
+/AppPackages/
+*.local.json
+*.local.ps1
+*.pfx
+# Public self-signed test key used solely so Xbox Dev Mode sideload updates preserve LocalState saves.
+!/signing/bloodborne_xbox-signing.pfx
+*.cer
+*.credential.xml
+*.user

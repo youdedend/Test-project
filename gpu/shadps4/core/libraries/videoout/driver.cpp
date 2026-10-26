@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstdio>
 #include <time.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
@@ -348,11 +350,27 @@ void VideoOutDriver::Flip(const Request& req) {
                   user_us = BbStats::gpu_user_us.load(), invol = BbStats::gpu_invol_switches.load(),
                   vol = BbStats::gpu_vol_switches.load();
         u64 gpu_ns = 0;
+#ifdef _WIN32
+        static HANDLE gpu_thread = nullptr;
+        if (!gpu_thread) {
+            if (const unsigned long id = BbStats::gpu_thread_id.load()) {
+                gpu_thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, id);
+            }
+        }
+        if (FILETIME created, exited, kernel, user;
+            gpu_thread && GetThreadTimes(gpu_thread, &created, &exited, &kernel, &user)) {
+            const auto ns = [](const FILETIME& t) {
+                return ((u64(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 100;
+            };
+            gpu_ns = ns(kernel) + ns(user);
+        }
+#else
         if (const int clock = BbStats::gpu_thread_clock.load(); clock != -1) {
             timespec ts{};
             clock_gettime(static_cast<clockid_t>(clock), &ts);
             gpu_ns = u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
         }
+#endif
         const u64 images = BbStats::images_registered.load();
         const u64 image_bytes = BbStats::image_upload_bytes.load();
         const u64 buffer_bytes = BbStats::buffer_upload_bytes.load();
@@ -604,22 +622,33 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // at a cap of 120.
     const u32 frame_limit = EmulatorSettings.GetFrameLimit();
     // bbport: frame generation with FIFO presentation lowers the limit while it runs
-    // (BbSettings::frame_gen_flip_limit, set by the Presenter).
-    const auto period_now = [frame_limit] {
+    // (BbSettings::frame_gen_flip_limit, set by the Presenter). On UWP, fps_cap is live.
+    const auto active_limit = [frame_limit]() -> u32 {
+#ifdef BB_UWP
+        const int uwp_cap = BbSettings::Get().fps_cap.load(std::memory_order_relaxed);
+        const u32 base = uwp_cap > 0 ? u32(uwp_cap) : 0u;
+#else
+        const u32 base = frame_limit;
+#endif
         const int fg_limit = BbSettings::Get().frame_gen_flip_limit.load(std::memory_order_relaxed);
-        const u32 limit = fg_limit > 0 && frame_limit ? std::min(frame_limit, u32(fg_limit))
-                                                      : frame_limit;
+        return fg_limit > 0 && base ? std::min(base, u32(fg_limit)) : base;
+    };
+    const auto period_now = [&] {
+        const u32 limit = active_limit();
         return limit ? std::chrono::nanoseconds(1000000000 / limit) : std::chrono::nanoseconds(0);
     };
     const auto next_slot = [&](std::chrono::steady_clock::time_point slot) {
         const auto frame_period = period_now();
+        if (frame_period.count() == 0) {
+            return std::chrono::steady_clock::now();
+        }
         const auto slack = frame_period / 16;
         return std::max(slot + frame_period,
                         std::chrono::steady_clock::now() + frame_period - slack);
     };
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
-                EmulatorSettings.GetVblankFrequency(), frame_limit);
+                EmulatorSettings.GetVblankFrequency(), active_limit());
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
@@ -633,7 +662,11 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     // bbport: with a frame limit (uncapped presets) a queued flip is presented as soon as it
     // arrives and its slot allows, between vblanks, instead of on the next vblank tick.
+#ifdef BB_UWP
+    const bool immediate_flips = true;
+#else
     const bool immediate_flips = frame_limit != 0;
+#endif
 
     while (!token.stop_requested()) {
         timer.Start();
@@ -648,10 +681,11 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         // Check if it's time to take a request.
         auto& vblank_status = main_port.vblank_status;
         const auto now = std::chrono::steady_clock::now();
-        const bool flip_slot = !frame_limit || now >= next_flip;
+        const u32 cur_limit = active_limit();
+        const bool flip_slot = !cur_limit || now >= next_flip;
         if (flip_slot && vblank_status.count % (main_port.flip_rate + 1) == 0) {
             const auto request = receive_request();
-            if (request && frame_limit) {
+            if (request && cur_limit) {
                 next_flip = next_slot(next_flip);
             }
             if (!request) {
@@ -704,7 +738,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     break; // next vblank
                 }
             }
-            if (std::chrono::steady_clock::now() < next_flip) {
+            const u32 inner_limit = active_limit();
+            if (inner_limit && std::chrono::steady_clock::now() < next_flip) {
                 if (next_flip >= tick_deadline) {
                     break;
                 }
@@ -712,7 +747,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             }
             const auto request = receive_request();
             if (request) {
-                next_flip = next_slot(next_flip);
+                if (inner_limit) {
+                    next_flip = next_slot(next_flip);
+                }
                 Flip(request);
                 FRAME_END;
             }
