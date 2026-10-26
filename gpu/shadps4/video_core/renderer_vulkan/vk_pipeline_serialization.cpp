@@ -63,13 +63,13 @@ std::atomic<u32> g_pipeline_binary_saves{0};
 
 class PipelineBinaryCache {
 public:
-    static PipelineBinaryCache& Instance() {
+    static PipelineBinaryCache& Get() {
         static PipelineBinaryCache cache;
         return cache;
     }
 
     template <typename CreateInfo>
-    vk::ResultValue<vk::UniquePipeline> CreatePipeline(const Instance& instance,
+    vk::ResultValue<vk::UniquePipeline> CreatePipeline(const Vulkan::Instance& instance,
                                                        vk::PipelineCache pipeline_cache,
                                                        const CreateInfo& base_info,
                                                        bool is_compute) {
@@ -81,7 +81,7 @@ public:
 
         vk::PipelineBinaryKeyKHR pipeline_key{};
         const vk::PipelineCreateInfoKHR lookup_info{
-            .pNext = &base_info,
+            .pNext = const_cast<CreateInfo*>(&base_info),
         };
         if (device.getPipelineKeyKHR(&lookup_info, &pipeline_key) != vk::Result::eSuccess ||
             !pipeline_key.keySize || pipeline_key.keySize > VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR) {
@@ -89,7 +89,7 @@ public:
         }
 
         if (auto cached = Load(global_key, pipeline_key)) {
-            auto created = CreateFromBinaries(device, pipeline_cache, base_info, *cached, is_compute);
+            auto created = CreateFromBinaries(device, base_info, *cached, is_compute);
             if (created.result == vk::Result::eSuccess) {
                 ++g_pipeline_binary_hits;
                 return created;
@@ -97,8 +97,7 @@ public:
             Remove(pipeline_key);
         }
 
-        auto captured = CaptureAndCreate(device, pipeline_cache, base_info, global_key,
-                                         pipeline_key, is_compute);
+        auto captured = CaptureAndCreate(device, base_info, global_key, pipeline_key, is_compute);
         if (captured.result == vk::Result::eSuccess) {
             return captured;
         }
@@ -352,112 +351,152 @@ private:
 
     template <typename CreateInfo>
     static vk::ResultValue<vk::UniquePipeline> CreateFromBinaries(
-        vk::Device device, vk::PipelineCache pipeline_cache, const CreateInfo& base_info,
-        const std::vector<StoredBinary>& stored, bool is_compute) {
-        boost::container::small_vector<vk::PipelineBinaryDataKHR, MaxBinariesPerPipeline> data_items;
+        vk::Device device, const CreateInfo& base_info, const std::vector<StoredBinary>& stored,
+        bool is_compute) {
+        const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+        const VkDevice raw_dev = static_cast<VkDevice>(device);
+        boost::container::small_vector<VkPipelineBinaryDataKHR, MaxBinariesPerPipeline> data_items;
+        boost::container::small_vector<VkPipelineBinaryKeyKHR, MaxBinariesPerPipeline> key_items;
         for (const auto& item : stored) {
-            data_items.push_back(vk::PipelineBinaryDataKHR{
+            VkPipelineBinaryKeyKHR raw_key{VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+            raw_key.keySize = item.key.keySize;
+            std::memcpy(raw_key.key, item.key.key.data(), item.key.keySize);
+            key_items.push_back(raw_key);
+            data_items.push_back(VkPipelineBinaryDataKHR{
                 .dataSize = item.data.size(),
                 .pData = const_cast<u8*>(item.data.data()),
             });
         }
-        vk::PipelineBinaryKeysAndDataKHR keys_and_data{
+        VkPipelineBinaryKeysAndDataKHR keys_and_data{
             .binaryCount = static_cast<u32>(data_items.size()),
-            .pPipelineBinaryKeys = nullptr,
+            .pPipelineBinaryKeys = key_items.data(),
             .pPipelineBinaryData = data_items.data(),
         };
-        boost::container::small_vector<vk::PipelineBinaryKHR, MaxBinariesPerPipeline> binaries(
-            data_items.size());
-        vk::PipelineBinaryHandlesInfoKHR handles{
+        boost::container::small_vector<VkPipelineBinaryKHR, MaxBinariesPerPipeline> binaries(
+            data_items.size(), VK_NULL_HANDLE);
+        VkPipelineBinaryHandlesInfoKHR handles{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_HANDLES_INFO_KHR,
+            .pNext = nullptr,
             .pipelineBinaryCount = static_cast<u32>(binaries.size()),
             .pPipelineBinaries = binaries.data(),
         };
-        vk::PipelineBinaryCreateInfoKHR binary_ci{
+        VkPipelineBinaryCreateInfoKHR binary_ci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_CREATE_INFO_KHR,
+            .pNext = nullptr,
             .pKeysAndDataInfo = &keys_and_data,
+            .pipeline = VK_NULL_HANDLE,
+            .pPipelineCreateInfo = nullptr,
         };
-        const auto bin_res = device.createPipelineBinariesKHR(&binary_ci, nullptr, &handles);
+        const VkResult bin_res =
+            dispatch.vkCreatePipelineBinariesKHR(raw_dev, &binary_ci, nullptr, &handles);
         auto destroy_binaries = [&]() {
             for (const auto binary : binaries) {
-                if (binary) {
-                    device.destroyPipelineBinaryKHR(binary, nullptr);
+                if (binary != VK_NULL_HANDLE) {
+                    dispatch.vkDestroyPipelineBinaryKHR(raw_dev, binary, nullptr);
                 }
             }
         };
-        if (bin_res != vk::Result::eSuccess) {
+        if (bin_res != VK_SUCCESS) {
             destroy_binaries();
-            return vk::ResultValue<vk::UniquePipeline>{bin_res, vk::UniquePipeline{}};
+            return vk::ResultValue<vk::UniquePipeline>{static_cast<vk::Result>(bin_res),
+                                                       vk::UniquePipeline{}};
         }
 
         CreateInfo info = base_info;
-        vk::PipelineBinaryInfoKHR binary_info{
+        VkPipelineBinaryInfoKHR binary_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_INFO_KHR,
             .pNext = info.pNext,
             .binaryCount = static_cast<u32>(binaries.size()),
             .pPipelineBinaries = binaries.data(),
         };
         info.pNext = &binary_info;
-        auto created = CreatePlain(device, pipeline_cache, info, is_compute);
+        auto created = CreatePlain(device, vk::PipelineCache{}, info, is_compute);
         destroy_binaries();
         return created;
     }
 
     template <typename CreateInfo>
     vk::ResultValue<vk::UniquePipeline> CaptureAndCreate(
-        vk::Device device, vk::PipelineCache pipeline_cache, const CreateInfo& base_info,
-        const vk::PipelineBinaryKeyKHR& global_key, const vk::PipelineBinaryKeyKHR& pipeline_key,
-        bool is_compute) {
+        vk::Device device, const CreateInfo& base_info, const vk::PipelineBinaryKeyKHR& global_key,
+        const vk::PipelineBinaryKeyKHR& pipeline_key, bool is_compute) {
+        const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+        const VkDevice raw_dev = static_cast<VkDevice>(device);
         CreateInfo info = base_info;
         vk::PipelineCreateFlags2CreateInfoKHR flags2{
             .pNext = info.pNext,
-            .flags = vk::PipelineCreateFlagBits2KHR(
-                         static_cast<VkPipelineCreateFlags2KHR>(info.flags)) |
-                     vk::PipelineCreateFlagBits2KHR::eCaptureData,
+            .flags = vk::PipelineCreateFlags2{static_cast<VkPipelineCreateFlags>(info.flags)} |
+                     vk::PipelineCreateFlagBits2::eCaptureDataKHR,
         };
         info.pNext = &flags2;
-        auto created = CreatePlain(device, pipeline_cache, info, is_compute);
+        // Per VK_KHR_pipeline_binary (VUID-09609), pipelineCache must be VK_NULL_HANDLE when
+        // VK_PIPELINE_CREATE_2_CAPTURE_DATA_BIT_KHR is specified.
+        auto created = CreatePlain(device, vk::PipelineCache{}, info, is_compute);
         if (created.result != vk::Result::eSuccess || !created.value) {
             return created;
         }
 
-        const vk::Pipeline pipeline = *created.value;
-        vk::PipelineBinaryCreateInfoKHR binary_ci{
-            .pipeline = pipeline,
+        const VkPipeline raw_pipe = static_cast<VkPipeline>(*created.value);
+        VkReleaseCapturedPipelineDataInfoKHR release_info{
+            .sType = VK_STRUCTURE_TYPE_RELEASE_CAPTURED_PIPELINE_DATA_INFO_KHR,
+            .pNext = nullptr,
+            .pipeline = raw_pipe,
         };
-        vk::PipelineBinaryHandlesInfoKHR count_info{};
+        SCOPE_EXIT {
+            (void)dispatch.vkReleaseCapturedPipelineDataKHR(raw_dev, &release_info, nullptr);
+        };
+
+        VkPipelineBinaryCreateInfoKHR binary_ci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_CREATE_INFO_KHR,
+            .pNext = nullptr,
+            .pKeysAndDataInfo = nullptr,
+            .pipeline = raw_pipe,
+            .pPipelineCreateInfo = nullptr,
+        };
+        VkPipelineBinaryHandlesInfoKHR count_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_HANDLES_INFO_KHR,
+        };
         std::vector<StoredBinary> stored;
-        if (device.createPipelineBinariesKHR(&binary_ci, nullptr, &count_info) ==
-                vk::Result::eSuccess &&
+        if (dispatch.vkCreatePipelineBinariesKHR(raw_dev, &binary_ci, nullptr, &count_info) ==
+                VK_SUCCESS &&
             count_info.pipelineBinaryCount > 0 &&
             count_info.pipelineBinaryCount <= MaxBinariesPerPipeline) {
-            boost::container::small_vector<vk::PipelineBinaryKHR, MaxBinariesPerPipeline> binaries(
-                count_info.pipelineBinaryCount);
+            boost::container::small_vector<VkPipelineBinaryKHR, MaxBinariesPerPipeline> binaries(
+                count_info.pipelineBinaryCount, VK_NULL_HANDLE);
             count_info.pPipelineBinaries = binaries.data();
-            if (device.createPipelineBinariesKHR(&binary_ci, nullptr, &count_info) ==
-                vk::Result::eSuccess) {
+            if (dispatch.vkCreatePipelineBinariesKHR(raw_dev, &binary_ci, nullptr, &count_info) ==
+                VK_SUCCESS) {
                 stored.reserve(binaries.size());
                 bool ok = true;
                 for (const auto binary : binaries) {
-                    if (!binary) {
+                    if (binary == VK_NULL_HANDLE) {
                         ok = false;
                         break;
                     }
-                    vk::PipelineBinaryDataInfoKHR data_info{
+                    VkPipelineBinaryDataInfoKHR data_info{
+                        .sType = VK_STRUCTURE_TYPE_PIPELINE_BINARY_DATA_INFO_KHR,
+                        .pNext = nullptr,
                         .pipelineBinary = binary,
                     };
-                    vk::PipelineBinaryKeyKHR binary_key{};
+                    VkPipelineBinaryKeyKHR binary_key{VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
                     size_t data_size = 0;
-                    if (device.getPipelineBinaryDataKHR(&data_info, &binary_key, &data_size,
-                                                        nullptr) != vk::Result::eSuccess ||
+                    if (dispatch.vkGetPipelineBinaryDataKHR(raw_dev, &data_info, &binary_key,
+                                                            &data_size, nullptr) != VK_SUCCESS ||
                         !data_size || data_size > MaxBinarySize) {
                         ok = false;
                         break;
                     }
                     StoredBinary item{};
                     item.data.resize(data_size);
-                    if (device.getPipelineBinaryDataKHR(&data_info, &item.key, &data_size,
-                                                        item.data.data()) != vk::Result::eSuccess) {
+                    VkPipelineBinaryKeyKHR out_key{VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+                    if (dispatch.vkGetPipelineBinaryDataKHR(raw_dev, &data_info, &out_key,
+                                                            &data_size, item.data.data()) !=
+                        VK_SUCCESS) {
                         ok = false;
                         break;
                     }
+                    item.key.keySize = out_key.keySize;
+                    std::memcpy(item.key.key.data(), out_key.key,
+                                std::min<u32>(out_key.keySize, VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR));
                     item.data.resize(data_size);
                     stored.push_back(std::move(item));
                 }
@@ -466,16 +505,11 @@ private:
                 }
             }
             for (const auto binary : binaries) {
-                if (binary) {
-                    device.destroyPipelineBinaryKHR(binary, nullptr);
+                if (binary != VK_NULL_HANDLE) {
+                    dispatch.vkDestroyPipelineBinaryKHR(raw_dev, binary, nullptr);
                 }
             }
         }
-
-        vk::ReleaseCapturedPipelineDataInfoKHR release_info{
-            .pipeline = pipeline,
-        };
-        (void)device.releaseCapturedPipelineDataKHR(&release_info, nullptr);
 
         if (!stored.empty()) {
             Save(global_key, pipeline_key, stored);
@@ -493,15 +527,15 @@ private:
 vk::ResultValue<vk::UniquePipeline> CreateCachedGraphicsPipeline(
     const Instance& instance, vk::PipelineCache pipeline_cache,
     const vk::GraphicsPipelineCreateInfo& pipeline_info) {
-    return PipelineBinaryCache::Instance().CreatePipeline(instance, pipeline_cache, pipeline_info,
-                                                          false);
+    return PipelineBinaryCache::Get().CreatePipeline(instance, pipeline_cache, pipeline_info,
+                                                     false);
 }
 
 vk::ResultValue<vk::UniquePipeline> CreateCachedComputePipeline(
     const Instance& instance, vk::PipelineCache pipeline_cache,
     const vk::ComputePipelineCreateInfo& pipeline_info) {
-    return PipelineBinaryCache::Instance().CreatePipeline(instance, pipeline_cache, pipeline_info,
-                                                          true);
+    return PipelineBinaryCache::Get().CreatePipeline(instance, pipeline_cache, pipeline_info,
+                                                     true);
 }
 
 void RegisterPipelineData(const ComputePipelineKey& key,

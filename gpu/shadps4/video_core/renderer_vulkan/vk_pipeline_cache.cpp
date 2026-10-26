@@ -368,7 +368,9 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     }
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_ci);
     if (cache_result != vk::Result::eSuccess && !driver_cache_data.empty()) {
-        std::tie(cache_result, cache) = instance.GetDevice().createPipelineCacheUnique({});
+        auto retry = instance.GetDevice().createPipelineCacheUnique({});
+        cache_result = retry.result;
+        cache = std::move(retry.value);
     }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
