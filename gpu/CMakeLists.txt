@@ -338,7 +338,7 @@ target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 if (BB_UWP)
     target_compile_definitions(bbgpu PUBLIC BB_UWP BBPORT_UWP VK_USE_PLATFORM_WIN32_KHR
-        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS _TIMESPEC_DEFINED)
+        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     target_compile_options(bbgpu PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/../xbox/graphics/compat.h")
     target_include_directories(bbgpu PRIVATE .. ../xbox/platform ../xbox/platform/compat
         ../xbox/graphics "${BB_PTHREAD}/include" third_party/xbyak)

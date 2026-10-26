@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include <time.h>
 #include "bb_win_compat.h"
 #include <io.h>
 #ifndef ssize_t

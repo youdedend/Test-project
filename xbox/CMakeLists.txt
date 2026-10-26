@@ -87,7 +87,6 @@ target_compile_definitions(bloodborne PRIVATE
   NOMINMAX
   WIN32_LEAN_AND_MEAN
   _CRT_SECURE_NO_WARNINGS
-  _TIMESPEC_DEFINED
   BB_PREPARED_FORMAT="${BB_PREPARED_FORMAT}"
 )
 
@@ -169,6 +168,8 @@ add_custom_command(TARGET bloodborne POST_BUILD
           "${BB_LAYOUT}/Assets"
           "${BB_LAYOUT}/ThirdParty"
           "${BB_LAYOUT}/patches"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_LIST_DIR}/Assets" "${BB_LAYOUT}/Assets"
   COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:bloodborne>" "${BB_LAYOUT}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${BB_DOZEN_DLL}" "${BB_LAYOUT}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${BB_DXC_ROOT}/bin/x64/dxil.dll" "${BB_LAYOUT}"

@@ -694,7 +694,7 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         std::printf("Preparing Bloodborne boot image from %s...\n", dump.c_str());
         std::fflush(stdout);
         const auto t0 = std::chrono::steady_clock::now();
-        BbPrepare::BootResult res;
+        BbPrepare::BootPrepared res;
         try {
             const char* rz_env = std::getenv("BB_RED_ZONE");
             const bool redzone = !(rz_env && std::strcmp(rz_env, "0") == 0);
