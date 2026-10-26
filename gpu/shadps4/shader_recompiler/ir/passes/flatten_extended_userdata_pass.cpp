@@ -74,7 +74,7 @@ static void RegisterSrtWalkerFaultHandler() {
 }
 
 #ifdef BB_UWP
-static PFN_SrtWalker PublishUwpWalkerSlot(const u8* code_bytes, size_t size) {
+static Shader::PFN_SrtWalker PublishUwpWalkerSlot(const u8* code_bytes, size_t size) {
     ASSERT_MSG(size > 0, "Empty SRT walker code");
     RegisterSrtWalkerFaultHandler();
     const size_t slot_bytes = (size + kSrtPageSize - 1) & ~(kSrtPageSize - 1);
@@ -92,7 +92,7 @@ static PFN_SrtWalker PublishUwpWalkerSlot(const u8* code_bytes, size_t size) {
     const BOOL ok = VirtualProtectFromApp(slot, slot_bytes, PAGE_EXECUTE_READ, &old_prot);
     ASSERT_MSG(ok != FALSE, "VirtualProtectFromApp(PAGE_EXECUTE_READ) failed for SRT walker");
     FlushInstructionCache(GetCurrentProcess(), slot, slot_bytes);
-    return reinterpret_cast<PFN_SrtWalker>(slot);
+    return reinterpret_cast<Shader::PFN_SrtWalker>(slot);
 }
 #endif
 
