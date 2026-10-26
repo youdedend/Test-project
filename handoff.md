@@ -347,7 +347,8 @@ a13b6e0  Read APP_VER/APP_TYPE/TITLE_ID/CONTENT_ID from param.sfo, never guess a
 
 (`a13b6e0` … `0be18f1` are the six steps of this task, `d94cfdc` is the first version of this
 section, `a7cb3de`/`c344a14`/`dc2bd97` are the CI annotation fix and the two real defects the loop
-found, `21b0d3a`/`1e79145` are this document and `7a6ef60` is the panel-text test.)
+found, `21b0d3a` and the documentation commits after `7a6ef60` are this section, and `7a6ef60`
+is the panel-text test.)
 
 | Run | Head | Result |
 |---|---|---|
