@@ -39,14 +39,23 @@ FrameGenerator::FrameGenerator(const Instance& i, Scheduler& s) : instance(i), s
     BbSettings::ConfigureDlssSupport(false, "DLSS is not available on Xbox");
 }
 FrameGenerator::~FrameGenerator() = default;
-bool FrameGenerator::WantsSceneInputs() const noexcept { return false; }
-void FrameGenerator::CaptureInputs(vk::CommandBuffer, vk::ImageView, vk::ImageView, u32, u32,
-                                   std::array<float, 2>, const Camera&) {}
-void FrameGenerator::CaptureHudless(vk::CommandBuffer, vk::Image, u32, u32, vk::ImageLayout) {}
-bool FrameGenerator::Present(Swapchain&, vk::Image, vk::ImageLayout, u32, u32,
-                             const OverlayCallback&) {
-    return false;
+bool FrameGenerator::Wanted() const { return false; }
+u32 FrameGenerator::WantedCount() const { return 0; }
+void FrameGenerator::Skip() {}
+void FrameGenerator::Release() {}
+vk::ImageView FrameGenerator::BeginCapture(vk::CommandBuffer, vk::ImageView, u32, u32) {
+    return {};
 }
+void FrameGenerator::EndCapture(vk::CommandBuffer, std::array<float, 2>, bool, Camera) {}
+void FrameGenerator::CaptureHudless(vk::CommandBuffer, vk::Image, vk::Format, u32, u32) {}
+vk::ImageView FrameGenerator::Hudless(vk::Format, vk::Extent2D&) { return {}; }
+u32 FrameGenerator::Generate(vk::CommandBuffer&, vk::Image, vk::ImageView, vk::ImageUsageFlags,
+                             vk::Image, vk::ImageView, u32, u32, std::span<const Output>) {
+    return 0;
+}
+bool FrameGenerator::OverlapWanted() { return false; }
+void FrameGenerator::DrainOverlap() {}
+void FrameGenerator::DumpIfRequested(vk::CommandBuffer, vk::Image, u32, u32, const char*) {}
 
 struct Fsr4Upscaler::Impl {};
 Fsr4Upscaler::Fsr4Upscaler(const Instance&, Scheduler&) {}

@@ -62,6 +62,6 @@ void Swapchain::SetHDR(bool enabled) {
     if (enabled) {
         std::puts("UWP presenter: HDR unavailable; using SDR");
     }
-    hdr = false;
+    needs_hdr = false;
 }
 } // namespace Vulkan

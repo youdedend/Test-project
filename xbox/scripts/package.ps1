@@ -39,12 +39,23 @@ $content = (Get-Content -LiteralPath $manifest -Raw).Replace('Version="1.0.0.0"'
 $package = Join-Path $Out "BloodborneLauncher_$version`_x64.appx"
 & "$sdk/makeappx.exe" pack /d $stage /p $package /o *> (Join-Path $Out 'pack.log')
 if ($LASTEXITCODE) {
-    Get-Content (Join-Path $Out 'pack.log') -Tail 25
+    $tail = (Get-Content (Join-Path $Out 'pack.log') -Tail 40) -join "`n"
+    Write-Output $tail
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $enc = $tail -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+        Write-Output "::error title=MakeAppx Failed::$enc"
+    }
     throw 'MakeAppx package creation failed'
 }
 
-& "$sdk/signtool.exe" sign /q /fd SHA256 /f (Join-Path $root 'signing/bloodborne_xbox-signing.pfx') $package
+& "$sdk/signtool.exe" sign /fd SHA256 /f (Join-Path $root 'signing/bloodborne_xbox-signing.pfx') $package *> (Join-Path $Out 'sign.log')
 if ($LASTEXITCODE) {
+    $tail = (Get-Content (Join-Path $Out 'sign.log') -Tail 30) -join "`n"
+    Write-Output $tail
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $enc = $tail -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+        Write-Output "::error title=SignTool Failed::$enc"
+    }
     throw 'SignTool signing failed'
 }
 
