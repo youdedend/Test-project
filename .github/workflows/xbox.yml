@@ -177,9 +177,12 @@ jobs:
       - name: Verify UWP imports & package .appx
         id: package
         run: |
-          $lines = .\xbox\scripts\package.ps1 -Out "$env:RUNNER_TEMP\package"
+          $lines = @()
+          .\xbox\scripts\package.ps1 -Out "$env:RUNNER_TEMP\package" | ForEach-Object {
+            Write-Output $_
+            $lines += $_
+          }
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $lines
           foreach ($line in $lines) {
             if ($line -match '^(version|zip)=') {
               $line >> $env:GITHUB_OUTPUT

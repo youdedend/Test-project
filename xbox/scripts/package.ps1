@@ -8,6 +8,14 @@ $root = Split-Path $PSScriptRoot -Parent
 $local = Join-Path $root '.local'
 $layout = Join-Path $local 'build/layout'
 
+trap {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $msg = ($_.Exception.Message + "`n" + $_.InvocationInfo.PositionMessage) -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+        Write-Output "::error title=Package Script Error::$msg"
+    }
+    break
+}
+
 & (Join-Path $PSScriptRoot 'check-imports.ps1') -Folder $layout
 & (Join-Path $PSScriptRoot 'assets.ps1')
 

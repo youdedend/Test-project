@@ -120,7 +120,6 @@
               <uap:FileType>.xml</uap:FileType>
               <uap:FileType>.json</uap:FileType>
               <uap:FileType>.txt</uap:FileType>
-              <uap:FileType>.ini</uap:FileType>
               <uap:FileType>.cfg</uap:FileType>
               <uap:FileType>.csv</uap:FileType>
               <uap:FileType>.log</uap:FileType>
