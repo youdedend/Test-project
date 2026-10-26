@@ -142,3 +142,38 @@ Do **not** reintroduce any of the following approaches:
    - If even more Series S RAM headroom is desired for 60 FPS / higher-res modes, `bda_pagetable_buffer` (`128 MiB` in `vk_instance.cpp`) can be lazily committed or sized to active BDA range.
 4. **Finalize & Merge PR #10 (`arena/c39edde2-test-project` -> `main`)**:
    - Once Hardware Test #11 confirms sustained, crash-free 3D gameplay across Yharnam and Hunter's Dream, merge PR `#10` (`https://github.com/youdedend/Test-project/pull/10`) into `main` using `gh pr merge 10 --merge`.
+
+---
+
+## Hardware Test #12
+
+Test #11 (`xbox-alpha-1.0.26299.1047`) crashed on a **01.00** dump at `4135/5120 MiB` (`presents=1376`) with `Fault: read access to 0000020500987170 at bloodborne.exe+0x3003f0` on `shadPS4:GpuCommandProcessor`. Test #12 fixes the eight causes found in that evidence. Nothing from §5 is reopened.
+
+### What changed (one revertable commit per step)
+
+1. **Hard 01.09 gate, prepare-time** (`xbox/platform/main.cpp`, `xbox/platform/prepare_game.cpp`): `sce_sys/param.sfo` `APP_VER` must be `01.09`; anything else shows a dialog and exits (`BB_FORCE_PATCHES=1` is the only override). Prepare logs `Prepare: dump_app_ver=XX.XX; patches=required|optional`, writes `LocalState\Prepared\prepared-format.txt` (`format=` + `app_ver=`), includes the dump version in the `format.txt` marker so a version change relinks `boot-linked.bin`, and deletes `LocalState\user\cache\<TITLE_ID>\driver.vkcache` when the cached dump version changes. `BuildPatches()` now throws instead of returning an empty patch set for a version or eboot-fingerprint mismatch (`patches=skipped` only when forced).
+2. **Symbolication** (`xbox/CMakeLists.txt`, `xbox/scripts/symbolicate.py`, `xbox/scripts/crash-rvas.txt`, `.github/workflows/xbox.yml`): the link now uses `/MAP` (+ explicit `/OPT:ICF`), `symbolicate.py` resolves `bloodborne.exe+0xNNNNNN` RVAs against the map, CI writes the report into the job summary and uploads `bloodborne.map` with every package. **Build 1047 never published a map/PDB**, so its two frames were reconstructed from the fault registers instead: `rcx=0x20500987170`, `rdx=0x204d81fd010`, `rcx-rdx=0x2878A160` is a linear page-table/`cached_pages` index derived from a guest address far outside the 40-bit (1 TiB) space, i.e. **both frames are host `gpu/shadps4` code (page manager / texture page table), not the guest-ELF path** — no "stop and report" condition.
+3. **Guest-range guards** (`video_core/page_manager.cpp`, `video_core/multi_level_page_table.h`, `vk_draw_prep.cpp`): `ValidGuestRange()` rejects ranges outside `[0, 1 TiB)` before `cached_pages` is indexed; `MultiLevelPageTable::operator[]` returns a shared sink entry (logging) instead of walking `first_level_map` out of bounds in release builds; the whole per-draw preparation (flat user data, resource sharps, vertex inputs) runs under one `runtime_fault_recover` point and a fault marks the draw `Unavailable`.
+4. **Dense-arena refcount** (`xbox/graphics/dense_arena_lifetime.h`, `xbox/graphics/dense_buffers.cpp`, `vk_draw_prep.cpp`, `xbox/tests/dense_arena_lifetime_test.cpp`): a replaced arena is destroyed only when its recorded submissions are signaled **and** no producer holds it; `bb:DrawPrep<N>` retains for the whole prepared submission, `bb:DrawScan` around each scan, and the release happens on the fault path too. Logs `UWP dense arena: retiring deferred (inflight=N, ...)` at most once a second. CI compiles and runs the new unit test.
+5. **Swap views** (`xbox/platform/guest_swap.inc`): SRW-locked registry of live `[begin, end)` view intervals; a freshly mapped view must be the requested guest address inside the 40-bit space (debug asserts, release logs and returns `nullptr`); the clock sweep skips pages whose view subpages are no longer all live instead of hashing through a released window; `uwp_swap_protect()` no longer computes a section offset from a released (zero) backing frame.
+6. **`driver.vkcache` identity** (`vk_pipeline_cache.cpp`, `cache_storage.{h,cpp}`): logs file and current `vendorID`/`deviceID`/`pipelineCacheUUID` before validating, names the failing check (truncated header / device mismatch / UUID changed), and keeps one generation as `driver.vkcache.rejected`.
+7. **Save mounts** (`src/runtime_savedata.c`): mounts are reference counted — a second `sceSaveDataMount` for the same directory returns the same `/savedataN` with status `ALREADY_MOUNTED`, and only the last `sceSaveDataUmount` tears it down (`still in use (refs=N)` otherwise). Fixes the three `SPRJ0005` mounts seen in Test #11.
+8. **Copy-layer mismatches** (`vk_runtime.cpp`): on `BB_UWP` a same-type layer mismatch is a soft fault — log the full source/destination `ImageInfo` (format, extent, layers, guest address) once per unique `(format, src_layers, dst_layers)` and skip the copy instead of coercing to `min(layers)`.
+
+### How to run Test #12
+
+1. Install the new `BloodborneXbox-<version>.zip` package (`BloodborneLauncher_<version>_x64.appx` + `Dependencies\Microsoft.VCLibs.x64.14.00.appx`) through Xbox Device Portal, keep `App type = Game`.
+2. Point the launcher at a **01.09** dump (a 01.00 dump now stops at the version dialog).
+3. Launch, wait for the title screen, then load into Central Yharnam and play past the Cleric Beast area for > 10 minutes (past `presents=10,000`).
+
+### Acceptance for Test #12 (report pass/fail honestly; do not assume)
+
+- `loader.log`: `Prepare: dump_app_ver=01.09; patches=required`, `Patches: <n> writes` with `n > 0`, and `LocalState\Prepared\prepared-format.txt` containing `app_ver=01.09`.
+- Startup `AppMemoryUsage` at `presents=0` ≤ `1,100 MiB` (Test #11: `1,001–1,003 MiB`).
+- `driver.vkcache` identity line present; the cache is either loaded or discarded **once** with the reason spelled out and `driver.vkcache.rejected` written — a discard on every boot is a failure of step 6 and needs the two UUIDs from the log.
+- Yharnam gameplay ≤ `3,500 MiB` (`levels=0..1`), ≥ `25 FPS` after streaming settles.
+- `presents > 10,000` with **zero** faults at `+0x3003f0`, `+0x26bbb7`, `+0x27222e`, `+0x272f1c`; `UWP swap: ... corrupt=0` and `window evictions=0`.
+- Zero `UWP page table: out-of-range page index` and zero unexplained `refusing view` lines; any `retiring deferred` lines are expected (they mean retirement was safely postponed).
+- `GPU: copy layer mismatch: ... skipping the copy` count is reported (each unique triple logs once); it must not correlate with missing visuals.
+- `SPRJ0005` mounted once (`Runtime: save data 'SPRJ0005' mounted at /savedata0` followed by `already mounted ... (refs=1)`), never torn down while a session still uses it.
+- `check-imports.ps1`, `MakeAppx`, `SignTool`, the dense-arena unit test, and the symbolication report all green in CI.
