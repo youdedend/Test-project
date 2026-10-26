@@ -385,7 +385,7 @@ extern "C" int bbgpu_choice_begin(const char* title, const char* const* items, i
     for (int i = 0; i < count; ++i) {
         labels.emplace_back(items[i] ? items[i] : "");
     }
-    BbOverlay::BeginChoice(title ? title : "", std::move(labels), focus);
+    BbOverlay::BeginChoice(title ? title : "", labels, {}, focus);
     return 1;
 }
 
