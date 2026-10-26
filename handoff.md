@@ -360,10 +360,9 @@ found, `21b0d3a`/`1e79145` are this document and `7a6ef60` is the panel-text tes
 What the failing annotation actually said, once `Publish()` stopped publishing the log tail:
 
 ```
-FAIL: the preferred patch path is kept (got 'C:/Users/RUNNER~1/.../MyPatch',
-      expected 'C:\Users\RUNNER~1\...\MyPatch')
-FAIL: the sibling base folder supplies the data (...)
-FAIL: the picked patch folder is the executable source (...)
+FAIL: the preferred patch path is kept (got 'C:/Users/RUNNER~1/AppData/Local/Temp/bb_dump_layout_test/elsewhere/MyPatch', expected 'C:\Users\RUNNER~1\AppData\Local\Temp\bb_dump_layout_test\elsewhere\MyPatch')
+FAIL: the sibling base folder supplies the data (got 'C:/Users/RUNNER~1/AppData/Local/Temp/bb_dump_layout_test/rooted/Bloodborne', expected 'C:\Users\RUNNER~1\AppData\Local\Temp\bb_dump_layout_test\rooted\Bloodborne')
+FAIL: the picked patch folder is the executable source (got 'C:/Users/RUNNER~1/AppData/Local/Temp/bb_dump_layout_test/rooted/Bloodborne-patch', expected 'C:\Users\RUNNER~1\AppData\Local\Temp\bb_dump_layout_test\rooted\Bloodborne-patch')
 3 check(s) failed
 ```
 
