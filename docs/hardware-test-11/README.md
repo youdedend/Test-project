@@ -28,7 +28,8 @@ vk_runtime.cpp:60 SanitizeCopyLayers: Coercing copy source layers N and destinat
 
 How each observation maps to a Test #12 step (see `handoff.md`, `## Hardware Test #12`):
 
-- `app_ver=01.00` + `running unpatched 30 FPS` -> step 1, the hard 01.09 gate.
+- `app_ver=01.00` + `running unpatched 30 FPS` -> the missing patch set in this run (the 01.09
+  prepare-time gate that briefly refused such dumps was rolled back; see `handoff.md`).
 - `+0x3003f0` with `rcx-rdx = 0x2878A160` -> step 3, host page-table/`cached_pages` index fed by a
   guest address outside the 40-bit space (step 2 adds the linker map that resolves such frames).
 - Two dense arenas live (`448 MiB` + `464 MiB`) right before the fault -> step 4, arena refcount.
