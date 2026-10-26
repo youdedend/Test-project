@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <tuple>
+
 #include <boost/container/small_vector.hpp>
 #include "bbport_toggles.h"
 #include "video_core/buffer_cache/buffer.h"
@@ -33,9 +39,44 @@ static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
     }
 }
 
-static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_info,
-                                              const VideoCore::ImageInfo& dst_info,
-                                              const u32 depth) {
+namespace {
+
+/// Copy layer counts after clamping, or nullopt when the copy must be skipped.
+struct SanitizedLayers {
+    u32 src{};
+    u32 dst{};
+};
+
+/// Test #11 logged five "Coercing copy source layers N and destination layers N+1 to minimum"
+/// warnings in one session. On UWP a mismatched copy between two images of the same type is a
+/// guest-side inconsistency (the descriptor and the cache disagree); copying min(layers) writes a
+/// silently wrong region, so the copy is skipped instead. Each unique
+/// (format, src_layers, dst_layers) triple is logged once.
+bool LoggedLayerMismatch(vk::Format format, u32 src_layers, u32 dst_layers) {
+    static std::mutex mutex;
+    static std::set<std::tuple<u32, u32, u32>> seen;
+    std::scoped_lock lock{mutex};
+    return seen.emplace(static_cast<u32>(format), src_layers, dst_layers).second;
+}
+
+void LogCopyMismatch(const char* what, const VideoCore::ImageInfo& src_info,
+                     const VideoCore::ImageInfo& dst_info, u32 src_layers, u32 dst_layers) {
+    std::printf("GPU: %s: source %s %ux%ux%u layers=%u addr=%#llx | destination %s %ux%ux%u "
+                "layers=%u addr=%#llx; skipping the copy\n",
+                what, vk::to_string(src_info.pixel_format).c_str(), src_info.size.width,
+                src_info.size.height, src_info.size.depth, src_layers,
+                static_cast<unsigned long long>(src_info.guest_address),
+                vk::to_string(dst_info.pixel_format).c_str(), dst_info.size.width,
+                dst_info.size.height, dst_info.size.depth, dst_layers,
+                static_cast<unsigned long long>(dst_info.guest_address));
+    std::fflush(stdout);
+}
+
+} // namespace
+
+static std::optional<SanitizedLayers> SanitizeCopyLayers(const VideoCore::ImageInfo& src_info,
+                                                         const VideoCore::ImageInfo& dst_info,
+                                                         const u32 depth) {
     const auto vk_src_type = ConvertImageType(src_info.type);
     const auto vk_dst_type = ConvertImageType(dst_info.type);
 
@@ -55,10 +96,19 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
     // If the image type is equal, layer count must match. Take the minimum of both.
     if (vk_src_type == vk_dst_type) {
         if (src_layers != dst_layers) {
+#ifdef BB_UWP
+            // Soft fault: the guest and the texture cache disagree about the layer count. Skip
+            // the copy (Test #11: five of these per session, each one a corrupted region).
+            if (LoggedLayerMismatch(src_info.pixel_format, src_layers, dst_layers)) {
+                LogCopyMismatch("copy layer mismatch", src_info, dst_info, src_layers, dst_layers);
+            }
+            return std::nullopt;
+#else
             LOG_WARNING(Render_Vulkan,
                         "Coercing copy source layers {} and destination layers {} to minimum.",
                         src_layers, dst_layers);
             src_layers = dst_layers = std::min(src_layers, dst_layers);
+#endif
         }
     } else {
         // For 2D <-> 3D copies, 2D layer count must equal 3D depth.
@@ -78,7 +128,7 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
         }
     }
 
-    return std::make_pair(src_layers, dst_layers);
+    return SanitizedLayers{src_layers, dst_layers};
 }
 
 static u32 BufferImageCopySize(const vk::BufferImageCopy& copy, const vk::Format pixel_format) {
@@ -328,7 +378,12 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
         const u32 mip_h = std::max(base_height >> mip, 1u);
         const u32 mip_d = std::max(base_depth >> mip, 1u);
 
-        const auto [src_layers, dst_layers] = SanitizeCopyLayers(src->info, dst->info, mip_d);
+        const auto layers = SanitizeCopyLayers(src->info, dst->info, mip_d);
+        if (!layers) {
+            return;
+        }
+        const u32 src_layers = layers->src;
+        const u32 dst_layers = layers->dst;
 
         vk::ImageCopy region{};
         region.srcSubresource.aspectMask = src_aspect;
@@ -461,8 +516,12 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
     ASSERT(mip_block_h == (src->info.size.height >> src_dim));
     ASSERT(mip_block_p == (src->info.pitch >> src_dim));
 
-    const auto [src_layers, dst_layers] =
-        SanitizeCopyLayers(src->info, dst->info, src->info.size.depth);
+    const auto layers = SanitizeCopyLayers(src->info, dst->info, src->info.size.depth);
+    if (!layers) {
+        return;
+    }
+    const u32 src_layers = layers->src;
+    const u32 dst_layers = layers->dst;
 
     const vk::ImageCopy image_copy{
         .srcSubresource{
@@ -602,7 +661,12 @@ void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
         FlushBarriers();
     }
 
-    const auto [src_layers, dst_layers] = SanitizeCopyLayers(src->info, dst->info, 1);
+    const auto layers = SanitizeCopyLayers(src->info, dst->info, 1);
+    if (!layers) {
+        return;
+    }
+    const u32 src_layers = layers->src;
+    const u32 dst_layers = layers->dst;
     if (!needs_resolve) {
         const vk::ImageCopy region = {
             .srcSubresource{
