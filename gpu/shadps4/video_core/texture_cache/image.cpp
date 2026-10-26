@@ -187,6 +187,21 @@ bool UniqueImage::TryCreate(const vk::ImageCreateInfo& image_ci) {
     };
 
     const VkImageCreateInfo image_ci_unsafe = static_cast<VkImageCreateInfo>(image_ci);
+#ifdef BB_UWP
+    if (u64(image_ci.extent.width) * u64(image_ci.extent.height) >= 256u * 256u) {
+        const uint64_t limit = bb_uwp_app_memory_limit();
+        if (limit > 0) {
+            for (unsigned pass = 0; pass < 4; ++pass) {
+                if (bb_uwp_app_memory_usage() + (96ULL << 20) <= limit) {
+                    break;
+                }
+                if (!runtime_memory_page_out(UINT64_C(64) << 20)) {
+                    break;
+                }
+            }
+        }
+    }
+#endif
     VkImage unsafe_image{};
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,

@@ -70,7 +70,7 @@ public:
         return bda_pagetable_buffer.get();
     }
 #ifdef BB_UWP
-    static constexpr u32 DmaViewCount = 128;
+    static constexpr u32 DmaViewCount = 176;
     std::array<vk::DescriptorBufferInfo, DmaViewCount> GetDmaViews() const;
     const Buffer* GetNullBuffer() const {
         return null_buffer.get();

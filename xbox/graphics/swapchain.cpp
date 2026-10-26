@@ -4,6 +4,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
+#include <vk_mem_alloc.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,7 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present(vk::Queue) {
+    vmaSetCurrentFrameIndex(instance.GetAllocator(), ++frame_index);
     const bool vsync = VsyncEnabled();
     present_mode = vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate;
     return bridge->Present(vsync);

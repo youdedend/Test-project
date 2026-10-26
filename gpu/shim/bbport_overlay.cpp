@@ -581,8 +581,14 @@ void TextEntryBox() {
     ImGui::Text("%s_", text_entry_text.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
+#ifdef BB_UWP
+    ImGui::TextDisabled("Controller: A / Menu = Confirm, B = Cancel");
+    ImGui::TextDisabled("D-Pad: Up/Down = Letter, Right = Add, Left / X = Backspace");
+    ImGui::TextDisabled("USB Keyboard: type, Backspace, Enter = Confirm, Esc = Cancel");
+#else
     ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
     ImGui::TextDisabled("Controller: Cross (A) = OK, Circle (B) = cancel");
+#endif
     ImGui::End();
 }
 

@@ -23,6 +23,9 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#ifdef BB_UWP
+#include "descriptor_fallback.h"
+#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -291,7 +294,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
             GetProcAddress(dozen, "vkGetInstanceProcAddr"));
     }
     ASSERT_MSG(get_proc != nullptr, "vulkan_dzn.dll has no vkGetInstanceProcAddr entry point");
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(get_proc);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(BbUwp::WrapUwpGetInstanceProcAddr(get_proc));
 #else
     static vk::detail::DynamicLoader dl;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(

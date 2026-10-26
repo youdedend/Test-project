@@ -15,9 +15,15 @@ namespace Serialization {
 // bbport: above every version a release has used (1.9.2: 11, 8, 6), never back to an old one: the
 // GPU rollback to 1.8.2's code took them back to 7, 7, 5, and a cache another build wrote into
 // the same folder then passed as this build's.
+#ifdef BB_UWP
+static constexpr u32 ShaderBinaryVersion = 13u;
+static constexpr u32 ShaderMetaVersion = 9u;
+static constexpr u32 PipelineKeyVersion = 8u;
+#else
 static constexpr u32 ShaderBinaryVersion = 12u;
 static constexpr u32 ShaderMetaVersion = 9u;
 static constexpr u32 PipelineKeyVersion = 7u;
+#endif
 
 // bbport: shader binaries carry no version of their own, so their names do: a build with another
 // version writes its binaries beside these instead of over them (where a shader's metadata

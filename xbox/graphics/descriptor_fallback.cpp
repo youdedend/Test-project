@@ -1,14 +1,153 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "descriptor_fallback.h"
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
+extern "C" uint64_t bb_uwp_app_memory_usage(void);
+extern "C" uint64_t bb_uwp_app_memory_limit(void);
+
 namespace BbUwp {
 namespace {
+PFN_vkGetInstanceProcAddr g_real_get_instance_proc_addr{};
+PFN_vkGetPhysicalDeviceMemoryProperties g_real_get_mem_props{};
+PFN_vkGetPhysicalDeviceMemoryProperties2 g_real_get_mem_props2{};
+PFN_vkGetPhysicalDeviceProperties2 g_real_get_props2{};
+
+uint64_t QueryXboxAppMemoryLimit() {
+    const uint64_t limit = bb_uwp_app_memory_limit();
+    return limit >= (512ULL << 20) ? limit : (5ULL << 30);
+}
+
+void PatchUwpMemoryProperties(VkPhysicalDeviceMemoryProperties* props) {
+    if (!props || props->memoryHeapCount == 0) {
+        return;
+    }
+    const VkDeviceSize app_limit = static_cast<VkDeviceSize>(QueryXboxAppMemoryLimit());
+    uint32_t primary_heap = UINT32_MAX;
+    VkDeviceSize max_local = 0;
+    for (uint32_t i = 0; i < props->memoryHeapCount; ++i) {
+        if ((props->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
+            props->memoryHeaps[i].size >= max_local) {
+            max_local = props->memoryHeaps[i].size;
+            primary_heap = i;
+        }
+    }
+    if (primary_heap == UINT32_MAX) {
+        primary_heap = 0;
+    }
+    /* On Xbox Series S (SraKmd_arden, UMA == TRUE), Mesa Dozen skips dedicated_video_memory
+     * and exposes a single VK_MEMORY_HEAP_DEVICE_LOCAL_BIT heap sized to shared_system_memory
+     * (1,280 MiB), causing VMA to reject all buffer/image allocations past 1,280 MiB even when
+     * ~2 GiB of Xbox unified Game Mode RAM is free. Align the UMA heap ceiling to Xbox's real
+     * AppMemoryUsageLimit (5,120 MiB in Game Mode). */
+    if (props->memoryHeaps[primary_heap].size < app_limit) {
+        const VkDeviceSize old_size = props->memoryHeaps[primary_heap].size;
+        props->memoryHeaps[primary_heap].size = app_limit;
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) {
+            std::printf("[uwp-vk] Upgraded UMA VkMemoryHeap[%u] size from %llu MiB -> %llu MiB "
+                        "(Xbox AppMemoryUsageLimit)\n",
+                        primary_heap,
+                        static_cast<unsigned long long>(old_size >> 20),
+                        static_cast<unsigned long long>(app_limit >> 20));
+            std::fflush(stdout);
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL UwpGetPhysicalDeviceMemoryProperties(
+    VkPhysicalDevice physicalDevice, VkPhysicalDeviceMemoryProperties* pMemoryProperties) {
+    g_real_get_mem_props(physicalDevice, pMemoryProperties);
+    PatchUwpMemoryProperties(pMemoryProperties);
+}
+
+VKAPI_ATTR void VKAPI_CALL UwpGetPhysicalDeviceMemoryProperties2(
+    VkPhysicalDevice physicalDevice, VkPhysicalDeviceMemoryProperties2* pMemoryProperties) {
+    g_real_get_mem_props2(physicalDevice, pMemoryProperties);
+    if (!pMemoryProperties) {
+        return;
+    }
+    PatchUwpMemoryProperties(&pMemoryProperties->memoryProperties);
+    const VkDeviceSize app_limit = static_cast<VkDeviceSize>(QueryXboxAppMemoryLimit());
+    const VkDeviceSize safe_budget =
+        app_limit > (128ULL << 20) ? (app_limit - (128ULL << 20)) : app_limit;
+    const VkDeviceSize app_usage = std::min<VkDeviceSize>(
+        static_cast<VkDeviceSize>(bb_uwp_app_memory_usage()), safe_budget);
+
+    for (auto* ext = reinterpret_cast<VkBaseOutStructure*>(pMemoryProperties->pNext);
+         ext != nullptr; ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT) {
+            auto* budget = reinterpret_cast<VkPhysicalDeviceMemoryBudgetPropertiesEXT*>(ext);
+            for (uint32_t i = 0; i < pMemoryProperties->memoryProperties.memoryHeapCount; ++i) {
+                if ((pMemoryProperties->memoryProperties.memoryHeaps[i].flags &
+                     VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 &&
+                    (pMemoryProperties->memoryProperties.memoryHeapCount == 1 ||
+                     budget->heapBudget[i] < safe_budget)) {
+                    budget->heapBudget[i] = safe_budget;
+                    budget->heapUsage[i] = app_usage;
+                }
+            }
+        }
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL UwpGetPhysicalDeviceProperties2(
+    VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties2* pProperties) {
+    g_real_get_props2(physicalDevice, pProperties);
+    if (!pProperties) {
+        return;
+    }
+    constexpr VkDeviceSize kMinMaxAlloc = 2ULL << 30;
+    for (auto* ext = reinterpret_cast<VkBaseOutStructure*>(pProperties->pNext); ext != nullptr;
+         ext = ext->pNext) {
+        if (ext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES) {
+            auto* p = reinterpret_cast<VkPhysicalDeviceVulkan11Properties*>(ext);
+            p->maxMemoryAllocationSize = std::max(p->maxMemoryAllocationSize, kMinMaxAlloc);
+        } else if (ext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES) {
+            auto* p = reinterpret_cast<VkPhysicalDeviceMaintenance3Properties*>(ext);
+            p->maxMemoryAllocationSize = std::max(p->maxMemoryAllocationSize, kMinMaxAlloc);
+        } else if (ext->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES) {
+            auto* p = reinterpret_cast<VkPhysicalDeviceMaintenance4Properties*>(ext);
+            p->maxBufferSize = std::max(p->maxBufferSize, kMinMaxAlloc);
+        }
+    }
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL UwpGetInstanceProcAddr(VkInstance instance,
+                                                                const char* pName) {
+    if (!pName || !g_real_get_instance_proc_addr) {
+        return nullptr;
+    }
+    if (std::strcmp(pName, "vkGetInstanceProcAddr") == 0) {
+        return reinterpret_cast<PFN_vkVoidFunction>(&UwpGetInstanceProcAddr);
+    }
+    PFN_vkVoidFunction fn = g_real_get_instance_proc_addr(instance, pName);
+    if (!fn) {
+        return nullptr;
+    }
+    if (std::strcmp(pName, "vkGetPhysicalDeviceMemoryProperties") == 0) {
+        g_real_get_mem_props = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(fn);
+        return reinterpret_cast<PFN_vkVoidFunction>(&UwpGetPhysicalDeviceMemoryProperties);
+    }
+    if (std::strcmp(pName, "vkGetPhysicalDeviceMemoryProperties2") == 0 ||
+        std::strcmp(pName, "vkGetPhysicalDeviceMemoryProperties2KHR") == 0) {
+        g_real_get_mem_props2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(fn);
+        return reinterpret_cast<PFN_vkVoidFunction>(&UwpGetPhysicalDeviceMemoryProperties2);
+    }
+    if (std::strcmp(pName, "vkGetPhysicalDeviceProperties2") == 0 ||
+        std::strcmp(pName, "vkGetPhysicalDeviceProperties2KHR") == 0) {
+        g_real_get_props2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(fn);
+        return reinterpret_cast<PFN_vkVoidFunction>(&UwpGetPhysicalDeviceProperties2);
+    }
+    return fn;
+}
 struct Layout {
     std::vector<VkDescriptorSetLayoutBinding> bindings;
 };
@@ -172,7 +311,9 @@ VkDescriptorSet Allocate(Commands& c, VkDescriptorSetLayout layout) {
             };
             std::array<VkDescriptorPoolSize, std::size(types)> sizes{};
             for (size_t i = 0; i < sizes.size(); ++i) {
-                sizes[i] = {types[i], 16384};
+                const uint32_t count =
+                    (types[i] == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) ? 32768u : 16384u;
+                sizes[i] = {types[i], count};
             }
             VkDescriptorPoolCreateInfo info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             info.maxSets = 256;
@@ -248,6 +389,11 @@ VKAPI_ATTR void VKAPI_CALL DestroyDevice(VkDevice d, const VkAllocationCallbacks
     destroy_device(d, alloc);
 }
 } // namespace
+
+PFN_vkGetInstanceProcAddr WrapUwpGetInstanceProcAddr(PFN_vkGetInstanceProcAddr real_get_proc) {
+    g_real_get_instance_proc_addr = real_get_proc;
+    return &UwpGetInstanceProcAddr;
+}
 
 void InstallDescriptorFallback(vk::Device device) {
     active_device = device;

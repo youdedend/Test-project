@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "shader_recompiler/resource.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include <algorithm>
 #include <cstdio>
 #include <set>
 
 namespace VideoCore {
+
+static_assert(BufferCache::DmaViewCount == Shader::NUM_DMA_BUFFERS,
+              "BufferCache::DmaViewCount must match Shader::NUM_DMA_BUFFERS");
 
 void BufferCache::InitializeDenseBuffers() {
     block_shift = 16;
@@ -64,10 +69,18 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
     auto arena = &arenas.emplace_back(instance, first_page << arena_page_bits,
                                       (last_page - first_page + 1) << arena_page_bits,
                                       MemoryType::DeviceLocal);
+    u64 retired_bytes = 0;
     for (auto old : previous) {
         const vk::BufferCopy copy{0, old->cpu_addr - arena->cpu_addr, old->size_bytes};
         runtime.CopyBuffer(old, arena, std::span{&copy, 1});
+        auto* mutable_old = const_cast<Buffer*>(old);
+        retired_bytes += mutable_old->size_bytes;
+        arena_backed -= std::min<u64>(arena_backed, mutable_old->size_bytes);
+        scheduler.DeferOperation([mutable_old]() {
+            mutable_old->buffer.Destroy();
+        });
     }
+    arena_backed += arena->size_bytes;
     for (u64 page = first_page; page <= last_page; ++page) {
         address_space[page] = arena;
         auto [entry, inserted] = dense_slots.emplace(page, u32(dense_slots.size()));
@@ -75,9 +88,13 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         ASSERT_MSG(entry->second < DmaViewCount, "Logical DMA view capacity reached (%u)", DmaViewCount);
         dense_views[entry->second] = {arena, (page - first_page) << arena_page_bits};
     }
-    std::printf("UWP dense GPU arena: %#llx, %llu MiB, %zu live DMA views\n",
+    std::printf("UWP dense GPU arena: %#llx, %llu MiB (retired %llu MiB, live %llu MiB), %zu/%u DMA views\n",
                 static_cast<unsigned long long>(arena->cpu_addr),
-                static_cast<unsigned long long>(arena->size_bytes >> 20), dense_slots.size());
+                static_cast<unsigned long long>(arena->size_bytes >> 20),
+                static_cast<unsigned long long>(retired_bytes >> 20),
+                static_cast<unsigned long long>(arena_backed >> 20),
+                dense_slots.size(), DmaViewCount);
+    std::fflush(stdout);
     return arena;
 }
 

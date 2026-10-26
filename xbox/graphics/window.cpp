@@ -10,14 +10,32 @@
 #include <thread>
 
 extern "C" uint32_t runtime_pad_dialog_buttons(void);
+extern "C" size_t runtime_memory_page_out(size_t target_bytes);
 
 namespace {
 std::mutex g_text_dialog_mutex;
 bool g_text_dialog_active = false;
+bool g_text_dialog_wait_release = false;
 int g_text_dialog_state = 0; // 0 typing, 1 confirmed, 2 cancelled
 std::string g_text_dialog_value;
 std::string g_text_dialog_prompt;
 bool g_shift_down = false;
+
+constexpr char kControllerCharset[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -";
+constexpr size_t kControllerCharsetLen = sizeof(kControllerCharset) - 1;
+
+char CycleControllerChar(char current, int delta) {
+    size_t idx = 0;
+    for (size_t i = 0; i < kControllerCharsetLen; ++i) {
+        if (kControllerCharset[i] == current) {
+            idx = i;
+            break;
+        }
+    }
+    idx = (idx + kControllerCharsetLen + static_cast<size_t>(delta)) % kControllerCharsetLen;
+    return kControllerCharset[idx];
+}
 } // namespace
 
 extern "C" int bb_uwp_dialog_key(uint32_t key, int down, int repeat) {
@@ -92,8 +110,7 @@ WindowSDL::~WindowSDL() = default;
 void WindowSDL::UpdateTextTitle() {}
 
 void WindowSDL::BeginTextInput(const std::string& initial, const std::string& prompt) {
-    const std::string label = (prompt.empty() ? "Enter Hunter Name" : prompt) +
-                              "  [A / Menu = Confirm, B = Cancel]";
+    const std::string label = prompt.empty() ? "Enter Hunter Name" : prompt;
     const std::string start_value = initial.empty() ? "Hunter" : initial;
     {
         std::scoped_lock lock(text_mutex);
@@ -106,6 +123,7 @@ void WindowSDL::BeginTextInput(const std::string& initial, const std::string& pr
         g_text_dialog_value = start_value;
         g_text_dialog_prompt = label;
         g_text_dialog_state = 0;
+        g_text_dialog_wait_release = true;
         g_text_dialog_active = true;
     }
     BbOverlay::SetTextEntry(true, label, start_value);
@@ -127,18 +145,50 @@ bool WindowSDL::PollEvents() {
     {
         std::scoped_lock lock(g_text_dialog_mutex);
         if (g_text_dialog_active) {
-            // Confirm on new press of Cross (A, 0x4000) or Options (Menu, 0x8).
-            if (((changed & 0x4000u) && (buttons & 0x4000u)) ||
-                ((changed & 0x8u) && (buttons & 0x8u))) {
-                if (g_text_dialog_value.empty()) g_text_dialog_value = "Hunter";
-                g_text_dialog_state = 1;
-                g_text_dialog_active = false;
-                BbOverlay::SetTextEntry(false, {}, {});
-            } else if ((changed & 0x2000u) && (buttons & 0x2000u)) {
-                // Cancel on new press of Circle (B, 0x2000).
-                g_text_dialog_state = 2;
-                g_text_dialog_active = false;
-                BbOverlay::SetTextEntry(false, {}, {});
+            constexpr uint32_t kDialogMask =
+                0x4000u | 0x2000u | 0x8000u | 0x8u | 0x10u | 0x20u | 0x40u | 0x80u;
+            if (g_text_dialog_wait_release) {
+                if ((buttons & kDialogMask) == 0) {
+                    g_text_dialog_wait_release = false;
+                }
+            } else {
+                const auto pressed = [&](uint32_t bit) {
+                    return ((changed & bit) != 0) && ((buttons & bit) != 0);
+                };
+                // Confirm on new press of Cross (A, 0x4000) or Options (Menu, 0x8).
+                if (pressed(0x4000u) || pressed(0x8u)) {
+                    if (g_text_dialog_value.empty()) g_text_dialog_value = "Hunter";
+                    g_text_dialog_state = 1;
+                    g_text_dialog_active = false;
+                    BbOverlay::SetTextEntry(false, {}, {});
+                } else if (pressed(0x2000u)) {
+                    // Cancel on new press of Circle (B, 0x2000).
+                    g_text_dialog_state = 2;
+                    g_text_dialog_active = false;
+                    BbOverlay::SetTextEntry(false, {}, {});
+                } else if (pressed(0x10u) || pressed(0x40u)) {
+                    // D-Pad Up / Down cycles the trailing letter.
+                    if (g_text_dialog_value.empty()) {
+                        g_text_dialog_value = "A";
+                    } else {
+                        g_text_dialog_value.back() =
+                            CycleControllerChar(g_text_dialog_value.back(),
+                                                pressed(0x10u) ? 1 : -1);
+                    }
+                    BbOverlay::SetTextEntry(true, g_text_dialog_prompt, g_text_dialog_value);
+                } else if (pressed(0x20u)) {
+                    // D-Pad Right appends a character (up to 16 chars).
+                    if (g_text_dialog_value.size() < 16) {
+                        g_text_dialog_value.push_back(g_text_dialog_value.empty() ? 'A' : 'a');
+                        BbOverlay::SetTextEntry(true, g_text_dialog_prompt, g_text_dialog_value);
+                    }
+                } else if (pressed(0x80u) || pressed(0x8000u)) {
+                    // D-Pad Left or X deletes the trailing character.
+                    if (!g_text_dialog_value.empty()) {
+                        g_text_dialog_value.pop_back();
+                        BbOverlay::SetTextEntry(true, g_text_dialog_prompt, g_text_dialog_value);
+                    }
+                }
             }
             BbPrompts::Apply();
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -217,6 +267,7 @@ extern "C" BbGpuBackend bbgpu_uwp_active_backend(void) {
 extern "C" void bbgpu_uwp_on_suspending(void) {}
 extern "C" void bbgpu_uwp_on_resuming(void) {}
 extern "C" uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free) {
-    (void)target_bytes_to_free;
-    return 0;
+    return static_cast<uint64_t>(
+        runtime_memory_page_out(static_cast<size_t>(target_bytes_to_free ? target_bytes_to_free
+                                                                         : (64ULL << 20))));
 }
