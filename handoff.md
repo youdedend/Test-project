@@ -315,3 +315,12 @@ Two real defects came out of that loop, and one workflow improvement:
 3. **`dc2bd97`** — three `dump_layout` checks compared a normalized path with a raw
    `std::filesystem` path. That is a no-op on Linux (`/` on both sides) but fails on Windows, where
    `std::filesystem` hands back `\`. Both sides now go through the same normalizer.
+
+### The panel text is testable too
+
+`main.cpp` owns the WinRT dialogs and cannot be built on the CI machine, so every sentence the
+player sees and every summary line in `loader.log.txt` now comes from `xbox/platform/dump_panel.h`
+(`BbPanel::DescribeDump`, `PanelText`, `BaseOnlyBanner`, `LaunchTargetLine`, `PrepareLine`,
+`SkippedPatchesLine`, `OverlayChangedLine`). `main.cpp` keeps only the dialog plumbing, and
+`dump_layout_test.cpp` pins the three launcher states verbatim and prints them, so the states and the
+`Prepare:`/`Launch target:` lines appear in the CI log instead of only on a console.

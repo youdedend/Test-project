@@ -36,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "dump_panel.h"
 #include "ini_file.h"
 #include "prepare_game.h"
 #include "sfo_version.h"
@@ -825,51 +826,30 @@ static std::string use_picked_patch(const winrt::Windows::Storage::StorageFolder
     return path;
 }
 
-static std::string describe_dump(const std::string& path, const BbPrepare::SfoInfo& info) {
-    std::string text = path + " - app_ver=" + (info.Version().empty() ? "unknown" : info.Version());
-    if (!info.app_type.empty()) {
-        text += " (" + info.app_type + ")";
-    }
-    if (!info.title_id.empty()) {
-        text += " " + info.title_id;
-    }
-    return text;
+/// The panel text builders live in xbox/platform/dump_panel.h so the CI test can pin the exact
+/// sentences the player sees (main.cpp itself needs WinRT and cannot be built on the runner).
+static BbPanel::Panel PanelOf(const DumpSelection& sel) {
+    BbPanel::Panel panel;
+    panel.base_path = sel.layout.base_path;
+    panel.base = sel.layout.base;
+    panel.patch_path = sel.layout.patch_path;
+    panel.patch = sel.layout.patch;
+    panel.use_patch = sel.use_patch;
+    panel.effective_ver = sel.EffectiveVersion();
+    panel.can_run_patched = sel.CanRunPatched();
+    return panel;
 }
 
-/// The launcher summary panel: base dump, patch dump (in use or not) and the effective version.
+static std::string describe_dump(const std::string& path, const BbPrepare::SfoInfo& info) {
+    return BbPanel::DescribeDump(path, info);
+}
+
 static std::string dump_panel_text(const DumpSelection& sel) {
-    const auto& layout = sel.layout;
-    std::string text = "Base dump:  " + describe_dump(layout.base_path, layout.base) + "\n";
-    if (layout.patch_path.empty()) {
-        text += "Patch dump: none found\n";
-    } else if (sel.use_patch) {
-        text += "Patch dump: " + describe_dump(layout.patch_path, layout.patch) + " (in use)\n";
-    } else {
-        text += "Patch dump: " + describe_dump(layout.patch_path, layout.patch) +
-                " (NOT USED - \"Use patch\" is off)\n";
-    }
-    text += "Effective version: " + sel.EffectiveVersion();
-    if (!sel.CanRunPatched()) {
-        text += " - patches will be SKIPPED";
-    }
-    return text;
+    return BbPanel::PanelText(PanelOf(sel));
 }
 
 static std::string base_only_banner(const DumpSelection& sel) {
-    std::string text = "! No " + std::string(BbPrepare::kPatchTargetVersion) +
-                       " update folder was found.\n"
-                       "Without it the red-zone patches are skipped: the game runs unpatched at "
-                       "30 FPS and can crash when gameplay starts.\n\n";
-    const std::string parent = [&sel] {
-        const auto& path = sel.layout.base_path;
-        const size_t slash = path.find_last_of("\\/");
-        return slash == std::string::npos ? std::string() : path.substr(0, slash);
-    }();
-    text += "Choose the update folder - the one holding eboot.bin and sce_sys\\param.sfo with "
-            "APP_TYPE=patch (usually next to the game folder" +
-            (parent.empty() ? std::string(")") : ": " + parent + "\\Bloodborne-patch)") +
-            ".\n\nThe game folder itself is never modified.";
-    return text;
+    return BbPanel::BaseOnlyBanner(PanelOf(sel));
 }
 
 /// Shows the detected layout and applies the player's choice. Returns false when the app must not
@@ -1100,10 +1080,7 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
     const std::string overlay_digest = overlay.IsValid() ? overlay.digest : std::string();
     if (previous_digest != overlay_digest && !(previous_digest.empty() && overlay_digest.empty())) {
         const char* user_env = std::getenv("BB_USER_DIR");
-        std::printf("Prepare: overlay changed (digest %s -> %s); invalidating Prepared and "
-                    "driver.vkcache\n",
-                    previous_digest.empty() ? "none" : previous_digest.c_str(),
-                    overlay_digest.empty() ? "none" : overlay_digest.c_str());
+        std::printf("%s\n", BbPanel::OverlayChangedLine(previous_digest, overlay_digest).c_str());
         invalidate_prepared(prepared, user_env ? user_env : "");
     }
 
@@ -1114,14 +1091,11 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
                                       ? std::string("-")
                                       : selection.layout.patch.Version();
     const std::string effective_ver = selection.EffectiveVersion();
-    std::printf("Prepare: base_app_ver=%s; patch_app_ver=%s; effective=%s; patches=%s\n",
-                base_ver.empty() ? "unknown" : base_ver.c_str(),
-                patch_ver.empty() ? "unknown" : patch_ver.c_str(),
-                effective_ver.empty() ? "unknown" : effective_ver.c_str(),
-                PatchStateName(patch_state));
+    std::printf("%s\n", BbPanel::PrepareLine(base_ver, patch_ver, effective_ver,
+                                              PatchStateName(patch_state))
+                            .c_str());
     if (patch_state == PatchState::Skipped) {
-        std::printf("Prepare: red-zone patches are skipped, the game runs the unpatched build%s\n",
-                    selection.unpatched_confirmed ? " (as confirmed by the player)" : "");
+        std::printf("%s\n", BbPanel::SkippedPatchesLine(selection.unpatched_confirmed).c_str());
     }
     std::fflush(stdout);
 
@@ -1638,12 +1612,10 @@ static void run_loader() {
         return;
     }
     dump = selection.BasePath();
-    std::printf("Launch target: base=%s; patch=%s; effective=%s; patches=%s\n",
-                selection.layout.base_path.c_str(),
-                selection.layout.patch_path.empty() ? "-"
-                                                    : selection.layout.patch_path.c_str(),
-                selection.EffectiveVersion().c_str(),
-                selection.CanRunPatched() ? "required" : "skipped");
+    std::printf("%s\n", BbPanel::LaunchTargetLine(PanelOf(selection),
+                                                  selection.CanRunPatched() ? "required"
+                                                                            : "skipped")
+                            .c_str());
     std::printf("Active Bloodborne dump: %s (%s)\n", dump.c_str(), describe_place(dump).c_str());
     std::fflush(stdout);
 

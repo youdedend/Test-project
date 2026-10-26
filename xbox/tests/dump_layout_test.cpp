@@ -10,6 +10,7 @@
 // layer the real app uses (bb_uwp_*) is provided here with std::filesystem, so the production code
 // under test is exactly the one that ships.
 
+#include "dump_panel.h"
 #include "prepare_game.h"
 
 #include <algorithm>
@@ -504,6 +505,121 @@ void TestUnreadableDump(const fs::path& root) {
     Check(!layout.IsValid(), "a folder without param.sfo yields an invalid layout");
 }
 
+/// The launcher text is built by xbox/platform/dump_panel.h (main.cpp only wraps it in WinRT
+/// dialogs), so the three states the player sees are pinned here - including the login lines they
+/// quote in a bug report.
+void TestPanelText() {
+    const auto make_info = [](const char* ver, const char* type) {
+        const BbPrepare::Bytes sfo = MakeSfo({{"APP_VER", ver},
+                                              {"APP_TYPE", type},
+                                              {"TITLE_ID", "CUSA03173"},
+                                              {"TITLE", "Bloodborne"},
+                                              {"CONTENT_ID",
+                                               "UP9000-CUSA03173_00-BLOODBORNE0000000"}});
+        const auto info = BbPrepare::ParseParamSfo(sfo, "mem:param.sfo");
+        return info ? *info : BbPrepare::SfoInfo{};
+    };
+
+    BbPanel::Panel merged;
+    merged.base_path = "E:\\dumps\\Bloodborne";
+    merged.base = make_info("01.09", "gp");
+    merged.effective_ver = "01.09";
+    merged.can_run_patched = true;
+    CheckEqual(BbPanel::PanelText(merged),
+               "Base dump:  E:\\dumps\\Bloodborne - app_ver=01.09 (gp) CUSA03173\n"
+               "Patch dump: none found\n"
+               "Effective version: 01.09",
+               "a merged dump says it already carries the update");
+    CheckEqual(BbPanel::LaunchTargetLine(merged, "required"),
+               "Launch target: base=E:\\dumps\\Bloodborne; patch=-; effective=01.09; "
+               "patches=required",
+               "the merged launch line names the base folder only");
+
+    BbPanel::Panel split;
+    split.base_path = "E:\\dumps\\Bloodborne";
+    split.base = make_info("01.00", "gp");
+    split.patch_path = "E:\\dumps\\Bloodborne-patch";
+    split.patch = make_info("01.09", "patch");
+    split.effective_ver = "01.09";
+    split.can_run_patched = true;
+    CheckEqual(BbPanel::PanelText(split),
+               "Base dump:  E:\\dumps\\Bloodborne - app_ver=01.00 (gp) CUSA03173\n"
+               "Patch dump: E:\\dumps\\Bloodborne-patch - app_ver=01.09 (patch) CUSA03173 (in use)\n"
+               "Effective version: 01.09",
+               "a split dump shows both folders and the version that will run");
+    CheckEqual(BbPanel::LaunchTargetLine(split, "required"),
+               "Launch target: base=E:\\dumps\\Bloodborne; patch=E:\\dumps\\Bloodborne-patch; "
+               "effective=01.09; patches=required",
+               "the split launch line names both folders");
+
+    BbPanel::Panel disabled = split;
+    disabled.use_patch = false;
+    disabled.effective_ver = "01.00";
+    disabled.can_run_patched = false;
+    CheckEqual(BbPanel::PanelText(disabled),
+               "Base dump:  E:\\dumps\\Bloodborne - app_ver=01.00 (gp) CUSA03173\n"
+               "Patch dump: E:\\dumps\\Bloodborne-patch - app_ver=01.09 (patch) CUSA03173 "
+               "(NOT USED - \"Use patch\" is off)\n"
+               "Effective version: 01.00 - patches will be SKIPPED",
+               "\"Use patch\" off keeps the update on disk but runs the base game");
+    CheckEqual(BbPanel::LaunchTargetLine(disabled, "skipped"),
+               "Launch target: base=E:\\dumps\\Bloodborne; patch=E:\\dumps\\Bloodborne-patch; "
+               "effective=01.00; patches=skipped",
+               "the disabled launch line still reports the folder it decided not to use");
+
+    BbPanel::Panel base_only;
+    base_only.base_path = "E:\\dumps\\Bloodborne";
+    base_only.base = make_info("01.00", "gp");
+    base_only.effective_ver = "01.00";
+    base_only.can_run_patched = false;
+    CheckEqual(BbPanel::PanelText(base_only),
+               "Base dump:  E:\\dumps\\Bloodborne - app_ver=01.00 (gp) CUSA03173\n"
+               "Patch dump: none found\n"
+               "Effective version: 01.00 - patches will be SKIPPED",
+               "a base-only dump warns that it runs unpatched");
+    const std::string banner = BbPanel::BaseOnlyBanner(base_only);
+    Check(banner.find("! No 01.09 update folder was found.") != std::string::npos,
+          "the base-only banner names the version the patch set targets");
+    Check(banner.find("E:\\dumps\\Bloodborne-patch") != std::string::npos,
+          "the banner suggests the sibling folder by name");
+    Check(banner.find("never modified") != std::string::npos,
+          "the banner promises the dump is not rewritten");
+
+    // The `Prepare:` line is what the log a player pastes into a bug report starts with.
+    CheckEqual(BbPanel::PrepareLine("01.00", "01.09", "01.09", "required"),
+               "Prepare: base_app_ver=01.00; patch_app_ver=01.09; effective=01.09; "
+               "patches=required",
+               "the split prepare line reports both versions");
+    CheckEqual(BbPanel::PrepareLine("01.09", "-", "01.09", "required"),
+               "Prepare: base_app_ver=01.09; patch_app_ver=-; effective=01.09; patches=required",
+               "a merged dump has no patch version to report");
+    CheckEqual(BbPanel::PrepareLine("", "", "", "skipped"),
+               "Prepare: base_app_ver=unknown; patch_app_ver=unknown; effective=unknown; "
+               "patches=skipped",
+               "an unreadable version never prints as an empty field");
+    CheckEqual(BbPanel::SkippedPatchesLine(false),
+               "Prepare: red-zone patches are skipped, the game runs the unpatched build",
+               "the skip line says what will happen");
+    CheckEqual(BbPanel::SkippedPatchesLine(true),
+               "Prepare: red-zone patches are skipped, the game runs the unpatched build "
+               "(as confirmed by the player)",
+               "the skip line records that the player chose it");
+    CheckEqual(BbPanel::OverlayChangedLine("abc", "def"),
+               "Prepare: overlay changed (digest abc -> def); invalidating Prepared and "
+               "driver.vkcache",
+               "the invalidation line names both digests");
+    CheckEqual(BbPanel::OverlayChangedLine("", "def"),
+               "Prepare: overlay changed (digest none -> def); invalidating Prepared and "
+               "driver.vkcache",
+               "the first split launch has no previous digest");
+
+    // Printed (not just asserted) so the CI log carries the three states for the PR.
+    std::printf("\n--- launcher panel, merged dump ---\n%s\n", BbPanel::PanelText(merged).c_str());
+    std::printf("\n--- launcher panel, split dump ---\n%s\n", BbPanel::PanelText(split).c_str());
+    std::printf("\n--- launcher panel, base only ---\n%s\n\n%s\n\n", BbPanel::PanelText(base_only).c_str(),
+                BbPanel::BaseOnlyBanner(base_only).c_str());
+}
+
 } // namespace
 
 int main() {
@@ -529,6 +645,7 @@ int main() {
     TestOverlayRebuildDropsStaleFiles(root);
     TestOverlayWithoutUpdate(root);
     TestUnreadableDump(root);
+    TestPanelText();
 
     fs::remove_all(root, ec);
     if (failures != 0) {
