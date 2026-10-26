@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <cstdio>
+
 #include <boost/container/small_vector.hpp>
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
@@ -108,6 +111,27 @@ struct PageManager::Impl {
 
     virtual void Protect(VAddr address, size_t size, Core::MemoryPermission perms) = 0;
 
+    /// Guest memory lives in the 40-bit (1 TiB) address space, so `cached_pages` has an entry per
+    /// 4 KiB page of it. A bogus V#/T# base address (a sharp the guest is still filling in) used
+    /// to index far past that array: Hardware Test #11 faulted reading 0x20500987170 on
+    /// shadPS4:GpuCommandProcessor, which is exactly `cached_pages` + an index derived from an
+    /// address around 2.7 TiB. Skip such a range (logging the first offenders) instead of
+    /// faulting, and let the draw miss its track rather than kill the process.
+    static bool ValidGuestRange(VAddr addr, u64 size) {
+        constexpr u64 MaxAddress = u64{1} << 40;
+        if (size == 0 || addr >= MaxAddress || size > MaxAddress - addr) {
+            static std::atomic<u64> reports{0};
+            if (reports.fetch_add(1, std::memory_order_relaxed) < 8) {
+                std::printf("UWP page watchers: ignoring out-of-range range %#llx+%#llx\n",
+                            static_cast<unsigned long long>(addr),
+                            static_cast<unsigned long long>(size));
+                std::fflush(stdout);
+            }
+            return false;
+        }
+        return true;
+    }
+
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         // bbport: the draw recording thread handles its faults inline too (vk_draw_pipe.h).
@@ -137,6 +161,9 @@ struct PageManager::Impl {
     void UpdatePageWatchers(VAddr addr, u64 size) {
         RENDERER_TRACE;
 
+        if (!ValidGuestRange(addr, size)) {
+            return;
+        }
         size_t page = addr >> PM_PAGE_BITS;
         const u64 page_end = Common::DivCeil(addr + size, PM_PAGE_SIZE);
 
@@ -205,6 +232,9 @@ struct PageManager::Impl {
         RENDERER_TRACE;
         auto start_range = mask.FirstRange();
         auto end_range = mask.LastRange();
+        if (!ValidGuestRange(base_addr, u64(end_range.second) << PM_PAGE_BITS)) {
+            return;
+        }
 
         if (start_range.second == end_range.second) {
             // if all pages are contiguous, use the regular UpdatePageWatchers

@@ -506,32 +506,49 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                 prep_worker.stages.clear();
                 prep_worker.failed = false;
                 sel.draw_indirect_params = {};
-                if (pipeline_cache.PrepareGraphicsPipeline(sel)) {
-                    draw.reg_checksum = checksum;
-                    draw.key = sel.graphics_key;
-                    draw.num_stages = static_cast<u32>(prep_worker.stages.size());
-                    for (u32 i = 0; i < draw.num_stages; ++i) {
-                        const auto& stage = prep_worker.stages[i];
-                        draw.stages[i] = {
-                            .program = stage.program,
-                            .hash = stage.hash,
-                            .hw_stage = stage.hw_stage,
-                            .pgm_base = stage.pgm_base,
-                            .flat = arena.Append(*stage.flat),
-                            .flat_size = static_cast<u32>(stage.flat->size()),
-                        };
-                        PrepareResources(prep_worker.infos.at(stage.program), draw.stages[i],
-                                         arena);
+                // Every guest-memory read this draw preparation performs (resource sharp walks,
+                // image/sampler descriptor hashes, the fetch-shader attributes) runs under a
+                // recovery point: ahead of the GPU thread the guest may already have reused that
+                // memory, and a speculative read must leave the draw to the GPU thread instead of
+                // faulting bb:DrawPrep<N>. The pipeline-cache part has its own nested recovery
+                // point; this one covers the flat copies and vertex-input preparation as well.
+                const bool prepared = [&]() -> bool {
+                    sigjmp_buf recover;
+                    if (sigsetjmp(recover, 0) != 0) {
+                        runtime_fault_recover = nullptr;
+                        return false;
                     }
-                    draw.vertex.valid = false;
-                    const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
-                    if (vs && sel.fetch_shader) {
-                        PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
+                    runtime_fault_recover = &recover;
+                    bool ready = false;
+                    if (pipeline_cache.PrepareGraphicsPipeline(sel)) {
+                        draw.reg_checksum = checksum;
+                        draw.key = sel.graphics_key;
+                        draw.num_stages = static_cast<u32>(prep_worker.stages.size());
+                        for (u32 i = 0; i < draw.num_stages; ++i) {
+                            const auto& stage = prep_worker.stages[i];
+                            draw.stages[i] = {
+                                .program = stage.program,
+                                .hash = stage.hash,
+                                .hw_stage = stage.hw_stage,
+                                .pgm_base = stage.pgm_base,
+                                .flat = arena.Append(*stage.flat),
+                                .flat_size = static_cast<u32>(stage.flat->size()),
+                            };
+                            PrepareResources(prep_worker.infos.at(stage.program), draw.stages[i],
+                                             arena);
+                        }
+                        draw.vertex.valid = false;
+                        const auto* vs = sel.infos[static_cast<u32>(Shader::SwStage::Vertex)];
+                        if (vs && sel.fetch_shader) {
+                            PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
+                        }
+                        ready = true;
                     }
-                    draw.state.store(PreparedDraw::Ready, std::memory_order_release);
-                } else {
-                    draw.state.store(PreparedDraw::Unavailable, std::memory_order_release);
-                }
+                    runtime_fault_recover = nullptr;
+                    return ready;
+                }();
+                draw.state.store(prepared ? PreparedDraw::Ready : PreparedDraw::Unavailable,
+                                 std::memory_order_release);
             }
             ++ordinal;
         });
