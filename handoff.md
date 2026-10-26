@@ -327,9 +327,13 @@ player sees and every summary line in `loader.log.txt` now comes from `xbox/plat
 
 ### Status after the CI loop (branch `arena/c39edde2-test-project`)
 
-Twelve commits on top of the pre-mission branch head, all pushed, all compiled and tested by CI:
+Twelve commits on top of the pre-mission branch head, all pushed, all compiled and tested by CI
+(this documentation commit, `1e79145`, plus the two that follow it, only touch `handoff.md` and
+`xbox/platform/dump_panel.h`'s test):
 
 ```
+7a6ef60  Pin the launcher panel text and the Prepare lines in CI
+21b0d3a  Record the CI loop that found the APP_TYPE and path-comparison defects
 dc2bd97  Compare dump paths after normalizing both sides in the CI test
 c344a14  Classify a container by APP_TYPE, not by its CONTENT_ID update group
 a7cb3de  Report UWP platform unit test failures as CI annotations
@@ -338,15 +342,13 @@ d94cfdc  Document update/patch handling in handoff.md
 a32bc83  Gate the red-zone patches on the version that will actually run
 2658229  Lay a separately dumped update over the game dump without copying it
 087767f  Show the dump layout in the launcher and remember the patch folder
-be9222f  Detect whether the dump is merged, split or base-only
-a13b6e0  Read param.sfo defensively and never guess 01.00
-21b0d3a  Record the CI loop that found the APP_TYPE and path-comparison defects
-7a6ef60  Pin the launcher panel text and the Prepare lines in CI
+be9222f  Detect merged, split and base-only dumps instead of guessing
+a13b6e0  Read APP_VER/APP_TYPE/TITLE_ID/CONTENT_ID from param.sfo, never guess a version
 ```
 
 (`a13b6e0` … `0be18f1` are the six steps of this task, `d94cfdc` is the first version of this
-section, `a7cb3de`/`c344a14`/`dc2bd97` are the two real defects the CI loop found, `21b0d3a` and
-`7a6ef60` are this documentation and the panel-text test.)
+section, `a7cb3de`/`c344a14`/`dc2bd97` are the CI annotation fix and the two real defects the loop
+found, `21b0d3a`/`1e79145` are this document and `7a6ef60` is the panel-text test.)
 
 | Run | Head | Result |
 |---|---|---|
