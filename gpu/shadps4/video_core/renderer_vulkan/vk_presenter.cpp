@@ -205,7 +205,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
             std::string heading = folder_line[0] ? (title + "\n" + folder_line) : title;
             const int choice = choose(
                 heading,
-                {"Start Bloodborne", "Warm Up & Verify Game Shaders", "Change game folder..."});
+                {"Start Bloodborne", "Precompile & Warm Up Game Shaders", "Change game folder..."});
             if (choice == 0) {
                 break;
             }
@@ -256,6 +256,11 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     if (!warmed_in_launcher) {
         BbPrecompile::WarmUpBeforeBoot(*rasterizer, [this] { PresentLoadingFrame(); });
     }
+    BbOverlay::SetLoadingLabel("Starting Bloodborne...");
+    BbOverlay::SetLoading(true, 1, 1);
+    PresentLoadingFrame();
+    BbOverlay::SetLoading(false, 0, 0);
+    std::fflush(stdout);
 #endif
 }
 

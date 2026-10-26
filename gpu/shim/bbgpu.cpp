@@ -242,6 +242,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
 #endif
     Core::Emulator::FillElfInfo(*config);
+#ifdef BB_UWP
+    BbPrecompile::SyncPortableCacheToLocal();
+#endif
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
     g_window_thread = std::thread([title, width, height] {

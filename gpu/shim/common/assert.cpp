@@ -8,7 +8,14 @@
 #include <windows.h>
 #endif
 
+namespace BbPrecompile {
+thread_local bool g_soft_assert_scope = false;
+} // namespace BbPrecompile
+
 void assert_fail_impl() {
+    if (BbPrecompile::g_soft_assert_scope) {
+        throw std::runtime_error("shader precompile assertion");
+    }
     std::fflush(stdout);
     std::fputs("STOP: GPU library assertion failed (see GPU log above)\n", stderr);
 #ifdef BB_UWP

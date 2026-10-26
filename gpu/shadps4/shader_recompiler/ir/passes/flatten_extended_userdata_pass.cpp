@@ -35,7 +35,7 @@
 using namespace Xbyak::util;
 
 #ifdef BB_UWP
-static constexpr size_t kSrtArenaSize = 8_MB;
+static constexpr size_t kSrtArenaSize = 64_MB;
 static constexpr size_t kSrtPageSize = 4096;
 static std::mutex g_srt_codegen_mutex;
 static u8* g_srt_codegen_start = nullptr;
@@ -62,7 +62,7 @@ static void RegisterSrtWalkerFaultHandler() {
         g_srt_codegen_start = static_cast<u8*>(
             VirtualAllocFromApp(nullptr, kSrtArenaSize, MEM_RESERVE, PAGE_NOACCESS));
         ASSERT_MSG(g_srt_codegen_start != nullptr,
-                   "Failed to reserve 8 MiB UWP SRT walker code arena");
+                   "Failed to reserve 64 MiB UWP SRT walker code arena");
 #else
         g_srt_codegen_start = g_srt_codegen.getCode();
 #endif
@@ -79,7 +79,7 @@ static Shader::PFN_SrtWalker PublishUwpWalkerSlot(const u8* code_bytes, size_t s
     RegisterSrtWalkerFaultHandler();
     const size_t slot_bytes = (size + kSrtPageSize - 1) & ~(kSrtPageSize - 1);
     const size_t offset = g_srt_codegen_used.fetch_add(slot_bytes, std::memory_order_acq_rel);
-    ASSERT_MSG(offset + slot_bytes <= kSrtArenaSize, "Exhausted 8 MiB UWP SRT walker arena");
+    ASSERT_MSG(offset + slot_bytes <= kSrtArenaSize, "Exhausted 64 MiB UWP SRT walker arena");
 
     u8* slot = g_srt_codegen_start + offset;
     void* committed = VirtualAllocFromApp(slot, slot_bytes, MEM_COMMIT, PAGE_READWRITE);
@@ -108,6 +108,27 @@ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
     return func_addr;
+#endif
+}
+
+size_t GetUwpSrtWalkerWatermark() {
+#ifdef BB_UWP
+    return g_srt_codegen_used.load(std::memory_order_acquire);
+#else
+    return 0;
+#endif
+}
+
+void RewindUwpSrtWalkerTo(size_t watermark) {
+#ifdef BB_UWP
+    std::scoped_lock lk{g_srt_codegen_mutex};
+    const size_t cur = g_srt_codegen_used.load(std::memory_order_acquire);
+    if (g_srt_codegen_start && cur > watermark) {
+        VirtualFree(g_srt_codegen_start + watermark, cur - watermark, MEM_DECOMMIT);
+        g_srt_codegen_used.store(watermark, std::memory_order_release);
+    }
+#else
+    (void)watermark;
 #endif
 }
 
@@ -796,8 +817,7 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
 #ifdef BB_UWP
-    std::scoped_lock lk{g_srt_codegen_mutex};
-    alignas(16) static u8 s_scratch[64_KB];
+    alignas(16) thread_local u8 s_scratch[64_KB];
     Xbyak::CodeGenerator c(sizeof(s_scratch), s_scratch);
 
     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
@@ -811,7 +831,10 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     c.ready();
 
     info.srt_info.walker_func_size = c.getSize();
-    info.srt_info.walker_func = PublishUwpWalkerSlot(s_scratch, info.srt_info.walker_func_size);
+    {
+        std::scoped_lock lk{g_srt_codegen_mutex};
+        info.srt_info.walker_func = PublishUwpWalkerSlot(s_scratch, info.srt_info.walker_func_size);
+    }
 #else
     Xbyak::CodeGenerator& c = g_srt_codegen;
 

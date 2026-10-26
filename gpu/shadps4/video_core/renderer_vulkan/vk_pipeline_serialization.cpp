@@ -1006,11 +1006,15 @@ void PipelineCache::FlushCaches() {
         return;
     }
     if (pipeline_cache &&
-        (num_new_pipelines != num_flushed_pipelines || num_flushed_pipelines == 0)) {
+        (driver_cache_dirty || num_new_pipelines != num_flushed_pipelines ||
+         num_flushed_pipelines == 0)) {
         auto [res, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
         if (res == vk::Result::eSuccess && !data.empty()) {
+            const size_t sz = data.size();
             db.Save(Storage::BlobType::DriverCache, "driver", std::move(data));
             num_flushed_pipelines = num_new_pipelines;
+            driver_cache_dirty = false;
+            std::printf("GPU: saved driver.vkcache (%zu KiB)\n", sz >> 10);
         }
     }
     db.Flush();

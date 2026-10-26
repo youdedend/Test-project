@@ -13,16 +13,18 @@
 
 #include <miniz.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <queue>
 
 namespace {
 
 std::mutex submit_mutex{};
-u32 num_requests{};
+std::atomic<u32> num_requests{0};
 std::condition_variable_any request_cv{};
 std::queue<std::packaged_task<void()>> req_queue{};
 std::mutex m_request{};
@@ -40,30 +42,34 @@ void ProcessIO(const std::stop_token& stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
+            Common::CondvarWait(request_cv, lk, stoken, [&] {
+                return num_requests.load(std::memory_order_acquire) != 0;
+            });
         }
 
         if (stoken.stop_requested()) {
             break;
         }
 
-        while (num_requests) {
+        while (num_requests.load(std::memory_order_acquire) != 0) {
             std::packaged_task<void()> request{};
             {
                 std::scoped_lock lock{m_request};
                 if (req_queue.empty()) {
-                    continue;
+                    break;
                 }
                 request = std::move(req_queue.front());
                 req_queue.pop();
             }
 
             if (request.valid()) {
-                request();
-                request.get_future().wait();
+                try {
+                    request();
+                } catch (...) {
+                }
             }
 
-            --num_requests;
+            num_requests.fetch_sub(1, std::memory_order_acq_rel);
         }
     }
 }
@@ -127,15 +133,16 @@ void DataBase::Flush() {
     if (!IsOpened()) {
         return;
     }
-    std::packaged_task<void()> fence{[] {}};
-    auto done = fence.get_future();
+    auto prom = std::make_shared<std::promise<void>>();
+    auto done = prom->get_future();
+    std::packaged_task<void()> fence{[prom] { prom->set_value(); }};
     {
         std::scoped_lock lock{m_request};
         req_queue.emplace(std::move(fence));
     }
     {
         std::scoped_lock lk{submit_mutex};
-        ++num_requests;
+        num_requests.fetch_add(1, std::memory_order_acq_rel);
         request_cv.notify_one();
     }
     done.wait();
@@ -199,7 +206,7 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
     }
 
     std::scoped_lock lk{submit_mutex};
-    ++num_requests;
+    num_requests.fetch_add(1, std::memory_order_acq_rel);
     request_cv.notify_one();
     return true;
 }

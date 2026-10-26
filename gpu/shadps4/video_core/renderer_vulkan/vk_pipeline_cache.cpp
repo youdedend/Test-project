@@ -13,6 +13,7 @@
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
+#include "common/scope_exit.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -365,6 +366,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     if (!driver_cache_data.empty()) {
         cache_ci.initialDataSize = driver_cache_data.size();
         cache_ci.pInitialData = driver_cache_data.data();
+        std::printf("GPU: loaded driver.vkcache (%zu KiB)\n", driver_cache_data.size() >> 10);
     }
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_ci);
     if (cache_result != vk::Result::eSuccess && !driver_cache_data.empty()) {
@@ -1091,4 +1093,100 @@ std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::
     file.Read(code);
     return code;
 }
+
+bool PipelineCache::PrecompileArchiveCompute(const Shader::Info& info,
+                                             std::span<const u32> spv) {
+    if (!pipeline_cache || spv.empty()) {
+        return false;
+    }
+    const vk::Device device = instance.GetDevice();
+    const vk::ShaderModule mod = CompileSPV(spv, device);
+    if (!mod) {
+        return false;
+    }
+    SCOPE_EXIT {
+        device.destroyShaderModule(mod);
+    };
+    ComputePipelineKey key{.value = info.pgm_hash};
+    ComputePipeline::SerializationSupport sdata{};
+    ComputePipeline pipe{instance, scheduler, desc_heap, profile, *pipeline_cache,
+                         key,      info,      mod,       sdata,   true};
+    if (!pipe.IsValid()) {
+        return false;
+    }
+    driver_cache_dirty = true;
+    return true;
+}
+
+bool PipelineCache::PrecompileArchiveGraphics(
+    const Shader::Info* vs_info, const Shader::RuntimeInfo& vs_rt, std::span<const u32> vs_spv,
+    const std::optional<Shader::Gcn::FetchShaderData>& fetch, const Shader::Info* fs_info,
+    const Shader::RuntimeInfo& fs_rt, std::span<const u32> fs_spv, const GraphicsPipelineKey& key,
+    GraphicsPipeline::SerializationSupport& sdata) {
+    if (!pipeline_cache) {
+        return false;
+    }
+    const vk::Device device = instance.GetDevice();
+    vk::ShaderModule vs_mod{};
+    vk::ShaderModule fs_mod{};
+    SCOPE_EXIT {
+        if (fs_mod) {
+            device.destroyShaderModule(fs_mod);
+        }
+        if (vs_mod) {
+            device.destroyShaderModule(vs_mod);
+        }
+    };
+    if (vs_info) {
+        if (vs_spv.empty()) {
+            return false;
+        }
+        vs_mod = CompileSPV(vs_spv, device);
+        if (!vs_mod) {
+            return false;
+        }
+    }
+    if (fs_info) {
+        if (fs_spv.empty()) {
+            return false;
+        }
+        fs_mod = CompileSPV(fs_spv, device);
+        if (!fs_mod) {
+            return false;
+        }
+    }
+
+    std::array<const Shader::Info*, MaxShaderStages> infos{};
+    std::array<Shader::RuntimeInfo, MaxShaderStages> rts{};
+    std::array<vk::ShaderModule, MaxShaderStages> mods{};
+    if (vs_info) {
+        constexpr u32 v = static_cast<u32>(Shader::SwStage::Vertex);
+        infos[v] = vs_info;
+        rts[v] = vs_rt;
+        mods[v] = vs_mod;
+    }
+    if (fs_info) {
+        constexpr u32 f = static_cast<u32>(Shader::SwStage::Fragment);
+        infos[f] = fs_info;
+        rts[f] = fs_rt;
+        mods[f] = fs_mod;
+    }
+
+    GraphicsPipeline pipe{instance, scheduler, desc_heap, profile, key,   *pipeline_cache,
+                          infos,    rts,       fetch,     mods,    sdata, true};
+    if (!pipe.IsValid()) {
+        return false;
+    }
+    driver_cache_dirty = true;
+    return true;
+}
+
+size_t PipelineCache::GetDriverCacheBytes() const {
+    if (!pipeline_cache) {
+        return 0;
+    }
+    auto [res, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    return res == vk::Result::eSuccess ? data.size() : 0;
+}
+
 } // namespace Vulkan
