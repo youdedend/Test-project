@@ -1,6 +1,7 @@
 #define BB_UWP_ADAPTER_IMPLEMENTATION
 #include "runtime_compat.h"
 #include "dirent.h"
+#include "overlay_index.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -93,7 +94,76 @@ static int wide(const char *path, wchar_t *out, int capacity) {
     return 1;
 }
 
+/* ---- update overlay: a separately dumped update folder laid over the base game dump -----------
+ * The player may keep the 01.09 update as its own PS4 folder next to the game dump. Copying a
+ * merged multi-GB tree onto the console is not acceptable, so the launcher writes the list of
+ * relative paths the update provides (LocalState\Prepared\overlay\files.txt) and calls
+ * bb_uwp_overlay_configure() once before the guest starts: from then on
+ *   - every open/stat/attribute query of <dump>\<rel> that the update also has is resolved to
+ *     <update>\<rel> (the update wins),
+ *   - a directory listing of <dump>\<dir> also returns the update's files, so patch-only files
+ *     become visible,
+ *   - everything else keeps reading the dump, so base-only files stay where they are.
+ * The dump and the update folder are only ever read. The path rules live in overlay_index.h. */
+static BbOverlayIndex bb_overlay;
+
+void bb_uwp_overlay_configure(const char *base, const char *patch, const char *index_path) {
+    bb_overlay_index_free(&bb_overlay);
+    if (!base || !*base || !patch || !*patch || !index_path || !*index_path) return;
+
+    FILE *f = bb_uwp_fopen(index_path, "rb");
+    if (!f) {
+        printf("Update overlay: %s is unreadable, running the dump as-is\n", index_path);
+        return;
+    }
+    char *list = NULL;
+    size_t used = 0, cap = 0;
+    for (int ch; (ch = fgetc(f)) != EOF;) {
+        if (used + 1 >= cap) {
+            size_t want = cap ? cap * 2 : 65536;
+            char *grown = (char *)realloc(list, want);
+            if (!grown) {
+                free(list);
+                fclose(f);
+                printf("Update overlay: no memory for %s, running the dump as-is\n", index_path);
+                return;
+            }
+            list = grown;
+            cap = want;
+        }
+        list[used++] = (char)ch;
+    }
+    fclose(f);
+    if (bb_overlay_parse(&bb_overlay, base, patch, list, used) != 0) {
+        printf("Update overlay: %s has no usable paths, running the dump as-is\n", index_path);
+        free(list);
+        return;
+    }
+    free(list);
+    printf("Update overlay: %zu paths from %s over %s\n", bb_overlay.count, bb_overlay.patch,
+           bb_overlay.base);
+}
+
+static int bb_overlay_map_path(const char *path, char *out, size_t cap) {
+    return bb_overlay_maps_path(&bb_overlay, path, out, cap);
+}
+
+static int bb_overlay_map_dir(const char *path, char *out, size_t cap) {
+    return bb_overlay_maps_dir(&bb_overlay, path, out, cap);
+}
+
+static int bb_overlay_dir_has(const char *base_dir, const wchar_t *leaf) {
+    wchar_t wide_dir[4096];
+    wchar_t probe[4300];
+    if (!wide(base_dir, wide_dir, 4096)) return 0;
+    if (_snwprintf(probe, 4300, L"%s\\%s", wide_dir, leaf) <= 0) return 0;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    return GetFileAttributesExFromAppW(probe, GetFileExInfoStandard, &data) != 0;
+}
+
 int bb_uwp_open(const char *path, int flags, ...) {
+    char overlay_path[1024];
+    if (bb_overlay_map_path(path, overlay_path, sizeof(overlay_path))) path = overlay_path;
     wchar_t name[4096];
     if (!wide(path, name, 4096)) return -1;
     DWORD access = (flags & _O_RDWR) ? (GENERIC_READ | GENERIC_WRITE)
@@ -140,6 +210,8 @@ static __time64_t unix_time(FILETIME t) {
 }
 
 int bb_uwp_stat(const char *path, struct _stat64 *out) {
+    char overlay_path[1024];
+    if (bb_overlay_map_path(path, overlay_path, sizeof(overlay_path))) path = overlay_path;
     wchar_t name[4096];
     WIN32_FILE_ATTRIBUTE_DATA data;
     if (!wide(path, name, 4096)) return -1;
@@ -181,6 +253,8 @@ HANDLE bb_uwp_mapping(HANDLE file, LPSECURITY_ATTRIBUTES security, ULONG access,
 }
 
 DWORD bb_uwp_attributes(const char *path) {
+    char overlay_path[1024];
+    if (bb_overlay_map_path(path, overlay_path, sizeof(overlay_path))) path = overlay_path;
     wchar_t name[4096];
     WIN32_FILE_ATTRIBUTE_DATA data;
     if (!wide(path, name, 4096) ||
@@ -209,6 +283,11 @@ static void find_data(WIN32_FIND_DATAA *out, const WIN32_FIND_DATAW *in) {
 }
 
 HANDLE bb_uwp_find(const char *pattern, WIN32_FIND_DATAA *out) {
+    char overlay_path[1024];
+    if (pattern && !strpbrk(pattern, "*?") &&
+        bb_overlay_map_path(pattern, overlay_path, sizeof(overlay_path))) {
+        pattern = overlay_path;
+    }
     wchar_t name[4096];
     WIN32_FIND_DATAW data;
     if (!wide(pattern, name, 4096)) return INVALID_HANDLE_VALUE;
@@ -281,16 +360,57 @@ DIR *opendir(const char *path) {
         return NULL;
     }
     d->first = 1;
+    d->patch_handle = INVALID_HANDLE_VALUE;
+    d->patch_first = 1;
+    d->phase = 0;
+    /* The update's own version of this directory is listed after the dump's, so files only the
+     * update carries become visible to the guest. */
+    char mapped[1024];
+    if (bb_overlay_map_dir(path, mapped, sizeof(mapped))) {
+        wchar_t pname[4096];
+        if (wide(mapped, pname, 4096)) {
+            const size_t pn = wcslen(pname);
+            if (pn + 3 < 4096) {
+                wcscat_s(pname, 4096, L"\\*");
+                d->patch_handle = FindFirstFileExFromAppW(pname, FindExInfoBasic, &d->patch_data,
+                                                          FindExSearchNameMatch, NULL, 0);
+                if (d->patch_handle == INVALID_HANDLE_VALUE) {
+                    d->patch_first = 1;
+                } else {
+                    snprintf(d->base_dir, sizeof(d->base_dir), "%s", path);
+                }
+            }
+        }
+    }
     return d;
 }
 
 struct dirent *readdir(DIR *d) {
     if (!d) return NULL;
-    if (d->first) {
-        d->first = 0;
-    } else if (!FindNextFileW(d->handle, &d->data)) {
-        return NULL;
+    if (d->phase == 0) {
+        if (d->first) {
+            d->first = 0;
+        } else if (!FindNextFileW(d->handle, &d->data)) {
+            if (d->patch_handle == INVALID_HANDLE_VALUE) return NULL;
+            d->phase = 1;
+        }
     }
+    if (d->phase == 1) {
+        for (;;) {
+            if (d->patch_first) {
+                d->patch_first = 0;
+            } else if (!FindNextFileW(d->patch_handle, &d->patch_data)) {
+                d->phase = 2;
+                return NULL;
+            }
+            if (bb_overlay_dir_has(d->base_dir, d->patch_data.cFileName)) {
+                continue; /* the dump already listed this name (its content is redirected) */
+            }
+            d->data = d->patch_data;
+            break;
+        }
+    }
+    if (d->phase == 2) return NULL;
     if (!WideCharToMultiByte(CP_UTF8, 0, d->data.cFileName, -1, d->entry.d_name,
                              sizeof(d->entry.d_name), NULL, NULL)) {
         return NULL;
@@ -301,6 +421,7 @@ struct dirent *readdir(DIR *d) {
 
 int closedir(DIR *d) {
     if (!d) return -1;
+    if (d->patch_handle != INVALID_HANDLE_VALUE) FindClose(d->patch_handle);
     FindClose(d->handle);
     free(d);
     return 0;

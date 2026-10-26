@@ -94,6 +94,32 @@ struct DumpLayout {
 /// Logs exactly one `DumpLayout: ...` line.
 DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& preferred_patch = {});
 
+/// A materialized overlay of an update container over a base game dump.
+struct OverlayImage {
+    std::string base_path;          ///< folder the overlay modifies (never written to)
+    std::string patch_path;         ///< update container the files come from (never written to)
+    std::string root;               ///< `out_dir`: the merged boot container
+    std::string index_path;         ///< `root\files.txt`: every relative path the update provides
+    std::vector<std::string> files; ///< those relative paths, forward-slash separated
+    size_t boot_files = 0;          ///< files materialized into `root` (eboot/sce_sys/sce_module)
+
+    [[nodiscard]] bool IsValid() const { return !files.empty() && boot_files != 0; }
+};
+
+/// Materializes the update container over the base game dump into `out_dir`:
+///  - the boot container is copied into `out_dir` (eboot.bin, sce_sys\*, sce_module\*), the update
+///    winning per relative path and the base game supplying the files the update does not carry, so
+///    PrepareBoot and the loader read one consistent tree;
+///  - game data (dvdroot_ps4\... and anything else the update carries) is *not* copied: `files.txt`
+///    lists every relative path the update provides and the platform file layer
+///    (bb_uwp_overlay_configure) serves those paths from the update folder, so a multi-GB dump is
+///    never duplicated and the player's USB folder is never written;
+///  - `out_dir` is wiped first, so nothing an earlier overlay added (stale sce_module\*.prx) can
+///    shadow the current update.
+/// Returns an invalid image and logs why when the update provides no files.
+OverlayImage BuildOverlayedImage(const std::string& base_path, const std::string& patch_path,
+                                 const std::string& out_dir);
+
 // Empty string when param.sfo names a retail Bloodborne release, otherwise a player-facing error.
 std::string CheckTitle(const Bytes& sfo, std::string* out_title_id = nullptr,
                        std::string* out_app_ver = nullptr);

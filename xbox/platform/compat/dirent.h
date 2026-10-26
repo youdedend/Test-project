@@ -9,6 +9,13 @@ typedef struct {
     WIN32_FIND_DATAW data;
     int first;
     struct dirent entry;
+    /* Update overlay (runtime_compat.c): a second listing of the same directory inside the update
+     * folder, merged into readdir() so files the update adds are visible. */
+    HANDLE patch_handle;
+    WIN32_FIND_DATAW patch_data;
+    int patch_first;
+    int phase;
+    char base_dir[1024];
 } DIR;
 #define DT_DIR 4
 #define DT_REG 8

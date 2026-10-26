@@ -1403,6 +1403,9 @@ extern "C" void bb_uwp_list_dir(const char* dir,
                                 void* user);
 extern "C" int bb_uwp_is_file(const char* path);
 extern "C" int bb_uwp_is_dir(const char* path);
+extern "C" int bb_uwp_mkdir(const char* path);
+extern "C" int bb_uwp_delete(const char* path);          // BOOL in runtime_compat.c
+extern "C" int bb_uwp_remove_directory(const char* path); // BOOL in runtime_compat.c
 
 const char* const kPatchNameHints[] = {"patch", "update", "dlc"};
 
@@ -1440,6 +1443,24 @@ std::vector<std::string> ListDirs(const std::string& dir) {
     state.dir = dir;
     bb_uwp_list_dir(dir.c_str(), &CollectDir, &state);
     return std::move(state.out);
+}
+
+struct DirEntries {
+    std::string dir;
+    std::vector<std::string> dirs;
+    std::vector<std::string> files;
+};
+
+void CollectEntry(const char* name, int is_dir, void* user) {
+    auto* state = static_cast<DirEntries*>(user);
+    (is_dir ? state->dirs : state->files).push_back(JoinPath(state->dir, name));
+}
+
+DirEntries ListEntries(const std::string& dir) {
+    DirEntries state;
+    state.dir = dir;
+    bb_uwp_list_dir(dir.c_str(), &CollectEntry, &state);
+    return state;
 }
 
 std::string ParentOf(const std::string& path) {
@@ -1674,6 +1695,213 @@ DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& p
     layout.kind = ReachesPatchTargetVersion(layout.effective_ver) ? DumpLayout::Kind::Merged
                                                                   : DumpLayout::Kind::BaseOnly;
     return finish();
+}
+
+namespace {
+
+/// The files every container needs to boot; they are materialized even when only the base game has
+/// them, so the overlay root is always a complete boot container.
+const char* const kBootFiles[] = {
+    "eboot.bin",
+    "sce_sys\\param.sfo",
+    "sce_module\\libc.prx",
+    "sce_module\\libSceFios2.prx",
+};
+
+/// True for the update files that are copied into the overlay root instead of being redirected:
+/// the boot container is small and must be read as one consistent tree.
+bool IsBootContainerPath(const std::string& rel) {
+    const std::string lower = ToLower(rel);
+    if (lower.find('\\') == std::string::npos) {
+        return true;  // root files: eboot.bin, sce_discmap.plt, ...
+    }
+    return lower.rfind("sce_module\\", 0) == 0 || lower.rfind("sce_sys\\", 0) == 0;
+}
+
+std::string RelativeUnder(const std::string& root, const std::string& path) {
+    size_t skip = root.size();
+    if (skip < path.size() && (path[skip] == '\\' || path[skip] == '/')) {
+        ++skip;
+    }
+    std::string rel = path.substr(skip);
+    std::replace(rel.begin(), rel.end(), '/', '\\');
+    return rel;
+}
+
+std::string WithForwardSlashes(const std::string& rel) {
+    std::string out = rel;
+    std::replace(out.begin(), out.end(), '\\', '/');
+    return out;
+}
+
+/// Recursively collects the relative paths of every file under `root` (bounded, so a malformed
+/// container cannot make the launcher walk a whole drive).
+void CollectFiles(const std::string& root, const std::string& dir, std::vector<std::string>* out,
+                  int depth) {
+    if (depth > 8 || out->size() >= 20000) {
+        return;
+    }
+    const DirEntries entries = ListEntries(dir);
+    for (const auto& entry : entries.files) {
+        out->push_back(RelativeUnder(root, entry));
+    }
+    for (const auto& sub : entries.dirs) {
+        CollectFiles(root, sub, out, depth + 1);
+    }
+}
+
+/// Creates `dir` and every missing parent, ignoring "already exists".
+void MakeDirs(const std::string& dir) {
+    std::string partial;
+    for (size_t i = 0; i < dir.size(); ++i) {
+        partial.push_back(dir[i]);
+        const bool separator = dir[i] == '\\' || dir[i] == '/';
+        const bool drive = i == 1 && dir.size() > 2 && dir[1] == ':';
+        if ((separator || i + 1 == dir.size()) && partial.size() > 1 && !drive) {
+            std::string want = partial;
+            while (!want.empty() && (want.back() == '\\' || want.back() == '/')) {
+                want.pop_back();
+            }
+            if (!want.empty() && !bb_uwp_is_dir(want.c_str())) {
+                bb_uwp_mkdir(want.c_str());
+            }
+        }
+    }
+}
+
+/// Copies one file in 1 MiB chunks. Returns false (and logs) when either side fails.
+bool CopyFile(const std::string& from, const std::string& to) {
+    FILE* in = bb_uwp_fopen(from.c_str(), "rb");
+    if (!in) {
+        std::printf("Overlay: cannot read %s\n", from.c_str());
+        return false;
+    }
+    FILE* out = bb_uwp_fopen(to.c_str(), "wb");
+    if (!out) {
+        std::printf("Overlay: cannot write %s\n", to.c_str());
+        std::fclose(in);
+        return false;
+    }
+    std::vector<uint8_t> buffer(1 << 20);
+    bool ok = true;
+    for (;;) {
+        const size_t got = std::fread(buffer.data(), 1, buffer.size(), in);
+        if (got == 0) {
+            break;
+        }
+        if (std::fwrite(buffer.data(), 1, got, out) != got) {
+            ok = false;
+            break;
+        }
+    }
+    if (std::ferror(in)) {
+        ok = false;
+    }
+    std::fclose(in);
+    if (std::fclose(out) != 0) {
+        ok = false;
+    }
+    if (!ok) {
+        std::printf("Overlay: copy of %s failed\n", from.c_str());
+        bb_uwp_delete(to.c_str());
+    }
+    return ok;
+}
+
+/// Removes everything under `dir` (files first, then the directories themselves).
+void RemoveTree(const std::string& dir) {
+    if (!bb_uwp_is_dir(dir.c_str())) {
+        return;
+    }
+    const DirEntries entries = ListEntries(dir);
+    for (const auto& file : entries.files) {
+        bb_uwp_delete(file.c_str());
+    }
+    for (const auto& sub : entries.dirs) {
+        RemoveTree(sub);
+    }
+    bb_uwp_remove_directory(dir.c_str());
+}
+
+} // namespace
+
+OverlayImage BuildOverlayedImage(const std::string& base_path, const std::string& patch_path,
+                                 const std::string& out_dir) {
+    OverlayImage image;
+    image.base_path = base_path;
+    image.patch_path = patch_path;
+    image.root = out_dir;
+    image.index_path = JoinPath(out_dir, "files.txt");
+
+    if (patch_path.empty() || !bb_uwp_is_dir(patch_path.c_str())) {
+        std::printf("Overlay: no update folder to overlay (%s)\n", patch_path.c_str());
+        return image;
+    }
+
+    // Rebuild from scratch: a stale sce_module/*.prx from an earlier overlay must not survive.
+    RemoveTree(out_dir);
+    MakeDirs(out_dir);
+
+    std::vector<std::string> patch_files;
+    CollectFiles(patch_path, patch_path, &patch_files, 0);
+    if (patch_files.empty()) {
+        std::printf("Overlay: %s holds no files\n", patch_path.c_str());
+        return image;
+    }
+
+    const auto has = [](const std::vector<std::string>& list, const std::string& rel) {
+        return std::find(list.begin(), list.end(), rel) != list.end();
+    };
+
+    // 1. The whole boot container, update first and base game for what the update does not carry.
+    std::vector<std::string> boot;
+    for (const auto& mandated : kBootFiles) {
+        const std::string rel{mandated};
+        if (has(patch_files, rel) || HasFile(JoinPath(base_path, rel))) {
+            boot.push_back(rel);
+        }
+    }
+    for (const auto& rel : patch_files) {
+        if (IsBootContainerPath(rel) && !has(boot, rel)) {
+            boot.push_back(rel);
+        }
+    }
+    for (const auto& rel : boot) {
+        const std::string target = JoinPath(out_dir, rel);
+        MakeDirs(target.substr(0, target.find_last_of("\\/")));
+        const std::string from_patch = JoinPath(patch_path, rel);
+        const std::string from_base = JoinPath(base_path, rel);
+        const std::string& source = HasFile(from_patch) ? from_patch : from_base;
+        if (!HasFile(source)) {
+            std::printf("Overlay: %s is in neither the update nor the game dump\n", rel.c_str());
+            continue;
+        }
+        if (CopyFile(source, target)) {
+            ++image.boot_files;
+        }
+    }
+
+    // 2. Every path the update provides becomes a redirect entry (game data is served from the
+    //    update folder through bb_uwp_overlay_configure, never copied).
+    std::string index;
+    for (const auto& rel : patch_files) {
+        image.files.push_back(WithForwardSlashes(rel));
+        index += WithForwardSlashes(rel);
+        index += '\n';
+    }
+    FILE* out = bb_uwp_fopen(image.index_path.c_str(), "wb");
+    if (!out || std::fwrite(index.data(), 1, index.size(), out) != index.size() ||
+        std::fclose(out) != 0) {
+        std::printf("Overlay: cannot write %s\n", image.index_path.c_str());
+        image.files.clear();
+        return image;
+    }
+
+    std::printf("Overlay: %s + %s -> %s (%zu files from the update, %zu copied, %zu redirected)\n",
+                base_path.c_str(), patch_path.c_str(), out_dir.c_str(), patch_files.size(),
+                image.boot_files, patch_files.size());
+    std::fflush(stdout);
+    return image;
 }
 
 uint64_t Fingerprint(const Dump& dump, const std::string& redzone_json) {

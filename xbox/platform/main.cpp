@@ -62,6 +62,7 @@ void runtime_wait_report(void);
 void runtime_sample_threads(void);
 int runtime_entered_game(void);
 int bb_uwp_dialog_key(uint32_t key, int down, int repeat);
+void bb_uwp_overlay_configure(const char* base, const char* patch, const char* index_path);
 uint64_t bbgpu_uwp_present_count(void);
 int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total, uint32_t* out_stage,
                                      uint64_t* out_hash, uint64_t* out_partner_hash);
@@ -257,6 +258,33 @@ static bool file_exists(const std::string& path) {
 static bool dir_exists(const std::string& path) {
     const DWORD attr = bb_uwp_attributes(path.c_str());
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+/// Removes a directory tree the app itself created (Prepared\overlay). Only LocalState paths are
+/// ever passed in; nothing on the player's dump is touched.
+static void DeleteTree(const std::string& path) {
+    if (path.empty()) {
+        return;
+    }
+    WIN32_FIND_DATAA entry{};
+    const std::string pattern = path + (path.back() == '\\' ? "*" : "\\*");
+    HANDLE h = bb_uwp_find(pattern.c_str(), &entry);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            const std::string name = entry.cFileName;
+            if (name == "." || name == "..") {
+                continue;
+            }
+            const std::string child = path + "\\" + name;
+            if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                DeleteTree(child);
+            } else {
+                DeleteFileFromAppW(winrt::to_hstring(child).c_str());
+            }
+        } while (bb_uwp_find_next(h, &entry));
+        FindClose(h);
+    }
+    RemoveDirectoryFromAppW(winrt::to_hstring(path).c_str());
 }
 
 static bool dump_readable(const std::string& dump) {
@@ -949,9 +977,34 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
 }
 
 static bool prepare_game_and_patches(const std::string& dump, const std::string& prepared,
-                                     const std::string& ini_path, bool player, bool force_rebuild) {
+                                     const std::string& ini_path, bool player, bool force_rebuild,
+                                     const DumpSelection& selection) {
     const std::string pkg_path = winrt::to_string(
         winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path());
+
+    // A separately dumped update is laid over the game dump inside LocalState: the boot container is
+    // materialized into Prepared\overlay and every other path the update provides is redirected to
+    // it by the platform file layer, so neither folder is ever copied wholesale or written to.
+    std::string src_root = dump;
+    BbPrepare::OverlayImage overlay;
+    if (selection.Patched()) {
+        overlay = BbPrepare::BuildOverlayedImage(dump, selection.layout.patch_path,
+                                                 prepared + "\\overlay");
+        if (!overlay.IsValid()) {
+            stop_with_message("The update folder " + selection.layout.patch_path +
+                                  " could not be merged over the game dump.\n\nRe-copy the "
+                                  "update folder and pick it again, or launch the base game.",
+                              player);
+            return false;
+        }
+        bb_uwp_overlay_configure(dump.c_str(), selection.layout.patch_path.c_str(),
+                                 overlay.index_path.c_str());
+        src_root = overlay.root;
+    } else {
+        bb_uwp_overlay_configure("", "", "");
+        // A stale overlay from an earlier split launch must not be read by the prepared-image cache.
+        DeleteTree(prepared + "\\overlay");
+    }
 
     BbPrepare::Bytes redzone_bytes;
     if (!read_file_bytes(pkg_path + "\\patches\\redzone.json", redzone_bytes)) {
@@ -975,8 +1028,8 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         {"sce_sys\\param.sfo", &files.sfo},
     };
     for (auto [rel, dest] : required) {
-        if (!read_file_bytes(dump + "\\" + rel, *dest) || dest->empty()) {
-            stop_with_message("The Bloodborne dump in " + dump + " is incomplete:\n" + rel +
+        if (!read_file_bytes(src_root + "\\" + rel, *dest) || dest->empty()) {
+            stop_with_message("The Bloodborne dump in " + src_root + " is incomplete:\n" + rel +
                                   " is missing or unreadable.\n\nMake sure eboot.bin, "
                                   "sce_module\\libc.prx, sce_module\\libSceFios2.prx, "
                                   "sce_sys\\param.sfo, and dvdroot_ps4 are present.",
@@ -1485,7 +1538,8 @@ static void run_loader() {
     set_default_env_var("BB_PRECOMPILE", "0");
     set_default_env_var("BB_PREP_WORKERS", "0");
 
-    if (!prepare_game_and_patches(dump, prepared_str, ini_path, player, mode == "prepare") ||
+    if (!prepare_game_and_patches(dump, prepared_str, ini_path, player, mode == "prepare",
+                                  selection) ||
         mode == "prepare") {
         g_finished = true;
         return;

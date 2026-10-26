@@ -178,8 +178,8 @@ jobs:
         # The dense-arena lifetime policy (retire with an in-flight DrawPrep must defer, never
         # destroy), the PS4 software-version helpers (CONTENT_ID -> 01.09, APP_TYPE, version
         # ordering), dump layout detection (merged / split / base-only plus the patch folder that
-        # gets picked) and the bbport.ini round-trip behind "[dump] patch_path" decide crash safety
-        # and which dump is booted, so they are tested here.
+        # gets picked), the bbport.ini round-trip behind "[dump] patch_path" and the update-overlay
+        # path rules decide crash safety and which dump is booted, so they are tested here.
         # prepare_game.cpp is pure C++ apart from four file hooks, so the layout test links it
         # against a std::filesystem stand-in and exercises the code that actually ships.
         run: |
@@ -190,7 +190,8 @@ jobs:
             @{ name = 'dense_arena'; include = 'xbox/graphics'; sources = @('xbox\tests\dense_arena_lifetime_test.cpp') },
             @{ name = 'sfo_version'; include = 'xbox/platform'; sources = @('xbox\tests\sfo_version_test.cpp') },
             @{ name = 'dump_layout'; include = 'xbox/platform'; sources = @('xbox\tests\dump_layout_test.cpp', 'xbox\platform\prepare_game.cpp') },
-            @{ name = 'ini_file'; include = 'xbox/platform'; sources = @('xbox\tests\ini_file_test.cpp') }
+            @{ name = 'ini_file'; include = 'xbox/platform'; sources = @('xbox\tests\ini_file_test.cpp') },
+            @{ name = 'overlay_index'; include = 'xbox/platform'; sources = @('xbox\tests\overlay_index_test.cpp') }
           )
           foreach ($test in $tests) {
             $exe = "$env:RUNNER_TEMP\$($test.name)_test.exe"

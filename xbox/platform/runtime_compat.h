@@ -43,6 +43,11 @@ int bb_uwp_is_file(const char *path);
 /* Enumerates the entries of `dir` (no "." / ".."), calling visit(name_utf8, is_dir, user). */
 void bb_uwp_list_dir(const char *dir, void (*visit)(const char *name, int is_dir, void *user),
                      void *user);
+/* Lays a separately dumped update container over a base game dump without copying either folder:
+ * `index_path` lists the relative paths the update provides (forward slashes, one per line). Every
+ * open/stat of <base>\<rel> the update also has is served from <patch>\<rel>, and directory
+ * listings show the update's files as well. Empty base/patch/index disables the overlay. */
+void bb_uwp_overlay_configure(const char *base, const char *patch, const char *index_path);
 BOOL bb_uwp_find_next(HANDLE handle, WIN32_FIND_DATAA *out);
 #ifdef __cplusplus
 }

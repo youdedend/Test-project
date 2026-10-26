@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// CI test for dump layout detection (xbox/platform/prepare_game.cpp: DetectDumpLayout).
+// CI test for dump layout detection and the update overlay (xbox/platform/prepare_game.cpp:
+// DetectDumpLayout, BuildOverlayedImage).
 //
-// It builds a synthetic base game / update pair with real PSF (param.sfo) files in a temporary
+// It builds synthetic base game / update pairs with real PSF (param.sfo) files in a temporary
 // directory and checks every layout the app has to support: merged, split (sibling and nested
-// patch folders, preferred patch from bbport.ini), patch-rooted and base-only. The file layer the
-// real app uses (bb_uwp_*) is provided here with std::filesystem, so the production code under
-// test is exactly the one that ships.
+// patch folders, preferred patch from bbport.ini), patch-rooted and base-only, plus the overlay
+// that is materialized from a split pair (boot files from the update, base game for what the update
+// lacks, game data left to the file-layer redirect, no writes to either source folder). The file
+// layer the real app uses (bb_uwp_*) is provided here with std::filesystem, so the production code
+// under test is exactly the one that ships.
 
 #include "prepare_game.h"
 
@@ -15,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -57,6 +61,22 @@ extern "C" int bb_uwp_is_file(const char* path) {
 extern "C" int bb_uwp_is_dir(const char* path) {
     std::error_code ec;
     return fs::is_directory(Native(path), ec) ? 1 : 0;
+}
+
+extern "C" int bb_uwp_mkdir(const char* path) {
+    std::error_code ec;
+    fs::create_directories(Native(path), ec);
+    return ec ? -1 : 0;
+}
+
+extern "C" int bb_uwp_delete(const char* path) {
+    std::error_code ec;
+    return fs::remove(Native(path), ec) ? 1 : 0;
+}
+
+extern "C" int bb_uwp_remove_directory(const char* path) {
+    std::error_code ec;
+    return fs::remove(Native(path), ec) ? 1 : 0;
 }
 
 extern "C" void bb_uwp_list_dir(const char* dir,
@@ -353,6 +373,79 @@ void TestPatchRooted(const fs::path& root) {
                "the picked patch folder is the executable source");
 }
 
+std::string ReadText(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+void TestOverlayImage(const fs::path& root) {
+    const auto dir = root / "overlay";
+    const auto base = MakeContainer(dir / "Bloodborne", "01.00", "gp",
+                                    "UP9000-CUSA03173_00-BLOODBORNE0000000");
+    const auto patch = MakeContainer(dir / "Bloodborne-patch", "01.09", "patch",
+                                     "UP9000-CUSA03173_00-BLOODBORNE0000000-A0109-V0100");
+    WriteFile(base / "eboot.bin", {'b', 'a', 's', 'e'});
+    WriteFile(patch / "eboot.bin", {'p', 'a', 't', 'c', 'h'});
+    WriteFile(patch / "sce_module" / "libc.prx", {'p', 'l'});
+    WriteFile(patch / "dvdroot_ps4" / "map" / "new_asset.bnd", {'n', 'e', 'w'});
+    std::error_code ec;
+    fs::remove(patch / "sce_module" / "libSceFios2.prx", ec);  // only the base game has it
+
+    const auto out = dir / "Prepared" / "overlay";
+    const auto image = BbPrepare::BuildOverlayedImage(base.string(), patch.string(), out.string());
+    Check(image.IsValid(), "an update over a base dump yields a usable overlay");
+    CheckEqual(ReadText(out / "eboot.bin"), "patch", "the update's eboot.bin wins");
+    CheckEqual(ReadText(out / "sce_module" / "libc.prx"), "pl", "the update's module is copied");
+    CheckEqual(ReadText(out / "sce_module" / "libSceFios2.prx"),
+               ReadText(base / "sce_module" / "libSceFios2.prx"),
+               "a module only the base game has is still present");
+    Check(!fs::exists(out / "dvdroot_ps4" / "map" / "new_asset.bnd"),
+          "game data is not copied into the overlay");
+    const auto sfo = BbPrepare::ReadParamSfo(out.string());
+    Check(sfo.has_value() && sfo->Version() == "01.09",
+          "the overlay's param.sfo is the update's (01.09)");
+    const std::string index = ReadText(out / "files.txt");
+    Check(index.find("dvdroot_ps4/map/new_asset.bnd") != std::string::npos,
+          "the update's data file is listed for the file-layer overlay");
+    Check(index.find("eboot.bin") != std::string::npos, "the boot files are listed too");
+    CheckEqual(ReadText(base / "eboot.bin"), "base", "the game dump is never modified");
+    CheckEqual(ReadText(patch / "eboot.bin"), "patch", "the update folder is never modified");
+}
+
+void TestOverlayRebuildDropsStaleFiles(const fs::path& root) {
+    const auto dir = root / "overlay-rebuild";
+    const auto base = MakeContainer(dir / "Bloodborne", "01.00", "gp",
+                                    "UP9000-CUSA03173_00-BLOODBORNE0000000");
+    const auto patch = MakeContainer(dir / "Bloodborne-patch", "01.09", "patch",
+                                     "UP9000-CUSA03173_00-BLOODBORNE0000000-A0109-V0100");
+    const auto out = dir / "Prepared" / "overlay";
+    WriteFile(patch / "sce_module" / "stale.prx", {'s'});
+    auto first = BbPrepare::BuildOverlayedImage(base.string(), patch.string(), out.string());
+    Check(first.IsValid() && fs::exists(out / "sce_module" / "stale.prx"),
+          "the first overlay carries the update's extra module");
+
+    std::error_code ec;
+    fs::remove(patch / "sce_module" / "stale.prx", ec);
+    auto second = BbPrepare::BuildOverlayedImage(base.string(), patch.string(), out.string());
+    Check(second.IsValid(), "the overlay rebuilds");
+    Check(!fs::exists(out / "sce_module" / "stale.prx"),
+          "a module from the earlier overlay is not left behind");
+    Check(ReadText(out / "files.txt").find("stale.prx") == std::string::npos,
+          "the stale module is gone from the redirect list too");
+}
+
+void TestOverlayWithoutUpdate(const fs::path& root) {
+    const auto dir = root / "overlay-none";
+    const auto base = MakeContainer(dir / "Bloodborne", "01.00", "gp",
+                                    "UP9000-CUSA03173_00-BLOODBORNE0000000");
+    const auto image =
+        BbPrepare::BuildOverlayedImage(base.string(), (dir / "missing").string(),
+                                       (dir / "Prepared" / "overlay").string());
+    Check(!image.IsValid(), "a missing update folder yields no overlay");
+    Check(!fs::exists(dir / "Prepared" / "overlay" / "eboot.bin"),
+          "no overlay files are written for a missing update folder");
+}
+
 void TestUnreadableDump(const fs::path& root) {
     const fs::path empty = root / "empty";
     std::error_code ec;
@@ -381,6 +474,9 @@ int main() {
     TestWrongTitleRejected(root);
     TestBaseOnly(root);
     TestPatchRooted(root);
+    TestOverlayImage(root);
+    TestOverlayRebuildDropsStaleFiles(root);
+    TestOverlayWithoutUpdate(root);
     TestUnreadableDump(root);
 
     fs::remove_all(root, ec);
