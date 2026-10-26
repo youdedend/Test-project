@@ -31,16 +31,18 @@ Core acceptance criteria and standing constraints:
   - Repo: `https://github.com/youdedend/Test-project` (`/home/user/Test-project`)
   - Active session branch: `arena/c39edde2-test-project` (branched from `main` @ `cd63381710b002818a91aa4618eeb1b1ca68b410`)
   - Open Pull Request: **PR #10** (`arena/c39edde2-test-project` -> `main`) — `https://github.com/youdedend/Test-project/pull/10` (`status: OPEN`)
-- **Latest Verified CI Build & Signed Pre-Release**:
-  - Code commit: `a3d39fd` (`fix(xbox): use std::optional<ShaderParams> for fixed-extent user_data span [release]`, immediately following `9b74bb3`)
-  - GitHub Actions run: **`40309332456`** — both `Dozen for UWP` and `Xbox UWP package` completed **green** (including `clang-cl` build, `check-imports.ps1` Store/AppContainer import audit, `MakeAppx`, `SignTool`, and release upload).
-  - Pre-release tag: **`xbox-alpha-1.0.26299.1047`** (`https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26299.1047`)
-  - Downloadable bundle: `https://github.com/youdedend/Test-project/releases/download/xbox-alpha-1.0.26299.1047/BloodborneXbox-1.0.26299.1047.zip` (`10,101,375` bytes; contains `BloodborneLauncher_1.0.26299.1047_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx`).
+- **Latest Verified CI Build & Signed Pre-Release** (updated for the documentation-only head; see "Final state of this branch" for the per-commit table):
+  - Code commit: `7a6ef60` (`Pin the launcher panel text and the Prepare lines in CI`) — the last commit that changes code; everything after it is `handoff.md` only.
+  - Branch head: `5320763` (`Record the final branch state and the verified design facts in handoff.md`).
+  - GitHub Actions run: **`40404940063`** on that head — both `Dozen for UWP` and `Xbox UWP package` completed **green**, and `gh pr checks 10` reports `pass` for both. (`40399498409` on `7a6ef60` is the last green run that actually rebuilt the binary.)
+  - Published pre-releases along the way: `xbox-alpha-1.0.26299.{0743,0837,0929,0959,1047,1148,1759,1819,1841,1919}`; the Test #11 build referred to below is `xbox-alpha-1.0.26299.1047` (`https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26299.1047`, bundle `10,101,375` bytes; contains `BloodborneLauncher_1.0.26299.1047_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx`).
+  - **The handoff is superseded in two places, read them together**: §6 steps 1–2 describe Hardware Test #11, which *ran and crashed*; the authoritative current state is the "Hardware Test #12" and "Update / Patch Handling" sections further down, and the merge gate is the `Still blocking the merge` list at the end.
 - **Console Hardware Validation State**:
   - Validated on real Xbox Series S hardware (`5,120 MiB` Game Mode) across 10 hardware test iterations through `xbox-alpha-1.0.26299.0959` (`9d261ad`):
     - In-app C++ preparation (`boot-linked.bin`), offline `.shaderbnd.dcx` precompile (**`driver.vkcache` = `173,715 KiB` / `169.6 MiB`**), startup `WarmUp` (**`121/121` pipelines**), `XAudio2` sound, controller input, Hunter Name creation, and save-data mount (`SPRJ0005`) all succeeded on hardware.
     - Title/menus ran at **`29.4–29.5 FPS`** (`0.85 ms` present), and Central Yharnam (`map/m24`) finished streaming into **live 3D gameplay at `25.8 FPS`** (`presents=1885`, `UWP swap: out=808 in=250 disk=572`, **`corrupt=0`**).
-  - All 6 issues identified in the Hardware Test #9/#10 logs (`bb:DrawScan` `+0x270628` sequence-gap crash, `1.28 GiB` host stack commit across 82 OS threads, `GotoPass::MoveOutwardIf` crash on shader `i = 1024`, `174 MiB` `FlushCaches()` memory spike, `.vkcache` `pipelineCacheUUID` validation, and frame-boundary retired dense-arena reclamation) are **fixed, built, and published in `xbox-alpha-1.0.26299.1047` (`a3d39fd`)**, ready for Hardware Test #11 on the console.
+  - All 6 issues identified in the Hardware Test #9/#10 logs (`bb:DrawScan` `+0x270628` sequence-gap crash, `1.28 GiB` host stack commit across 82 OS threads, `GotoPass::MoveOutwardIf` crash on shader `i = 1024`, `174 MiB` `FlushCaches()` memory spike, `.vkcache` `pipelineCacheUUID` validation, and frame-boundary retired dense-arena reclamation) are **fixed, built, and published in `xbox-alpha-1.0.26299.1047` (`a3d39fd`)**.
+  - **Hardware Test #11 has since run and failed on a `01.00` dump**: `Fault: read access to 0000020500987170 at bloodborne.exe+0x3003f0` at `4135/5120 MiB` (`presents=1376`). Its root cause is the split base/update dump layout, not a GPU bug — see "Update / Patch Handling". The eight fixes for it are in the "Hardware Test #12" section and are **not yet exercised on hardware**.
 
 ---
 
@@ -131,7 +133,12 @@ Do **not** reintroduce any of the following approaches:
 
 ## 6. Next steps
 
-1. **Run Hardware Test #11 with `xbox-alpha-1.0.26299.1047`**:
+> **Superseded.** Steps 1–2 below describe Hardware Test #11 (`xbox-alpha-1.0.26299.1047`), which ran
+> and crashed on a `01.00` dump. The live plan is the "Hardware Test #12" section (eight fixes plus
+> its own acceptance list) and the "Update / Patch Handling" section (split-dump support); the merge
+> gate is the `Still blocking the merge` list at the end of this document. Kept for the evidence trail.
+
+1. **Run Hardware Test #11 with `xbox-alpha-1.0.26299.1047`** (done — crashed; see above):
    - Download `BloodborneXbox-1.0.26299.1047.zip` from `https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26299.1047` and update `BloodborneLauncher_1.0.26299.1047_x64.appx` via Xbox Device Portal (preserving existing `LocalState` prepared image, `SPRJ0005` save, and `173.7 MiB` `driver.vkcache`).
 2. **Verify Post-Fix Telemetry in `loader.log` / `errors.log` / `dozen.log`**:
    - Confirm `presents=0` startup `AppMemoryUsage` drops by `~450–500 MiB` and Central Yharnam (`map/m24`) 3D gameplay `AppMemoryUsage` drops from `4,356–4,583 MiB` down into the **`~3,000–3,350 MiB`** range (`~1.25 GiB` reclaimed from `/STACK:8388608,65536`).
@@ -140,8 +147,9 @@ Do **not** reintroduce any of the following approaches:
 3. **Address Any Extended-Play Edge Cases (If Observed in Test #11 Logs)**:
    - Inspect `Thread sample` RVAs (`/Oy-` frame pointers are now enabled in `bloodborne.exe` for multi-frame stack unwinding) and `dozen.log` if any rare runtime shader specialization, cutscene (`AvPlayer`), or boss-arena particle effect exhibits a fault or stutter.
    - If even more Series S RAM headroom is desired for 60 FPS / higher-res modes, `bda_pagetable_buffer` (`128 MiB` in `vk_instance.cpp`) can be lazily committed or sized to active BDA range.
-4. **Finalize & Merge PR #10 (`arena/c39edde2-test-project` -> `main`)**:
-   - Once Hardware Test #11 confirms sustained, crash-free 3D gameplay across Yharnam and Hunter's Dream, merge PR `#10` (`https://github.com/youdedend/Test-project/pull/10`) into `main` using `gh pr merge 10 --merge`.
+4. **Finalize & Merge PR #10 (`arena/c39edde2-test-project` -> `main`)** — **gated on Test #12, not Test #11**:
+   - Do **not** merge on the strength of a Test #11 result. The current gate is a Series S run with a **split `01.09` dump** that reaches `presents > 10,000` in Yharnam with `effective=01.09; patches=required` and zero faults at `+0x3003f0` / `+0x26bbb7` / `+0x27222e` / `+0x272f1c` (see `Still blocking the merge`).
+   - Only then merge PR `#10` (`https://github.com/youdedend/Test-project/pull/10`) into `main` using `gh pr merge 10 --merge`.
 
 ---
 
