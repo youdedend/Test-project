@@ -328,8 +328,7 @@ player sees and every summary line in `loader.log.txt` now comes from `xbox/plat
 ### Status after the CI loop (branch `arena/c39edde2-test-project`)
 
 Twelve commits on top of the pre-mission branch head, all pushed, all compiled and tested by CI
-(this documentation commit, `1e79145`, plus the two that follow it, only touch `handoff.md` and
-`xbox/platform/dump_panel.h`'s test):
+(followed by the documentation commits that carry this section):
 
 ```
 7a6ef60  Pin the launcher panel text and the Prepare lines in CI
