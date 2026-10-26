@@ -1,0 +1,13 @@
+# Crash RVAs to resolve against every build's bloodborne.map (xbox/scripts/symbolicate.py).
+# One or more hex RVAs per line, '#' starts a comment. These are the image-base-relative
+# addresses from the Hardware Test crash reports; keep them so each new package proves whether
+# the frames still exist and what they are.
+#
+# Hardware Test #11 (xbox-alpha-1.0.26299.1047), GpuCommandProcessor:
+#   Fault: read access to 0000020500987170 at bloodborne.exe+0x3003f0
+0x3003f0
+0x26bbb7
+0x101dbc
+# Hardware Test #6-#10 crash frames kept for regression tracking.
+0x27222e
+0x272f1c

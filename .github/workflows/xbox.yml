@@ -174,6 +174,36 @@ jobs:
       - name: Build Bloodborne Xbox UWP
         run: .\xbox\scripts\build.ps1
 
+      - name: Symbolicate known crash RVAs
+        # The link uses /MAP, so this resolves every crash address in crash-rvas.txt against the
+        # exact binary in the package. Diagnostic only: never blocks a release, but a missing or
+        # unparsable map is annotated so the /MAP link flag cannot silently rot.
+        continue-on-error: true
+        run: |
+          $map = 'xbox/.local/build/bloodborne.map'
+          if (!(Test-Path -LiteralPath $map)) {
+            Write-Output "::warning title=Linker map missing::$map was not produced; check /MAP in xbox/CMakeLists.txt"
+            exit 0
+          }
+          try {
+            python xbox/scripts/symbolicate.py --map $map --rvas xbox/scripts/crash-rvas.txt |
+              Tee-Object -FilePath "$env:RUNNER_TEMP/symbols.txt"
+            Get-Content "$env:RUNNER_TEMP/symbols.txt" -Raw | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } catch {
+            $msg = "$_" -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            Write-Output "::warning title=Symbolication failed::$msg"
+          }
+
+      - name: Upload linker map & symbol report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bloodborne-map-${{ github.sha }}
+          path: |
+            xbox/.local/build/bloodborne.map
+            ${{ runner.temp }}/symbols.txt
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Verify UWP imports & package .appx
         id: package
         run: |

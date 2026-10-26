@@ -102,11 +102,16 @@ target_compile_options(bloodborne PRIVATE
 # Keep 64 GiB - 1 TiB clear for the PS4 guest address space (/HIGHENTROPYVA:NO) and reserve
 # an 8 MiB auto-growing stack (64 KiB initial commit) per host thread inside the AppContainer
 # instead of eagerly committing 16 MiB across 80+ OS/guest/driver threads (~1.25 GiB saved).
+# /MAP writes bloodborne.map (RVA -> symbol) next to the executable and never changes code
+# layout, so a crash report's bloodborne.exe+0xNNNNNN can be resolved for the exact build that
+# produced it: xbox/scripts/symbolicate.py. CI uploads the map with every package.
 target_link_options(bloodborne PRIVATE
   /APPCONTAINER
   /HIGHENTROPYVA:NO
   /STACK:8388608,65536
   /OPT:REF
+  /OPT:ICF
+  /MAP
 )
 target_link_directories(bloodborne BEFORE PRIVATE "$ENV{VCToolsInstallDir}/lib/x64/store")
 target_link_libraries(bloodborne PRIVATE
