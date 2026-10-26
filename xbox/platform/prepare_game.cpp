@@ -1360,8 +1360,16 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
     };
 
     const std::string target_ver = "01.09";
-    if (!app_ver.empty() && app_ver != target_ver && !force_patches) {
-        return make_empty("game version " + app_ver + " != 01.09; running unpatched 30 FPS");
+    if (app_ver != target_ver) {
+        if (!force_patches) {
+            // Defense in depth: the gate in prepare (main.cpp) already refuses non-1.09 dumps.
+            // Never fall back to an unpatched 30 FPS guest: the port's HLE paths and this patch
+            // set were reverse engineered from the 1.09 eboot text.
+            fail("game version " + (app_ver.empty() ? std::string("unknown") : app_ver) +
+                 " != 01.09; refusing to run unpatched (set BB_FORCE_PATCHES=1 to override)");
+        }
+        std::printf("Prepare: patches=optional (forced on game version %s)\n",
+                    app_ver.empty() ? "unknown" : app_ver.c_str());
     }
 
     const auto metas = parse_patch_xml(patch_xml);
@@ -1423,7 +1431,14 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
                           "49fbe0e9fddc3d02edc4b121f4f0b5a9a79705cb802460b7cf2d4d406771d70b";
 
     if (!ok_fps && !ok_res && !ok_effects) {
-        return make_empty("eboot.bin fingerprint does not match clean 01.09; running unpatched");
+        if (!force_patches) {
+            fail("eboot.bin does not match the clean 01.09 dump (startup patch fingerprint "
+                 "mismatch); refusing to run without patches (set BB_FORCE_PATCHES=1 to "
+                 "override)");
+        }
+        std::printf("Prepare: patches=skipped (eboot fingerprint mismatch, forced)\n");
+        return make_empty("eboot.bin fingerprint does not match clean 01.09; forced without "
+                          "patches");
     }
 
     std::vector<std::string> names;
