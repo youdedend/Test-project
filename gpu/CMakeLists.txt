@@ -188,9 +188,11 @@ add_host_shader(depth_resample.frag depth_stencil_resample_frag HAS_STENCIL=1)
 add_host_shader(depth_resample.frag depth_stencil_bits_frag STENCIL_BITS=1)
 add_host_shader(camera_motion.comp camera_motion_debug_comp DEBUG_OVERLAY=1)
 # Frame generation (vk_frame_generation.cpp): its depth input and the UI over generated frames.
-add_host_shader(frame_gen_inputs.comp frame_gen_inputs_comp)
-add_host_shader(frame_gen_ui.comp frame_gen_ui_comp)
-add_host_shader(frame_gen_fused_ui.comp frame_gen_fused_ui_comp)
+if (NOT BB_UWP)
+    add_host_shader(frame_gen_inputs.comp frame_gen_inputs_comp)
+    add_host_shader(frame_gen_ui.comp frame_gen_ui_comp)
+    add_host_shader(frame_gen_fused_ui.comp frame_gen_fused_ui_comp)
+endif()
 foreach(BPP IN ITEMS 8 16 32 64 96 128)
     add_host_shader(tiling.comp tiling_micro_${BPP}_comp BITS_PER_PIXEL=${BPP} IS_MACRO_TILED=0)
     add_host_shader(tiling.comp tiling_macro_${BPP}_comp BITS_PER_PIXEL=${BPP} IS_MACRO_TILED=1)
@@ -308,6 +310,10 @@ target_sources(bbgpu PRIVATE third_party/imgui/imgui.cpp third_party/imgui/imgui
     third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp
     third_party/imgui/backends/imgui_impl_vulkan.cpp)
 target_include_directories(bbgpu PRIVATE third_party/imgui third_party/imgui/backends)
+if (BB_UWP)
+    set_source_files_properties(third_party/imgui/imgui.cpp PROPERTIES
+        COMPILE_DEFINITIONS "IMGUI_DISABLE_WIN32_DEFAULT_CLIPBOARD_FUNCTIONS;IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS")
+endif()
 target_compile_definitions(bbgpu PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES
     BB_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
 set_source_files_properties(shim/bbport_overlay.cpp PROPERTIES
@@ -332,9 +338,10 @@ target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 if (BB_UWP)
     target_compile_definitions(bbgpu PUBLIC BB_UWP BBPORT_UWP VK_USE_PLATFORM_WIN32_KHR
-        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-    target_compile_options(bbgpu PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/shim/bb_win_compat.h")
-    target_include_directories(bbgpu PRIVATE .. ../xbox/graphics third_party/xbyak)
+        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS _TIMESPEC_DEFINED)
+    target_compile_options(bbgpu PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/../xbox/graphics/compat.h")
+    target_include_directories(bbgpu PRIVATE .. ../xbox/platform ../xbox/platform/compat
+        ../xbox/graphics "${BB_PTHREAD}/include" third_party/xbyak)
     target_link_libraries(bbgpu PUBLIC d3d12 dxgi dxguid WindowsApp)
     return()
 elseif (WIN32)

@@ -41,7 +41,6 @@ env:
 jobs:
   dozen:
     name: Dozen for UWP
-    # Build Mesa Dozen with Visual Studio 2022 MSVC 14.44 (MSVC 19.51 miscompiles Dozen).
     runs-on: windows-2025
     timeout-minutes: 90
     defaults:
@@ -128,13 +127,15 @@ jobs:
           }
           Expand-Archive $zip "$env:RUNNER_TEMP\dxc"
 
-      - name: Cache third-party dependencies
-        uses: actions/cache@v4
+      - name: Restore third-party dependencies cache
+        id: deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: xbox\.local\deps
           key: bb-deps-vs2026-${{ hashFiles('xbox/scripts/fetch-deps.py', 'xbox/scripts/build-deps.ps1', 'xbox/scripts/boost-headers.py') }}
 
       - name: MSYS2 build tools
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed make diffutils zstd mingw-w64-ucrt-x86_64-winpthreads'
@@ -147,6 +148,17 @@ jobs:
               'modify', '--installPath', "`"$vs`"", '--add', 'Microsoft.VisualStudio.Component.VC.Llvm.Clang', '--quiet', '--norestart', '--nocache'
           }
           & "$vs\VC\Tools\Llvm\x64\bin\clang-cl.exe" --version
+
+      - name: Build third-party dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: .\xbox\scripts\build-deps.ps1
+
+      - name: Save third-party dependencies cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: xbox\.local\deps
+          key: bb-deps-vs2026-${{ hashFiles('xbox/scripts/fetch-deps.py', 'xbox/scripts/build-deps.ps1', 'xbox/scripts/boost-headers.py') }}
 
       - name: Write local build settings
         run: |

@@ -42,7 +42,12 @@ $missing = @(foreach ($binary in (Get-ChildItem -LiteralPath $Folder -File | Whe
 })
 
 if ($missing.Count) {
-    $missing
+    $body = ($missing -join "`n")
+    Write-Output $body
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $enc = $body -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+        Write-Output "::error title=Disallowed UWP Imports::$enc"
+    }
     throw 'Package imports unavailable non-UWP APIs'
 }
 Write-Output 'PASS: all active PE imports resolve to WindowsApp.lib, Store CRT, or packaged DLLs (Dozen desktop WSI DLLs remain delay-loaded).'

@@ -6,6 +6,14 @@ $root = Split-Path $PSScriptRoot -Parent
 $local = Join-Path $root '.local'
 $config = Get-Content -LiteralPath (Join-Path $local 'settings.json') -Raw | ConvertFrom-Json
 
+function Emit-ErrorAnnotation([string]$Title, [string]$Body) {
+    if ($env:GITHUB_ACTIONS -eq 'true' -and $Body) {
+        $enc = $Body -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+        if ($enc.Length -gt 55000) { $enc = $enc.Substring($enc.Length - 55000) }
+        Write-Output "::error title=$Title::$enc"
+    }
+}
+
 if (!(Test-Path -LiteralPath (Join-Path $local 'deps/ffmpeg-install/lib/libavcodec.a'))) {
     & (Join-Path $PSScriptRoot 'build-deps.ps1') -Python $config.python
     if ($LASTEXITCODE) { throw 'Building UWP third-party dependencies failed' }
@@ -23,12 +31,23 @@ foreach ($key in 'dozen_dll', 'mesa_license', 'dxc_root') {
     }
 }
 
-& cmake -S $root -B $build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=RelWithDebInfo @options
-if ($LASTEXITCODE) { throw 'Xbox UWP CMake configure failed' }
-
-& cmake --build $build --parallel $([Environment]::ProcessorCount) *> (Join-Path $local 'build.log')
+$cfgLog = Join-Path $local 'configure.log'
+& cmake -S $root -B $build -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=RelWithDebInfo @options *> $cfgLog
 if ($LASTEXITCODE) {
-    Get-Content (Join-Path $local 'build.log') -Tail 80
+    $tail = (Get-Content $cfgLog -Tail 80) -join "`n"
+    Write-Output $tail
+    Emit-ErrorAnnotation 'CMake Configure Failed' $tail
+    throw 'Xbox UWP CMake configure failed'
+}
+
+$buildLog = Join-Path $local 'build.log'
+& cmake --build $build --parallel $([Environment]::ProcessorCount) *> $buildLog
+if ($LASTEXITCODE) {
+    $errs = @(Select-String -LiteralPath $buildLog -Pattern 'error:|fatal error:|FAILED:|lld-link:|undefined symbol' -Context 0, 2 | ForEach-Object { $_.ToString() })
+    if (!$errs.Count) { $errs = @(Get-Content $buildLog -Tail 80) }
+    $summary = ($errs | Select-Object -First 80) -join "`n"
+    Write-Output $summary
+    Emit-ErrorAnnotation 'CMake Build Failed' $summary
     throw 'Xbox UWP build failed; see xbox/.local/build.log'
 }
 Write-Output 'Bloodborne Xbox UWP build complete; layout staged in xbox/.local/build/layout.'
