@@ -94,14 +94,25 @@ struct DumpLayout {
 /// Logs exactly one `DumpLayout: ...` line.
 DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& preferred_patch = {});
 
+/// Lower-case hex SHA-256 of `bytes` (64 characters). Used for the overlay manifest.
+std::string Sha256Hex(const Bytes& bytes);
+
 /// A materialized overlay of an update container over a base game dump.
 struct OverlayImage {
     std::string base_path;          ///< folder the overlay modifies (never written to)
     std::string patch_path;         ///< update container the files come from (never written to)
     std::string root;               ///< `out_dir`: the merged boot container
     std::string index_path;         ///< `root\files.txt`: every relative path the update provides
+    std::string manifest_path;      ///< `overlay.json`, next to `root`
     std::vector<std::string> files; ///< those relative paths, forward-slash separated
-    size_t boot_files = 0;          ///< files materialized into `root` (eboot/sce_sys/sce_module)
+    /// Boot files that were written into `root`: relative path -> SHA-256 of the bytes used.
+    std::vector<std::pair<std::string, std::string>> boot;
+    /// SHA-256 over what decides whether a prepared image and the driver cache are still valid
+    /// (effective version, redirect list and the boot file hashes). Absolute paths are excluded:
+    /// moving the same dump to another drive must not throw the caches away.
+    std::string digest;
+    std::string manifest; ///< the JSON text that was written to `manifest_path`
+    size_t boot_files = 0;
 
     [[nodiscard]] bool IsValid() const { return !files.empty() && boot_files != 0; }
 };

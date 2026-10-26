@@ -43,7 +43,7 @@
 extern "C" void bbgpu_flush_caches(void);
 
 #ifndef BB_PREPARED_FORMAT
-#define BB_PREPARED_FORMAT "3"
+#define BB_PREPARED_FORMAT "1"
 #endif
 
 extern "C" {
@@ -1007,6 +1007,56 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
     }
 }
 
+/// Reads `"key": "value"` out of a JSON document the app wrote itself (overlay.json).
+static std::string JsonField(const std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    const size_t at = json.find(needle);
+    if (at == std::string::npos) {
+        return {};
+    }
+    const size_t colon = json.find(':', at + needle.size());
+    if (colon == std::string::npos) {
+        return {};
+    }
+    const size_t open = json.find('"', colon + 1);
+    if (open == std::string::npos) {
+        return {};
+    }
+    const size_t close = json.find('"', open + 1);
+    if (close == std::string::npos) {
+        return {};
+    }
+    return json.substr(open + 1, close - open - 1);
+}
+
+/// Drops the prepared image and the driver pipeline cache together. Both describe the same guest
+/// build, so when the overlay changes (a different update, or split <-> merged) the pair must be
+/// invalidated at once instead of leaving a pipeline cache compiled for the other build behind.
+static void invalidate_prepared(const std::string& prepared, const std::string& user_dir) {
+    for (const char* name :
+         {"boot-linked.bin", "content.bin", "eboot.elf", "app_ver.txt", "format.txt"}) {
+        DeleteFileFromAppW(winrt::to_hstring(prepared + "\\" + name).c_str());
+    }
+    const std::string cache_root = user_dir + "\\cache";
+    WIN32_FIND_DATAA entry{};
+    HANDLE h = bb_uwp_find((cache_root + "\\*").c_str(), &entry);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        const std::string name = entry.cFileName;
+        if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || name == "." || name == "..") {
+            continue;
+        }
+        const std::string driver_cache = cache_root + "\\" + name + "\\driver.vkcache";
+        if (file_exists(driver_cache)) {
+            std::printf("Prepare: dropping driver.vkcache (%s)\n", driver_cache.c_str());
+            DeleteFileFromAppW(winrt::to_hstring(driver_cache).c_str());
+        }
+    } while (bb_uwp_find_next(h, &entry));
+    FindClose(h);
+}
+
 static bool prepare_game_and_patches(const std::string& dump, const std::string& prepared,
                                      const std::string& ini_path, bool player, bool force_rebuild,
                                      const DumpSelection& selection) {
@@ -1016,6 +1066,13 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
     // A separately dumped update is laid over the game dump inside LocalState: the boot container is
     // materialized into Prepared\overlay and every other path the update provides is redirected to
     // it by the platform file layer, so neither folder is ever copied wholesale or written to.
+    const std::string overlay_manifest_path = prepared + "\\overlay.json";
+    BbPrepare::Bytes previous_manifest;
+    const std::string previous_digest =
+        read_file_bytes(overlay_manifest_path, previous_manifest)
+            ? JsonField(std::string(previous_manifest.begin(), previous_manifest.end()), "digest")
+            : std::string();
+
     std::string src_root = dump;
     BbPrepare::OverlayImage overlay;
     if (selection.Patched()) {
@@ -1035,6 +1092,19 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         bb_uwp_overlay_configure("", "", "");
         // A stale overlay from an earlier split launch must not be read by the prepared-image cache.
         DeleteTree(prepared + "\\overlay");
+        DeleteFileFromAppW(winrt::to_hstring(overlay_manifest_path).c_str());
+    }
+
+    // Prepared\boot-linked.bin and <user>\cache\<serial>\driver.vkcache describe the same guest
+    // build: when the overlay changes, both are stale together.
+    const std::string overlay_digest = overlay.IsValid() ? overlay.digest : std::string();
+    if (previous_digest != overlay_digest && !(previous_digest.empty() && overlay_digest.empty())) {
+        const char* user_env = std::getenv("BB_USER_DIR");
+        std::printf("Prepare: overlay changed (digest %s -> %s); invalidating Prepared and "
+                    "driver.vkcache\n",
+                    previous_digest.empty() ? "none" : previous_digest.c_str(),
+                    overlay_digest.empty() ? "none" : overlay_digest.c_str());
+        invalidate_prepared(prepared, user_env ? user_env : "");
     }
 
     // One line per launch says exactly what is being prepared and which patches can apply to it.

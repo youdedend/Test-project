@@ -1510,6 +1510,14 @@ bool IsUsablePatch(const std::string& dir, const SfoInfo& patch, const SfoInfo& 
 
 } // namespace
 
+std::string Sha256Hex(const Bytes& bytes) {
+    Sha256 sha;
+    if (!bytes.empty()) {
+        sha.update(bytes.data(), bytes.size());
+    }
+    return sha.finish_hex();
+}
+
 const char* DumpLayout::KindName() const {
     switch (kind) {
     case Kind::Merged:
@@ -1769,8 +1777,9 @@ void MakeDirs(const std::string& dir) {
     }
 }
 
-/// Copies one file in 1 MiB chunks. Returns false (and logs) when either side fails.
-bool CopyFile(const std::string& from, const std::string& to) {
+/// Copies one file in 1 MiB chunks, hashing the bytes on the way. Returns false (and logs) when
+/// either side fails.
+bool CopyFile(const std::string& from, const std::string& to, std::string* sha256 = nullptr) {
     FILE* in = bb_uwp_fopen(from.c_str(), "rb");
     if (!in) {
         std::printf("Overlay: cannot read %s\n", from.c_str());
@@ -1783,6 +1792,7 @@ bool CopyFile(const std::string& from, const std::string& to) {
         return false;
     }
     std::vector<uint8_t> buffer(1 << 20);
+    Sha256 sha;
     bool ok = true;
     for (;;) {
         const size_t got = std::fread(buffer.data(), 1, buffer.size(), in);
@@ -1793,6 +1803,7 @@ bool CopyFile(const std::string& from, const std::string& to) {
             ok = false;
             break;
         }
+        sha.update(buffer.data(), got);
     }
     if (std::ferror(in)) {
         ok = false;
@@ -1804,8 +1815,30 @@ bool CopyFile(const std::string& from, const std::string& to) {
     if (!ok) {
         std::printf("Overlay: copy of %s failed\n", from.c_str());
         bb_uwp_delete(to.c_str());
+        return false;
     }
-    return ok;
+    if (sha256) {
+        *sha256 = sha.finish_hex();
+    }
+    return true;
+}
+
+std::string JsonEscape(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + 8);
+    for (char c : text) {
+        if (c == '\\' || c == '"') {
+            out.push_back('\\');
+            out.push_back(c);
+        } else if (static_cast<unsigned char>(c) < 0x20) {
+            char escape[8];
+            std::snprintf(escape, sizeof(escape), "\\u%04x", static_cast<unsigned>(c));
+            out += escape;
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
 }
 
 /// Removes everything under `dir` (files first, then the directories themselves).
@@ -1832,6 +1865,7 @@ OverlayImage BuildOverlayedImage(const std::string& base_path, const std::string
     image.patch_path = patch_path;
     image.root = out_dir;
     image.index_path = JoinPath(out_dir, "files.txt");
+    image.manifest_path = JoinPath(ParentOf(out_dir), "overlay.json");
 
     if (patch_path.empty() || !bb_uwp_is_dir(patch_path.c_str())) {
         std::printf("Overlay: no update folder to overlay (%s)\n", patch_path.c_str());
@@ -1876,8 +1910,10 @@ OverlayImage BuildOverlayedImage(const std::string& base_path, const std::string
             std::printf("Overlay: %s is in neither the update nor the game dump\n", rel.c_str());
             continue;
         }
-        if (CopyFile(source, target)) {
+        std::string sha;
+        if (CopyFile(source, target, &sha)) {
             ++image.boot_files;
+            image.boot.emplace_back(WithForwardSlashes(rel), sha);
         }
     }
 
@@ -1897,9 +1933,76 @@ OverlayImage BuildOverlayedImage(const std::string& base_path, const std::string
         return image;
     }
 
-    std::printf("Overlay: %s + %s -> %s (%zu files from the update, %zu copied, %zu redirected)\n",
+    // The digest answers "are the prepared image and the driver cache still what this overlay
+    // describes?": it covers the effective version, the redirect list and the exact boot bytes, and
+    // deliberately not the absolute folder paths (moving the same dump to another drive is not a
+    // change).
+    const std::vector<std::string> sorted_files = [&image] {
+        std::vector<std::string> list = image.files;
+        std::sort(list.begin(), list.end());
+        return list;
+    }();
+    std::string redirect_text;
+    for (const auto& rel : sorted_files) {
+        redirect_text += rel;
+        redirect_text += '\n';
+    }
+    const Bytes redirect_bytes(redirect_text.begin(), redirect_text.end());
+    const std::string redirect_sha = Sha256Hex(redirect_bytes);
+
+    const auto base_sfo = ReadParamSfo(base_path);
+    const auto patch_sfo = ReadParamSfo(patch_path);
+    const std::string base_ver = base_sfo ? base_sfo->Version() : std::string();
+    const std::string patch_ver = patch_sfo ? patch_sfo->Version() : std::string();
+    const std::string effective_ver = patch_ver.empty() ? base_ver : patch_ver;
+
+    std::vector<std::pair<std::string, std::string>> sorted_boot = image.boot;  // WithForwardSlashes
+    std::sort(sorted_boot.begin(), sorted_boot.end());
+    std::string digest_text = "bboverlay1|" + effective_ver + "|" + redirect_sha;
+    for (const auto& [rel, sha] : sorted_boot) {
+        digest_text += "|" + rel + ":" + sha;
+    }
+    const Bytes digest_bytes(digest_text.begin(), digest_text.end());
+    image.digest = Sha256Hex(digest_bytes);
+
+    std::string json = "{\n";
+    json += "  \"format\": 1,\n";
+    json += "  \"base\": \"" + JsonEscape(base_path) + "\",\n";
+    json += "  \"patch\": \"" + JsonEscape(patch_path) + "\",\n";
+    json += "  \"base_app_ver\": \"" + JsonEscape(base_ver) + "\",\n";
+    json += "  \"patch_app_ver\": \"" + JsonEscape(patch_ver) + "\",\n";
+    json += "  \"effective\": \"" + JsonEscape(effective_ver) + "\",\n";
+    json += "  \"digest\": \"" + image.digest + "\",\n";
+    json += "  \"redirect_sha256\": \"" + redirect_sha + "\",\n";
+    json += "  \"boot\": [";
+    for (size_t i = 0; i < sorted_boot.size(); ++i) {
+        json += i ? ",\n    " : "\n    ";
+        json += "{\"path\": \"" + JsonEscape(sorted_boot[i].first) + "\", \"sha256\": \"" +
+                sorted_boot[i].second + "\"}";
+    }
+    json += sorted_boot.empty() ? "],\n" : "\n  ],\n";
+    json += "  \"files\": [";
+    for (size_t i = 0; i < sorted_files.size(); ++i) {
+        json += i ? ",\n    " : "\n    ";
+        json += "\"" + JsonEscape(sorted_files[i]) + "\"";
+    }
+    json += sorted_files.empty() ? "]\n" : "\n  ]\n";
+    json += "}\n";
+    image.manifest = json;
+
+    bool manifest_ok = false;
+    if (FILE* manifest_file = bb_uwp_fopen(image.manifest_path.c_str(), "wb")) {
+        manifest_ok = std::fwrite(json.data(), 1, json.size(), manifest_file) == json.size() &&
+                      std::fclose(manifest_file) == 0;
+    }
+    if (!manifest_ok) {
+        std::printf("Overlay: cannot write %s\n", image.manifest_path.c_str());
+    }
+
+    std::printf("Overlay: %s + %s -> %s (%zu files from the update, %zu copied, %zu redirected, "
+                "digest %.12s)\n",
                 base_path.c_str(), patch_path.c_str(), out_dir.c_str(), patch_files.size(),
-                image.boot_files, patch_files.size());
+                image.boot_files, patch_files.size(), image.digest.c_str());
     std::fflush(stdout);
     return image;
 }

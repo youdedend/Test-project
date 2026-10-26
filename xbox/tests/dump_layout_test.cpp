@@ -412,6 +412,54 @@ void TestOverlayImage(const fs::path& root) {
     CheckEqual(ReadText(patch / "eboot.bin"), "patch", "the update folder is never modified");
 }
 
+void TestOverlayManifest(const fs::path& root) {
+    const auto dir = root / "overlay-manifest";
+    const auto base = MakeContainer(dir / "Bloodborne", "01.00", "gp",
+                                    "UP9000-CUSA03173_00-BLOODBORNE0000000");
+    const auto patch = MakeContainer(dir / "Bloodborne-patch", "01.09", "patch",
+                                     "UP9000-CUSA03173_00-BLOODBORNE0000000-A0109-V0100");
+    WriteFile(patch / "dvdroot_ps4" / "map" / "m24_00.mapbnd", {'m'});
+    const std::string prepared = (dir / "Prepared").string();
+    const auto image = BbPrepare::BuildOverlayedImage(base.string(), patch.string(),
+                                                      prepared + "\\overlay");
+    Check(image.IsValid(), "the overlay is built for the manifest test");
+    Check(!image.digest.empty(), "the overlay has a digest");
+    const fs::path manifest_path = Native(image.manifest_path.c_str());
+    Check(fs::exists(manifest_path), "overlay.json is written next to the overlay");
+
+    const std::string manifest = ReadText(manifest_path);
+    Check(manifest.find("\"effective\": \"01.09\"") != std::string::npos,
+          "the manifest records the effective version");
+    Check(manifest.find("\"base_app_ver\": \"01.00\"") != std::string::npos,
+          "the manifest records the base version");
+    Check(manifest.find("\"digest\": \"" + image.digest + "\"") != std::string::npos,
+          "the manifest records the digest");
+    Check(manifest.find("dvdroot_ps4/map/m24_00.mapbnd") != std::string::npos,
+          "the manifest lists the redirected paths");
+    Check(manifest.find("\"path\": \"eboot.bin\"") != std::string::npos,
+          "the manifest hashes the boot files");
+    Check(manifest.find("Bloodborne-patch") != std::string::npos,
+          "the manifest records where the update came from");
+    Check(manifest.find("\\\\\\\\") == std::string::npos,
+          "backslashes in the recorded paths are JSON-escaped");
+
+    // Same content in a different folder: the digest must not change (moving the dump is not a
+    // change). Different update content: it must change, or the caches would go stale.
+    const auto moved = root / "overlay-manifest-moved";
+    fs::create_directories(moved);
+    fs::copy(base, moved / "Bloodborne", fs::copy_options::recursive);
+    fs::copy(patch, moved / "Bloodborne-patch", fs::copy_options::recursive);
+    const auto same = BbPrepare::BuildOverlayedImage((moved / "Bloodborne").string(),
+                                                     (moved / "Bloodborne-patch").string(),
+                                                     (moved / "Prepared" / "overlay").string());
+    CheckEqual(same.digest, image.digest, "moving the same dump does not change the overlay digest");
+
+    WriteFile(patch / "eboot.bin", {'d', 'i', 'f', 'f'});
+    const auto changed = BbPrepare::BuildOverlayedImage(base.string(), patch.string(),
+                                                        prepared + "\\overlay");
+    Check(changed.digest != image.digest, "different update bytes change the overlay digest");
+}
+
 void TestOverlayRebuildDropsStaleFiles(const fs::path& root) {
     const auto dir = root / "overlay-rebuild";
     const auto base = MakeContainer(dir / "Bloodborne", "01.00", "gp",
@@ -475,6 +523,7 @@ int main() {
     TestBaseOnly(root);
     TestPatchRooted(root);
     TestOverlayImage(root);
+    TestOverlayManifest(root);
     TestOverlayRebuildDropsStaleFiles(root);
     TestOverlayWithoutUpdate(root);
     TestUnreadableDump(root);
