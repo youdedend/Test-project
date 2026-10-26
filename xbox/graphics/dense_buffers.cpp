@@ -2,12 +2,14 @@
 // Xbox UWP dense ordinary-buffer arena backing + logical DMA page-table views
 // (Cosmo/uncharted_xbox 5c74fc18 RetireTicks=64 safe deferred arena release).
 
+#include "dense_arena_lifetime.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <set>
 
@@ -83,12 +85,14 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         arena_backed -= std::min<u64>(arena_backed, old->size_bytes);
     }
 
-    // Replaced arenas hold whole copies of their ranges; keep them alive until the GPU has
-    // finished RetireTicks submissions past this point so commands recorded shortly after the
-    // replacement (DrawPipe / prepared draws / copy flushes) never hit a destroyed VkBuffer.
+    // Replaced arenas hold whole copies of their ranges; keep them alive until every command
+    // recorded before the replacement has been signaled (fence) and no draw preparation worker,
+    // scanner or recording thread still holds a pointer into them. A tick-based guess alone let
+    // Test #11 destroy an arena under a submission that was still being prepared.
     if (!previous.empty()) {
         std::scoped_lock lk{dense_arena_mutex};
         const u64 tick = scheduler.CurrentTick();
+        BbUwp::DenseArenas().Retire(tick);
         for (auto it = dense_arenas.begin(); it != dense_arenas.end(); ++it) {
             if (previous.contains(&*it)) {
                 retired_arenas.push_back({it, tick});
@@ -116,18 +120,44 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
 }
 
 void BufferCache::ReleaseRetiredArenas() {
-    constexpr u64 RetireTicks = 64;
-    std::scoped_lock lk{dense_arena_mutex};
-    std::erase_if(retired_arenas, [&](const RetiredArena& retired) {
-        if (!scheduler.IsFree(retired.tick + RetireTicks)) {
-            return false;
+    auto& lifetime = BbUwp::DenseArenas();
+    const u64 now = scheduler.CurrentTick();
+    const u32 inflight = lifetime.Inflight();
+    std::size_t deferred = 0;
+    std::size_t remaining = 0;
+    {
+        std::scoped_lock lk{dense_arena_mutex};
+        std::erase_if(retired_arenas, [&](const RetiredArena& retired) {
+            if (!lifetime.CanRelease(retired.tick, now,
+                                     [this](u64 tick) { return scheduler.IsFree(tick); })) {
+                deferred += inflight != 0 ? 1 : 0;
+                return false;
+            }
+            std::printf("UWP dense GPU arena: %#llx, %llu MiB released\n",
+                        static_cast<unsigned long long>(retired.arena->cpu_addr),
+                        static_cast<unsigned long long>(retired.arena->size_bytes >> 20));
+            std::fflush(stdout);
+            dense_arenas.erase(retired.arena);
+            return true;
+        });
+        remaining = retired_arenas.size();
+    }
+    // Logged at most once a second: with draw preparation running there is nearly always a
+    // producer holding an arena, so a per-call line would flood the log.
+    if (deferred != 0) {
+        static u64 last_report = 0;
+        const u64 ms = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        if (ms - last_report >= 1000) {
+            last_report = ms;
+            std::printf("UWP dense arena: retiring deferred (inflight=%u, %zu deferred, %zu "
+                        "retired)\n",
+                        inflight, deferred, remaining);
+            std::fflush(stdout);
         }
-        std::printf("UWP dense GPU arena: %#llx, %llu MiB released\n",
-                    static_cast<unsigned long long>(retired.arena->cpu_addr),
-                    static_cast<unsigned long long>(retired.arena->size_bytes >> 20));
-        dense_arenas.erase(retired.arena);
-        return true;
-    });
+    }
 }
 
 void BufferCache::EnsureDenseResident(const Buffer* arena, u64 first_block, u64 last_block) {

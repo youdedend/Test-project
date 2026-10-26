@@ -9,6 +9,7 @@
 
 #include "bbport_threads.h"
 #include "bbport_toggles.h"
+#include "dense_arena_lifetime.h"
 #include "common/thread.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -410,9 +411,11 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
         }
         submission->start_checksum = checksum;
         dirty.Clear();
+        BbUwp::DenseArenas().Retain();
         ForEachPacket(submission->commands, [&](const AmdGpu::PM4Header* header) {
             AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(*regs, header, checksum, &dirty);
         });
+        BbUwp::DenseArenas().Release();
         submission->delta.Capture(*regs, dirty);
         submission->end_checksum = checksum;
         {
@@ -492,6 +495,10 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         path.clear();
         u64 checksum = target->start_checksum;
         u32 ordinal = 0;
+        // The worker walks table pointers and fetch-shader memory belonging to this submission:
+        // hold the dense arenas it may reference until its draws are prepared. Released on both
+        // the normal path and after a fault jumps back to the recovery point below.
+        BbUwp::DenseArenas().Retain();
         target->flat_chunks.clear();
         FlatArena arena{&target->flat_chunks};
         ForEachPacket(target->commands, [&](const AmdGpu::PM4Header* header) {
@@ -552,6 +559,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             ++ordinal;
         });
+        BbUwp::DenseArenas().Release();
         position = target->seq + 1;
     }
 }
