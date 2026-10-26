@@ -21,7 +21,7 @@ typedef struct {
     char name[32];
 } GuestMutex;
 _Static_assert(offsetof(GuestMutex, libc_flags) == 0x20, "libc.prx accesses *mutex + 0x20");
-static _Atomic size_t created, locks, unlocks;
+static size_t created, locks, unlocks;
 static int32_t orbis_error(int e) {
     if (!e) return 0;
     unsigned code;
@@ -170,7 +170,7 @@ typedef struct {
     pthread_cond_t native;
     char name[32];
 } GuestCond;
-static _Atomic size_t conds, waits, wakeups;
+static size_t conds, waits, wakeups;
 static ABI int32_t cond_init(GuestCond **out, void **attr, const char *name) {
     (void)attr;
     if (!out) return orbis_error(EINVAL);
