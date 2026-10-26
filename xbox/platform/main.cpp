@@ -531,27 +531,22 @@ static void ensure_default_ini(const std::string& ini_path) {
     const char* defaults =
         "# Bloodborne Xbox Series X|S UWP settings (in-game overlay: L3 + R3)\n"
         "upscaler=off\n"
-        "upscaler_quality=0\n"
-        "fsr_sharpening=1\n"
-        "fsr_sharpness=0.200\n"
         "preset=1\n"
-        "render_width=1280\n"
-        "render_height=720\n"
-        "vsync=1\n"
-        "fps_cap=60\n"
-        "motion_AA=1\n"
         "show_fps=1\n"
-        "fps_detail=0\n"
-        "sfx_HalfRes=0\n"
-        "cloth_HalfRate=0\n"
         "button_prompts=xbox\n"
         "quit_to_desktop=0\n"
-        "rebirth=0\n"
-        "effect_motion_blur=0\n"
+        "rebirth=1\n"
         "effect_chromatic_aberration=0\n"
-        "effect_depth_of_field=1\n"
+        "effect_dof=1\n"
+        "effect_motion_blur=0\n"
         "effect_ssao=1\n"
-        "volume_master=1.000\n";
+        "effect_game_aa=1\n"
+        "effect_dynamic_shadows=1\n"
+        "effect_ssr=0\n"
+        "model_lod=0\n"
+        "output_res=1920x1080\n"
+        "fov=43\n"
+        "fps_cap=60\n";
     BbPrepare::Bytes bytes(defaults, defaults + std::strlen(defaults));
     write_file_bytes(ini_path, bytes);
 }
@@ -582,32 +577,20 @@ static std::map<std::string, std::string> parse_kv_file(const std::string& path)
     return kv;
 }
 
-static std::string resolve_render_res(const std::map<std::string, std::string>& ini) {
+static std::string resolve_render_res_override(const std::map<std::string, std::string>& ini) {
     if (const char* forced = std::getenv("BB_UWP_RENDER_RES"); forced && *forced) {
         return forced;
     }
-    int preset = 1; // Default on Xbox Dozen: 1280x720 scene + 1920x1080 native crisp HUD
-    if (auto it = ini.find("preset"); it != ini.end()) {
-        preset = std::atoi(it->second.c_str());
-    }
-    switch (preset) {
-        case 0: return "1920x1080";
-        case 1: return "1280x720";
-        case 2: return "960x540";
-        case 3: return "1600x900";
-        case 4: return "2560x1440";
-        case 5: return "3840x2160";
-        case 6: {
-            int w = 1280, h = 720;
-            if (auto it = ini.find("render_width"); it != ini.end()) w = std::atoi(it->second.c_str());
-            if (auto it = ini.find("render_height"); it != ini.end()) h = std::atoi(it->second.c_str());
-            if (w >= 480 && h >= 270) {
-                return std::to_string(w) + "x" + std::to_string(h);
-            }
-            return "1280x720";
+    auto w_it = ini.find("render_width");
+    auto h_it = ini.find("render_height");
+    if (w_it != ini.end() && h_it != ini.end()) {
+        const int w = std::atoi(w_it->second.c_str());
+        const int h = std::atoi(h_it->second.c_str());
+        if (w >= 480 && h >= 270) {
+            return std::to_string(w) + "x" + std::to_string(h);
         }
-        default: return "1280x720";
     }
+    return {};
 }
 
 static bool prepare_game_and_patches(const std::string& dump, const std::string& prepared,
@@ -728,7 +711,7 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
     files = {};
 
     const auto ini = parse_kv_file(ini_path);
-    const std::string render_res = resolve_render_res(ini);
+    const std::string render_res_override = resolve_render_res_override(ini);
     std::string fps_mode = "60";
     if (const char* forced_fps = std::getenv("BB_FPS"); forced_fps && *forced_fps) {
         fps_mode = forced_fps;
@@ -743,13 +726,14 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
 
     try {
         auto patch_res = BbPrepare::BuildPatches(eboot_elf, app_ver, patch_xml, ini, fps_mode,
-                                                 render_res, force_patches);
+                                                 render_res_override, force_patches);
         if (!write_file_bytes(prepared + "\\patches.bin", patch_res.patches_bin)) {
             stop_with_message("Failed to write Prepared\\patches.bin.", player);
             return false;
         }
-        if (render_res != "1920x1080") {
-            set_env_var("BB_RENDER_RES", render_res);
+        if (patch_res.render_width != 1920 || patch_res.render_height != 1080) {
+            set_env_var("BB_RENDER_RES", std::to_string(patch_res.render_width) + "x" +
+                                             std::to_string(patch_res.render_height));
         } else {
             set_env_var("BB_RENDER_RES", "");
         }

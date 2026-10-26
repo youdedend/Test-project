@@ -197,7 +197,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish pre-release
-        if: github.event_name == 'workflow_dispatch' && inputs.release
+        if: (github.event_name == 'workflow_dispatch' && inputs.release) || contains(github.event.head_commit.message, '[release]')
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.package.outputs.version }}
@@ -208,13 +208,13 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $source = "https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA"
           $notes = @"
-          Xbox Series X|S Developer Mode UWP package for **Bloodborne (v1.09)**. Contains **no** copyrighted game code or assets — supply your own decrypted PS4 Bloodborne dump (`eboot.bin`, `sce_module`, `sce_sys`, `dvdroot_ps4`).
+          Xbox Series X|S Developer Mode UWP package for **Bloodborne (v1.09)**. Contains **no** copyrighted game code or assets — supply your own decrypted PS4 Bloodborne dump (``eboot.bin``, ``sce_module``, ``sce_sys``, ``dvdroot_ps4``).
 
           **Install on Xbox Series X|S**
-          1. Unzip `BloodborneXbox-$env:VERSION.zip` on a PC.
-          2. In **Xbox Device Portal → Add**, upload `BloodborneLauncher_$($env:VERSION)_x64.appx` and `Dependencies\Microsoft.VCLibs.x64.14.00.appx`.
+          1. Unzip ``BloodborneXbox-$env:VERSION.zip`` on a PC.
+          2. In **Xbox Device Portal → Add**, upload ``BloodborneLauncher_$($env:VERSION)_x64.appx`` and ``Dependencies\Microsoft.VCLibs.x64.14.00.appx``.
           3. On Dev Home, press **View** on **Bloodborne Launcher → View details** and set **App type** to **Game** (unlocks the full 5,120 MiB Game Mode memory pool).
-          4. Copy your decrypted PS4 Bloodborne v1.09 dump to `E:\dumps\Bloodborne` on a USB 3.0 drive or `D:\DevelopmentFiles\Bloodborne` on internal storage.
+          4. Copy your decrypted PS4 Bloodborne v1.09 dump to ``E:\dumps\Bloodborne`` on a USB 3.0 drive or ``D:\DevelopmentFiles\Bloodborne`` on internal storage.
           5. Launch **Bloodborne Launcher**: confirm **Prepare & Launch** once, optionally run **Precompile shaders**, then select **Start game**.
 
           Press **L3 + R3** in-game to open the settings overlay; tap **View** for Personal Effects and hold **View + D-Pad Left** for Gestures. [Full guide]($source/xbox/README.md) · [Credits]($source/xbox/CREDITS.md)
