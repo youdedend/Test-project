@@ -193,12 +193,27 @@ jobs:
             @{ name = 'ini_file'; include = 'xbox/platform'; sources = @('xbox\tests\ini_file_test.cpp') },
             @{ name = 'overlay_index'; include = 'xbox/platform'; sources = @('xbox\tests\overlay_index_test.cpp') }
           )
+          # Compiler and test output is echoed and (on failure) annotated: the job log is not always
+          # reachable, while a check-run annotation always is.
+          function Publish($title, $text) {
+            $flat = ($text | Out-String) -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            if ($flat.Length -gt 60000) { $flat = $flat.Substring($flat.Length - 60000) }
+            Write-Output "::error title=$title::$flat"
+          }
           foreach ($test in $tests) {
             $exe = "$env:RUNNER_TEMP\$($test.name)_test.exe"
-            & $clang /nologo /std:c++20 /EHsc /W3 "/I$($test.include)" /Fe:"$exe" $test.sources
-            if ($LASTEXITCODE) { throw "$($test.name) test did not compile" }
-            & $exe
-            if ($LASTEXITCODE) { throw "$($test.name) test failed" }
+            $compile = & $clang /nologo /std:c++20 /EHsc /W3 "/I$($test.include)" /Fe:"$exe" $test.sources 2>&1
+            $compile | Write-Output
+            if ($LASTEXITCODE) {
+              Publish "$($test.name) test did not compile" $compile
+              throw "$($test.name) test did not compile"
+            }
+            $run = & $exe 2>&1
+            $run | Write-Output
+            if ($LASTEXITCODE) {
+              Publish "$($test.name) test failed" $run
+              throw "$($test.name) test failed"
+            }
           }
 
       - name: Symbolicate known crash RVAs
