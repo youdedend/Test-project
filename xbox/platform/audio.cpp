@@ -2,6 +2,7 @@
 #include "audio.h"
 #include <windows.h>
 #include <mmreg.h>
+#include <winrt/base.h>
 #include <wrl/client.h>
 #include <xaudio2.h>
 #include <algorithm>
@@ -24,8 +25,14 @@ int g_device_channels = 2;
 
 bool EnsureEngineLocked() {
     if (g_engine && g_master) return true;
-    const HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    (void)co_hr;
+    thread_local bool apartment = false;
+    if (!apartment) {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        } catch (winrt::hresult_error const&) {
+        }
+        apartment = true;
+    }
     if (FAILED(XAudio2Create(&g_engine, 0, XAUDIO2_DEFAULT_PROCESSOR))) {
         g_engine.Reset();
         return false;
@@ -92,10 +99,11 @@ extern "C" SDL_AudioStream* bbport_uwp_xaudio2_open(int channels, int is_float, 
     ext.Format.nBlockAlign = block_align;
     ext.Format.nAvgBytesPerSec = static_cast<DWORD>(sample_rate) * block_align;
     if (channels > 2) {
+        constexpr DWORD kSurround7Point1 = 0x63fu;
         ext.Format.cbSize = sizeof(ext) - sizeof(ext.Format);
         ext.Samples.wValidBitsPerSample = bits;
-        ext.dwChannelMask = KSAUDIO_SPEAKER_7POINT1_SURROUND;
-        ext.SubFormat = is_float ? KSDATAFORMAT_SUBTYPE_IEEE_FLOAT : KSDATAFORMAT_SUBTYPE_PCM;
+        ext.dwChannelMask = kSurround7Point1;
+        ext.SubFormat = {is_float ? 3u : 1u, 0, 0x10, {0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71}};
     }
 
     if (FAILED(g_engine->CreateSourceVoice(&voice->source, &ext.Format, 0,
