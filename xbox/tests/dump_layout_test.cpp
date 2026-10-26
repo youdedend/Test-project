@@ -35,8 +35,9 @@ std::string Native(const char* path) {
     std::replace(text.begin(), text.end(), '\\', '/');
     return text;
 }
-/// Test-side comparison of a path the production code produced ("\\") with a std::filesystem
-/// path ("/").
+/// Normalizes a path from either side of a comparison: the production code builds Win32 paths
+/// ("dir\\rel") and std::filesystem hands back "\" on Windows, so both sides go through this before
+/// they are compared.
 std::string Norm(const std::string& path) {
     std::string text = path;
     std::replace(text.begin(), text.end(), '\\', '/');
@@ -332,7 +333,7 @@ void TestPreferredPatch(const fs::path& root) {
     const auto layout = BbPrepare::DetectDumpLayout(base.string(), elsewhere.string());
     Check(layout.kind == BbPrepare::DumpLayout::Kind::Split,
           "a patch path stored in bbport.ini is used even outside the dump folder");
-    CheckEqual(Norm(layout.patch_path), elsewhere.string(), "the preferred patch path is kept");
+    CheckEqual(Norm(layout.patch_path), Norm(elsewhere.string()), "the preferred patch path is kept");
     CheckEqual(layout.effective_ver, "01.09", "the preferred patch supplies the version");
 }
 
@@ -368,8 +369,9 @@ void TestPatchRooted(const fs::path& root) {
     Check(layout.kind == BbPrepare::DumpLayout::Kind::Split,
           "picking the patch folder pairs it with the sibling base game");
     CheckEqual(layout.effective_ver, "01.09", "a patch-rooted pick runs 01.09");
-    CheckEqual(Norm(layout.base_path), base.string(), "the sibling base folder supplies the data");
-    CheckEqual(Norm(layout.patch_path), patch.string(),
+    CheckEqual(Norm(layout.base_path), Norm(base.string()),
+               "the sibling base folder supplies the data");
+    CheckEqual(Norm(layout.patch_path), Norm(patch.string()),
                "the picked patch folder is the executable source");
 }
 
