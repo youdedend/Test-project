@@ -185,6 +185,11 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
     }
 
 #ifdef BB_UWP
+    auto* ep = static_cast<EXCEPTION_POINTERS*>(context);
+    if (!ep || !ep->ExceptionRecord || !ep->ContextRecord ||
+        ep->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
+        return false;
+    }
     ZydisDecodedInstruction instruction;
     ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
     const ZyanStatus status = Common::Decoder::Instance()->decodeInstruction(
@@ -194,7 +199,7 @@ static bool SrtWalkerSignalHandler(void* context, void* fault_address) {
         operands[1].type != ZYDIS_OPERAND_TYPE_MEMORY) {
         return false;
     }
-    auto* win_ctx = static_cast<EXCEPTION_POINTERS*>(context)->ContextRecord;
+    auto* win_ctx = ep->ContextRecord;
     switch (operands[0].reg.value) {
     case ZYDIS_REGISTER_RDI:
         win_ctx->Rdi = 0;

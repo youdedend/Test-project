@@ -434,3 +434,21 @@ extern "C" int bbgpu_input_reload_requested(void) {
 extern "C" void bbgpu_mouse_camera_configure(int direct, float sensitivity, float scale_x, float scale_y, int sync) {
     Core::BloodborneCam::Instance().Configure(direct != 0, sensitivity, scale_x, scale_y, sync != 0);
 }
+
+#ifdef BB_UWP
+extern "C" int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total,
+                                                uint32_t* out_stage, uint64_t* out_hash,
+                                                uint64_t* out_partner_hash) {
+    const auto d = BbPrecompile::GetActiveShaderDiagnostic();
+    if (!d.active) {
+        return 0;
+    }
+    if (out_idx) *out_idx = d.index;
+    if (out_total) *out_total = d.total;
+    if (out_stage) *out_stage = d.stage;
+    if (out_hash) *out_hash = d.hash;
+    if (out_partner_hash) *out_partner_hash = d.partner_hash;
+    return 1;
+}
+#endif
+

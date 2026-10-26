@@ -106,6 +106,9 @@ void bbgpu_uwp_on_suspending(void);
 void bbgpu_uwp_on_resuming(void);
 /* Evicts cold TextureSetMemo descriptor slices and staging pools down to target_bytes. */
 uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free);
+/* Returns 1 if shader precompilation is currently compiling an item, filling diagnostic fields. */
+int bbgpu_uwp_active_precompile_diag(uint32_t *out_idx, uint32_t *out_total, uint32_t *out_stage,
+                                     uint64_t *out_hash, uint64_t *out_partner_hash);
 #endif
 
 #ifdef __cplusplus

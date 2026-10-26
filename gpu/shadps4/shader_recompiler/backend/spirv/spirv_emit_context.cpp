@@ -448,6 +448,9 @@ void EmitContext::DefineInputs() {
         // Clip distances attribute vector is the last in inputs array
         const auto num_inputs = runtime_info.hw.fs.num_inputs - (has_clip_distance_inputs ? 1 : 0);
 
+        const bool can_per_vertex = profile.supports_amd_shader_explicit_vertex_parameter ||
+                                    profile.supports_fragment_shader_barycentric;
+
         for (s32 i = 0; i < num_inputs; i++) {
             const auto& input = runtime_info.hw.fs.inputs[i];
             if (input.IsDefault()) {
@@ -455,7 +458,13 @@ void EmitContext::DefineInputs() {
             }
             const IR::Attribute param = IR::Attribute::Param0 + i;
             const u32 num_components = info.loads.NumComponents(param);
-            const auto [primary, auxiliary] = info.fs_interpolation[i];
+            if (num_components == 0) {
+                continue;
+            }
+            const auto [raw_primary, auxiliary] = info.fs_interpolation[i];
+            const Qualifier primary =
+                (raw_primary == Qualifier::PerVertex && !can_per_vertex) ? Qualifier::Flat
+                                                                         : raw_primary;
             const Id type = F32[num_components];
             const Id attr_id = [&] {
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);

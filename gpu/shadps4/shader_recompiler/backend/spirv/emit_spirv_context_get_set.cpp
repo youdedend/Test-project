@@ -86,14 +86,19 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         const auto& param{ctx.input_params.at(param_index)};
         const Id value = [&] {
             if (param.is_array) {
-                ASSERT(param.num_components > 1);
                 if (param.is_loaded) {
-                    return ctx.OpCompositeExtract(param.component_type, param.id_array[index],
-                                                  comp);
-                } else {
+                    return param.num_components > 1
+                               ? ctx.OpCompositeExtract(param.component_type, param.id_array[index],
+                                                        comp)
+                               : param.id_array[index];
+                } else if (param.num_components > 1) {
                     return ctx.OpLoad(param.component_type,
                                       ctx.OpAccessChain(param.pointer_type, param.id,
                                                         ctx.ConstU32(index), ctx.ConstU32(comp)));
+                } else {
+                    return ctx.OpLoad(param.component_type,
+                                      ctx.OpAccessChain(param.pointer_type, param.id,
+                                                        ctx.ConstU32(index)));
                 }
             } else {
                 ASSERT(!param.is_loaded);

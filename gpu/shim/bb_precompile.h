@@ -16,6 +16,7 @@ namespace BbPrecompile {
 struct ScanSummary {
     u32 archives_found = 0;
     u32 archives_ok = 0;
+    u32 boot_orbshdr = 0;
     u32 total_orbshdr = 0;
     u32 unique_hashes = 0;
     u32 vs_count = 0;
@@ -25,9 +26,23 @@ struct ScanSummary {
     u32 precompiled_attempted = 0;
     u32 precompiled_ok = 0;
     u32 precompiled_skipped = 0;
+    u32 linked_pairs_ok = 0;
+    u32 aux_gs_ok = 0;
+};
+
+struct ActiveDiagnostic {
+    bool active = false;
+    u32 index = 0;
+    u32 total = 0;
+    u32 stage = 0; // 0=CS, 1=PS, 2=VS, 3=VS+PS pair, 4=AuxGS
+    u64 hash = 0;
+    u64 partner_hash = 0;
 };
 
 using ProgressFn = std::function<void(const std::string& label, u32 done, u32 total)>;
+
+/// Returns current precompile item if precompilation is actively compiling a shader on any thread.
+ActiveDiagnostic GetActiveShaderDiagnostic() noexcept;
 
 /// Imports any portable shader/pipeline cache files from <BB_UWP_DUMP>/shader_cache/<serial>
 /// or <LocalState>/shader_cache/<serial> into LocalState/user/cache/<serial> before WarmUp.
@@ -37,13 +52,13 @@ u32 SyncPortableCacheToLocal(const ProgressFn& progress = {});
 /// into <LocalState>/shader_cache/<serial> (and <BB_UWP_DUMP>/shader_cache/<serial> if writable).
 u32 ExportLocalCacheToPortable();
 
-/// Streams and decompresses <BB_UWP_DUMP>/dvdroot_ps4/shader/*.shaderbnd.dcx one archive at a
-/// time (< 24 MiB transient RAM, freed immediately) to verify OrbShdr binaries on SSD/USB dumps.
+/// Streams and decompresses Bloodborne's .shaderbnd.dcx/.shaderbnd/.gxsh archives (plus boot.bin)
+/// one archive at a time (< 24 MiB transient RAM, freed immediately) to verify OrbShdr binaries.
 ScanSummary ScanGameShaderArchives(const ProgressFn& progress = {});
 
-/// Extracts unique CS/PS/VS OrbShdr programs from Bloodborne's .shaderbnd.dcx archives and
-/// ahead-of-time compiles GCN -> SPIR-V -> NIR -> DXIL into Mesa Dozen's VkPipelineCache
-/// (driver.vkcache) with < 1 TiB synthetic GNM descriptors and zero permanent PSO memory bloat.
+/// Extracts unique CS/PS/VS OrbShdr programs + BND4 (VS, PS) pairs + embedded eboot.bin shaders +
+/// auxiliary RectList/QuadList GS and ahead-of-time compiles GCN -> SPIR-V -> NIR -> DXIL into
+/// Mesa Dozen's VkPipelineCache (driver.vkcache) with < 1 TiB synthetic GNM descriptors.
 ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
                                          const ProgressFn& progress = {});
 

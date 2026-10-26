@@ -799,11 +799,101 @@ static void configure_dlc_and_mods(const std::string& dump, const std::string& l
     }
 }
 
+static std::wstring g_quarantine_path_w;
+
+static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
+    if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
+        code != 0xC0000409u) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    uint32_t diag_idx = 0, diag_total = 0, diag_stage = 0;
+    uint64_t diag_hash = 0, diag_partner = 0;
+    const bool in_precompile =
+        bbgpu_uwp_active_precompile_diag(&diag_idx, &diag_total, &diag_stage, &diag_hash,
+                                         &diag_partner) != 0;
+
+    static std::atomic<uint32_t> s_logged{0};
+    if (s_logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+        const uintptr_t rip = ep->ContextRecord->Rip;
+        const uintptr_t rsp = ep->ContextRecord->Rsp;
+        MEMORY_BASIC_INFORMATION mbi{};
+        uintptr_t mod_base = 0;
+        if (VirtualQuery(reinterpret_cast<LPCVOID>(rip), &mbi, sizeof(mbi))) {
+            mod_base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+        }
+        const char* mod_name = "unknown";
+        if (mod_base && mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))) {
+            mod_name = "bloodborne_xbox.exe";
+        } else if (mod_base &&
+                   mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(L"vulkan_dzn.dll"))) {
+            mod_name = "vulkan_dzn.dll";
+        } else if (mod_base &&
+                   mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(L"dxil.dll"))) {
+            mod_name = "dxil.dll";
+        }
+        const uintptr_t rva = mod_base ? (rip - mod_base) : rip;
+        const uintptr_t fault_addr =
+            (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
+                ? ep->ExceptionRecord->ExceptionInformation[1]
+                : 0;
+        if (in_precompile) {
+            std::printf("UNHANDLED PRECOMPILE FAULT: code=0x%08lx module=%s+0x%llx rip=0x%llx "
+                        "rsp=0x%llx addr=0x%llx item=%u/%u stage=%u hash=%016llx partner=%016llx\n",
+                        static_cast<unsigned long>(code), mod_name,
+                        static_cast<unsigned long long>(rva), static_cast<unsigned long long>(rip),
+                        static_cast<unsigned long long>(rsp),
+                        static_cast<unsigned long long>(fault_addr), diag_idx, diag_total,
+                        diag_stage, static_cast<unsigned long long>(diag_hash),
+                        static_cast<unsigned long long>(diag_partner));
+        } else {
+            std::printf("UNHANDLED NATIVE FAULT: code=0x%08lx module=%s+0x%llx rip=0x%llx "
+                        "rsp=0x%llx addr=0x%llx\n",
+                        static_cast<unsigned long>(code), mod_name,
+                        static_cast<unsigned long long>(rva), static_cast<unsigned long long>(rip),
+                        static_cast<unsigned long long>(rsp),
+                        static_cast<unsigned long long>(fault_addr));
+        }
+        std::fflush(stdout);
+    }
+
+    if (in_precompile && diag_hash != 0 && !g_quarantine_path_w.empty()) {
+        HANDLE qf = CreateFile2FromAppW(g_quarantine_path_w.c_str(), FILE_APPEND_DATA,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_ALWAYS, nullptr);
+        if (qf != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER zero{};
+            SetFilePointerEx(qf, zero, nullptr, FILE_END);
+            char line[96]{};
+            const int len = std::snprintf(line, sizeof(line), "%016llx\n",
+                                          static_cast<unsigned long long>(diag_hash));
+            DWORD written = 0;
+            if (len > 0) {
+                WriteFile(qf, line, static_cast<DWORD>(len), &written, nullptr);
+            }
+            if (diag_partner != 0) {
+                const int len2 = std::snprintf(line, sizeof(line), "%016llx\n",
+                                               static_cast<unsigned long long>(diag_partner));
+                if (len2 > 0) {
+                    WriteFile(qf, line, static_cast<DWORD>(len2), &written, nullptr);
+                }
+            }
+            CloseHandle(qf);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static void run_loader() {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     const auto local_w =
         std::wstring(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path());
     const std::string local_str = winrt::to_string(local_w);
+    g_quarantine_path_w = local_w + L"\\precompile_quarantine.txt";
 
     {
         std::ifstream limit_file(local_w + L"\\memory_limit_mb.txt");
@@ -839,6 +929,7 @@ static void run_loader() {
     }
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+    AddVectoredExceptionHandler(0, &uwp_last_chance_logger);
 
     std::printf("Bloodborne Xbox Series X|S UWP loader started\n");
     GAMING_DEVICE_MODEL_INFORMATION model{};
@@ -960,6 +1051,7 @@ static void run_loader() {
     configure_dlc_and_mods(dump, local_str, user_str);
 
     set_env_var("BB_UWP_DUMP", dump);
+    set_env_var("BB_UWP_PREPARED", prepared_str);
     set_env_var("BB_GAME_DIR", dump);
     set_env_var("BB_USER_DIR", user_str);
     set_env_var("BB_GPU_USER_DIR", user_str);
