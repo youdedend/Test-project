@@ -807,6 +807,152 @@ void *runtime_low_map(size_t size, int prot) {
     return p==MAP_FAILED ? NULL : p;
 #endif
 }
+
+/* Segregated 64-byte-aligned allocator inside [LOW_MIN, USER_MIN) (< 64 GiB < 1 TiB).
+ * On Xbox/Windows UWP (/APPCONTAINER), Windows forces 64-bit high-entropy ASLR on UCRT heaps
+ * and PE sections (> 1 TiB), whereas Bloodborne's FD4 engine packs scePthreadSelf() and guest-
+ * visible handles/stacks into 40-bit fields (addr & 0xffffffffff). Keeping all guest-visible
+ * runtime objects and stacks in [LOW_MIN, USER_MIN) preserves all 40-bit pointer invariants. */
+#define LOW_BLOCK_MAGIC UINT64_C(0x42424c4f574d454d)
+typedef struct LowBlock {
+    uint64_t magic;
+    size_t bin;
+    size_t map_bytes;
+    struct LowBlock *next;
+    uint64_t reserved[4];
+} LowBlock;
+_Static_assert(sizeof(LowBlock) == 64, "LowBlock header must keep 64-byte payload alignment");
+
+static pthread_mutex_t low_alloc_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Bins 0..9 cover payload capacities 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768. */
+static LowBlock *low_bins[10];
+
+void *runtime_low_alloc(size_t size, size_t align) {
+    if (align > 64) {
+        fprintf(stderr, "STOP: unsupported runtime_low_alloc align=%zu\n", align);
+        exit(21);
+    }
+    if (!size) size = 1;
+    size_t bin = 0, cap = 64;
+    while (bin < 10 && cap < size) {
+        cap <<= 1;
+        ++bin;
+    }
+    if (bin >= 10) {
+        size_t total = align_up(sizeof(LowBlock) + size, 65536);
+        LowBlock *b = (LowBlock *)runtime_low_map(total, PROT_READ | PROT_WRITE);
+        if (!b) return NULL;
+        b->magic = LOW_BLOCK_MAGIC;
+        b->bin = 10;
+        b->map_bytes = total;
+        b->next = NULL;
+        return (void *)(b + 1);
+    }
+    pthread_mutex_lock(&low_alloc_lock);
+    if (!low_bins[bin]) {
+        const size_t slab_bytes = 65536;
+        unsigned char *slab = (unsigned char *)runtime_low_map(slab_bytes, PROT_READ | PROT_WRITE);
+        if (slab) {
+            const size_t stride = sizeof(LowBlock) + cap;
+            for (size_t off = 0; off + stride <= slab_bytes; off += stride) {
+                LowBlock *b = (LowBlock *)(slab + off);
+                b->magic = LOW_BLOCK_MAGIC;
+                b->bin = bin;
+                b->map_bytes = 0;
+                b->next = low_bins[bin];
+                low_bins[bin] = b;
+            }
+        }
+    }
+    LowBlock *out = low_bins[bin];
+    if (out) {
+        low_bins[bin] = out->next;
+        out->next = NULL;
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+    return out ? (void *)(out + 1) : NULL;
+}
+
+void *runtime_low_calloc(size_t count, size_t size) {
+    if (count && size > SIZE_MAX / count) return NULL;
+    const size_t total = count * size;
+    void *p = runtime_low_alloc(total ? total : 1, 64);
+    if (p) memset(p, 0, total ? total : 1);
+    return p;
+}
+
+void runtime_low_free(void *ptr) {
+    if (!ptr) return;
+    LowBlock *b = ((LowBlock *)ptr) - 1;
+    if (b->magic != LOW_BLOCK_MAGIC) {
+        fprintf(stderr, "STOP: invalid runtime_low_free pointer %p\n", ptr);
+        exit(21);
+    }
+    if (b->bin >= 10) {
+#ifdef _WIN32
+        VirtualFree(b, 0, MEM_RELEASE);
+#else
+        munmap(b, b->map_bytes);
+#endif
+        return;
+    }
+    pthread_mutex_lock(&low_alloc_lock);
+    b->next = low_bins[b->bin];
+    low_bins[b->bin] = b;
+    pthread_mutex_unlock(&low_alloc_lock);
+}
+
+#ifdef _WIN32
+typedef struct {
+    uintptr_t addr;
+    size_t size;
+} LowStackSlot;
+static LowStackSlot low_stack_free_list[128];
+static size_t low_stack_free_count;
+#endif
+
+void *runtime_low_stack_alloc(size_t size) {
+    size = align_up(size, 65536);
+#ifdef _WIN32
+    pthread_mutex_lock(&low_alloc_lock);
+    for (size_t i = 0; i < low_stack_free_count;) {
+        if (low_stack_free_list[i].size != size) {
+            ++i;
+            continue;
+        }
+        uintptr_t cand = low_stack_free_list[i].addr;
+        low_stack_free_list[i] = low_stack_free_list[--low_stack_free_count];
+#ifdef BB_UWP
+        void *reused = VirtualAllocFromApp((void *)cand, size, MEM_RESERVE | MEM_COMMIT,
+                                           uwp_low_prot(PROT_READ | PROT_WRITE));
+#else
+        void *reused = VirtualAlloc((void *)cand, size, MEM_RESERVE | MEM_COMMIT,
+                                    win_prot(PROT_READ | PROT_WRITE));
+#endif
+        if (reused) {
+            pthread_mutex_unlock(&low_alloc_lock);
+            return reused;
+        }
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+#endif
+    return runtime_low_map(size, PROT_READ | PROT_WRITE);
+}
+
+void runtime_low_stack_free(void *ptr, size_t size) {
+    if (!ptr) return;
+    size = align_up(size, 65536);
+#ifdef _WIN32
+    pthread_mutex_lock(&low_alloc_lock);
+    VirtualFree(ptr, 0, MEM_RELEASE);
+    if (low_stack_free_count < sizeof(low_stack_free_list) / sizeof(*low_stack_free_list)) {
+        low_stack_free_list[low_stack_free_count++] = (LowStackSlot){(uintptr_t)ptr, size};
+    }
+    pthread_mutex_unlock(&low_alloc_lock);
+#else
+    munmap(ptr, size);
+#endif
+}
 /* ---- GPU library interface (gpu/shim/bbgpu.cpp) ---- */
 /* Optimizations switched off at run time (diagnostics): the number in the file named by
  * BB_TOGGLE_FILE, re-read every 250 ms. Bits: 1 region cache, 2 fetch shader cache,

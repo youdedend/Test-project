@@ -4,14 +4,92 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+static int uwp_errno_from_win32(DWORD error) {
+    switch (error) {
+    case ERROR_SUCCESS: return 0;
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_INVALID_DRIVE:
+    case ERROR_BAD_NETPATH:
+    case ERROR_BAD_NET_NAME:
+    case ERROR_NO_MORE_FILES:
+        return ENOENT;
+    case ERROR_INVALID_NAME:
+        return EINVAL;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+    case ERROR_LOCK_VIOLATION:
+    case ERROR_WRITE_PROTECT:
+        return EACCES;
+    case ERROR_FILE_EXISTS:
+    case ERROR_ALREADY_EXISTS:
+        return EEXIST;
+    case ERROR_INVALID_HANDLE:
+        return EBADF;
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY:
+    case ERROR_COMMITMENT_LIMIT:
+        return ENOMEM;
+    case ERROR_DISK_FULL:
+    case ERROR_HANDLE_DISK_FULL:
+        return ENOSPC;
+    case ERROR_DIR_NOT_EMPTY:
+        return ENOTEMPTY;
+    case ERROR_DIRECTORY:
+        return ENOTDIR;
+    case ERROR_FILENAME_EXCED_RANGE:
+    case ERROR_BUFFER_OVERFLOW:
+        return ENAMETOOLONG;
+    case ERROR_TOO_MANY_OPEN_FILES:
+        return EMFILE;
+    default:
+        return EIO;
+    }
+}
+
+static void log_unexpected_win32(const char *op, const char *path, DWORD err, int mapped_errno) {
+    if (mapped_errno == ENOENT || mapped_errno == EEXIST) return;
+    static volatile LONG logged = 0;
+    if (InterlockedIncrement(&logged) <= 24) {
+        printf("UWP file warning: %s('%s') failed (Win32=%lu, errno=%d)\n",
+               op, path ? path : "", (unsigned long)err, mapped_errno);
+    }
+}
+
+/* Normalize UTF-8 paths to canonical Win32 backslashes for UWP RuntimeBroker *FromAppW APIs:
+ * forward slashes '/' or duplicate/trailing slashes on FolderPicker USB paths are rejected
+ * by RuntimeBroker with ERROR_INVALID_NAME / ERROR_ACCESS_DENIED. */
 static int wide(const char *path, wchar_t *out, int capacity) {
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, out, capacity)) {
+    wchar_t raw[4096];
+    if (!path || capacity <= 0 ||
+        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, raw, 4096)) {
         errno = EINVAL;
         return 0;
     }
+    int w = 0;
+    for (int r = 0; raw[r] != L'\0'; ++r) {
+        wchar_t ch = (raw[r] == L'/') ? L'\\' : raw[r];
+        if (ch == L'\\' && w > 0 && out[w - 1] == L'\\') {
+            /* Keep leading UNC "\\server" double backslash only at index 1. */
+            if (!(w == 1 && r == 1 && (raw[0] == L'\\' || raw[0] == L'/'))) {
+                continue;
+            }
+        }
+        if (w + 1 >= capacity) {
+            errno = ENAMETOOLONG;
+            return 0;
+        }
+        out[w++] = ch;
+    }
+    while (w > 1 && out[w - 1] == L'\\') {
+        if (w == 3 && out[1] == L':') break; /* Preserve drive root "E:\" */
+        --w;
+    }
+    out[w] = L'\0';
     return 1;
 }
 
@@ -32,7 +110,8 @@ int bb_uwp_open(const char *path, int flags, ...) {
         name, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, creation, &params);
     if (handle == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
-        errno = (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES;
+        errno = uwp_errno_from_win32(err);
+        log_unexpected_win32("CreateFile2FromAppW", path, err, errno);
         return -1;
     }
     int fd = _open_osfhandle((intptr_t)handle,
@@ -65,7 +144,9 @@ int bb_uwp_stat(const char *path, struct _stat64 *out) {
     WIN32_FILE_ATTRIBUTE_DATA data;
     if (!wide(path, name, 4096)) return -1;
     if (!GetFileAttributesExFromAppW(name, GetFileExInfoStandard, &data)) {
-        errno = ENOENT;
+        DWORD err = GetLastError();
+        errno = uwp_errno_from_win32(err);
+        log_unexpected_win32("GetFileAttributesExFromAppW", path, err, errno);
         return -1;
     }
     memset(out, 0, sizeof(*out));
@@ -84,7 +165,9 @@ int bb_uwp_mkdir(const char *path) {
     wchar_t name[4096];
     if (!wide(path, name, 4096)) return -1;
     if (CreateDirectoryFromAppW(name, NULL)) return 0;
-    errno = GetLastError() == ERROR_ALREADY_EXISTS ? EEXIST : EACCES;
+    DWORD err = GetLastError();
+    errno = uwp_errno_from_win32(err);
+    log_unexpected_win32("CreateDirectoryFromAppW", path, err, errno);
     return -1;
 }
 
@@ -149,13 +232,16 @@ DIR *opendir(const char *path) {
         errno = ENAMETOOLONG;
         return NULL;
     }
-    wcscat_s(name, 4096, L"\\*");
+    if (n > 0 && name[n - 1] == L'\\') wcscat_s(name, 4096, L"*");
+    else wcscat_s(name, 4096, L"\\*");
     DIR *d = calloc(1, sizeof(*d));
     if (!d) return NULL;
     d->handle = FindFirstFileExFromAppW(name, FindExInfoBasic, &d->data, FindExSearchNameMatch, NULL, 0);
     if (d->handle == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
         free(d);
-        errno = ENOENT;
+        errno = uwp_errno_from_win32(err);
+        log_unexpected_win32("opendir", path, err, errno);
         return NULL;
     }
     d->first = 1;

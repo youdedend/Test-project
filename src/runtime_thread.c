@@ -14,10 +14,13 @@
 #include <sched.h>
 #include <setjmp.h>
 #include <errno.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #else
+#include <dirent.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <asm/prctl.h>
@@ -37,15 +40,24 @@ typedef struct ThreadAttr {
     struct ThreadAttr *next;
 } ThreadAttr;
 typedef struct GuestThread {
-    /* Guest-visible TCB is allocated separately; this is the ScePthread handle. */
+    /* Guest-visible TCB and ScePthread handle live in [LOW_MIN, USER_MIN) (< 64 GiB < 1 TiB). */
     uint64_t *tcb;
     unsigned char *tls_block;
+    void *low_stack;
+    size_t low_stack_bytes;
+    int32_t errno_val;
     pthread_t host;
     GuestEntry entry;
     void *argument, *result;
     ThreadAttr attr;
     char name[32];
     int detached, finished, joined, host_owned;
+    const char *wait_kind;
+    char wait_object[32];
+    const void *wait_address;
+    const void *wait_holder;
+    uintptr_t wait_caller;
+    uint64_t wait_since;
 #ifdef _WIN32
     bb_jmp_buf exit_jump; /* no SEH unwinding through guest frames */
 #else
@@ -58,10 +70,19 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static ThreadAttr *attributes;
 static GuestThread *threads;
 static _Thread_local GuestThread *current;
-static _Thread_local int32_t guest_errno;
+static struct timespec session_start;
 static const unsigned char *tls_template;
 static uint64_t tls_filesz, tls_memsz, tls_align=16;
 static size_t created, joined_count, exited;
+
+__attribute__((constructor)) static void init_session_clock(void) {
+    clock_gettime(CLOCK_MONOTONIC, &session_start);
+}
+static uint64_t monotonic_ns(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ULL + (uint64_t)t.tv_nsec;
+}
 
 void runtime_set_main_tls(const void *data,uint64_t filesz,uint64_t memsz,uint64_t align) {
     tls_template=data; tls_filesz=filesz; tls_memsz=memsz; tls_align=align ? align : 16;
@@ -81,32 +102,29 @@ static void set_gs(void *base) {
     runtime_thread_tcb_offset();
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
-#define tls_block_alloc(size) _aligned_malloc(size,64)
 #else
 static void set_gs(void *base) {
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
 }
-#define tls_block_alloc(size) aligned_alloc(64,size)
 #endif
-/* Build TCB/static TLS for the calling host thread and point GS at it. */
+/* Build TCB/static TLS for the calling host thread in < 1 TiB memory and point GS at it. */
 static void attach(GuestThread *t) {
     uint64_t offset=tls_offset();
     size_t total=offset+256;
-    unsigned char *block=tls_block_alloc((total+63)&~(size_t)63);
+    unsigned char *block=runtime_low_calloc(1,(total+63)&~(size_t)63);
     if (!block) { fputs("Cannot allocate guest TLS\n",stderr); exit(1); }
-    memset(block,0,total);
     if (tls_filesz) memcpy(block,tls_template,tls_filesz);
     uint64_t *tcb=(uint64_t *)(block+offset);
-    static uint64_t dtv[3];
+    uint64_t *dtv=tcb+8;
     tcb[0]=(uint64_t)(uintptr_t)tcb;         /* tcb_self */
-    tcb[1]=(uint64_t)(uintptr_t)dtv;         /* tcb_dtv (static module only) */
-    tcb[2]=(uint64_t)(uintptr_t)t;           /* tcb_thread */
+    tcb[1]=(uint64_t)(uintptr_t)dtv;         /* tcb_dtv (< 1 TiB inside tls_block) */
+    tcb[2]=(uint64_t)(uintptr_t)t;           /* tcb_thread (< 1 TiB) */
     t->tls_block=block; t->tcb=tcb;
     set_gs(tcb);
     current=t;
 }
 static GuestThread *new_thread(void) {
-    GuestThread *t=calloc(1,sizeof(*t));
+    GuestThread *t=runtime_low_calloc(1,sizeof(*t));
     if (!t) return NULL;
     t->attr=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.stack=DEFAULT_STACK,.affinity=0x7f};
     return t;
@@ -151,13 +169,57 @@ static ThreadAttr *find_attr(ThreadAttr **slot) {
     return found;
 }
 
+void runtime_wait_begin(const char *kind, const char *object, const void *address, const void *holder, uintptr_t caller) {
+    GuestThread *t = current;
+    if (!t) return;
+    snprintf(t->wait_object, sizeof(t->wait_object), "%s", object ? object : "");
+    t->wait_address = address;
+    t->wait_holder = holder;
+    t->wait_caller = caller;
+    t->wait_since = monotonic_ns();
+    __atomic_store_n(&t->wait_kind, kind, __ATOMIC_RELEASE);
+}
+void runtime_wait_end(void) {
+    GuestThread *t = current;
+    if (t) __atomic_store_n(&t->wait_kind, (const char *)NULL, __ATOMIC_RELEASE);
+}
+static void cpu_report(void);
+void runtime_wait_report(void) {
+    const uint64_t now = monotonic_ns();
+    pthread_mutex_lock(&lock);
+    printf("Thread report:\n");
+    for (GuestThread *t = threads; t; t = t->next) {
+        if (t->finished) continue;
+        const char *kind = __atomic_load_n(&t->wait_kind, __ATOMIC_ACQUIRE);
+        if (!kind) {
+            printf("  %-24s (handle=%p) running\n", t->name, (void *)t);
+            continue;
+        }
+        char holder[64] = "";
+        for (GuestThread *o = threads; t->wait_holder && o; o = o->next) {
+            if (o == t->wait_holder) {
+                snprintf(holder, sizeof(holder), ", held by %s", o->name);
+                break;
+            }
+        }
+        const uint64_t since = t->wait_since;
+        printf("  %-24s (handle=%p) waits %.1f s for %s%s%s at %p%s, called from %p\n",
+               t->name, (void *)t, since < now ? (double)(now - since) / 1e9 : 0.0,
+               kind, t->wait_object[0] ? " " : "", t->wait_object,
+               t->wait_address, holder, (void *)t->wait_caller);
+    }
+    pthread_mutex_unlock(&lock);
+    cpu_report();
+    fflush(stdout);
+}
+
 static ABI void *thread_self(void) { return runtime_thread_current(); }
-static ABI int32_t *guest_error(void) { return &guest_errno; }
-int32_t *runtime_errno(void) { return &guest_errno; }
+static ABI int32_t *guest_error(void) { return &runtime_thread_current()->errno_val; }
+int32_t *runtime_errno(void) { return &runtime_thread_current()->errno_val; }
 
 static ABI int32_t attr_init(ThreadAttr **out) {
     if (!out) return ERR(22);
-    ThreadAttr *a=calloc(1,sizeof(*a));
+    ThreadAttr *a=runtime_low_calloc(1,sizeof(*a));
     if (!a) return ERR(12);
     *a=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.inherit=4,.stack=DEFAULT_STACK,.guard=4096,.affinity=0x7f};
     pthread_mutex_lock(&lock); a->next=attributes; attributes=a; pthread_mutex_unlock(&lock);
@@ -171,7 +233,7 @@ static ABI int32_t attr_destroy(ThreadAttr **slot) {
     while (*link!=a) link=&(*link)->next;
     *link=a->next; a->magic=0;
     pthread_mutex_unlock(&lock);
-    free(a); *slot=NULL; return 0;
+    runtime_low_free(a); *slot=NULL; return 0;
 }
 static ABI int32_t attr_get(void *thread,ThreadAttr **out) {
     ThreadAttr *a=find_attr(out);
@@ -244,6 +306,11 @@ static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
     pthread_setname_np(pthread_self(),host);
+#ifdef _WIN32
+    wchar_t wide[64]={0};
+    if (MultiByteToWideChar(CP_UTF8,0,name ? name : "guest",-1,wide,63)>0)
+        SetThreadDescription(GetCurrentThread(),wide);
+#endif
 }
 #ifdef _WIN32
 #define exit_setjmp(t) bb_setjmp((t)->exit_jump)
@@ -265,13 +332,42 @@ static void set_host_priority(int prio) {
     (void)prio;
 #endif
 }
+static void *run_guest_entry(void *p) {
+    GuestThread *t=p;
+    if (!exit_setjmp(t)) t->result=t->entry(t->argument);
+    runtime_thread_keys_cleanup();
+    return t->result;
+}
+#ifdef _WIN32
+static int use_low_stacks(const void *probe_stack) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *env = getenv("BB_LOW_STACKS");
+#ifdef BB_UWP
+        mode = (!env || env[0] != '0') ? 1 : 0;
+#else
+        mode = (env && env[0] == '1') ? 1 : 0;
+#endif
+    }
+    return mode || ((uintptr_t)probe_stack >= UINT64_C(0x1000000000));
+}
+#endif
 static void *host_start(void *p) {
     GuestThread *t=p;
     attach(t);
     set_host_name(t->name);
     set_host_priority(t->attr.prio);
-    if (!exit_setjmp(t)) t->result=t->entry(t->argument);
-    runtime_thread_keys_cleanup();
+#ifdef _WIN32
+    if (t->low_stack) {
+        compat_call_on_low_stack(run_guest_entry, t, t->low_stack, t->low_stack_bytes);
+        runtime_low_stack_free(t->low_stack, t->low_stack_bytes);
+        t->low_stack = NULL;
+    } else {
+        run_guest_entry(t);
+    }
+#else
+    run_guest_entry(t);
+#endif
     pthread_mutex_lock(&lock); t->finished=1; ++exited; pthread_mutex_unlock(&lock);
     return t->result;
 }
@@ -290,9 +386,19 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     /* Stacks below 1 TiB as on PS4; guest code may pack stack addresses. */
     size_t stack_bytes=(size_t)stack+STACK_MARGIN;
 #ifdef _WIN32
-    /* Windows places the stack itself (low: no high-entropy ASLR) and commits all of it:
-     * guest code has no stack probes and would step over the guard page. */
-    pthread_attr_setstacksize(&host,stack_bytes);
+    /* Under /APPCONTAINER on Xbox UWP, Windows high-entropy ASLR places _beginthreadex stacks
+     * above 1 TiB; allocate a committed < 1 TiB guest stack and switch RSP+NT_TIB in host_start. */
+    if (use_low_stacks(&host)) {
+        t->low_stack = runtime_low_stack_alloc(stack_bytes);
+        if (t->low_stack) {
+            t->low_stack_bytes = (stack_bytes + 65535u) & ~(size_t)65535u;
+            pthread_attr_setstacksize(&host, 256 * 1024);
+        } else {
+            pthread_attr_setstacksize(&host, stack_bytes);
+        }
+    } else {
+        pthread_attr_setstacksize(&host, stack_bytes);
+    }
 #else
     void *stack_memory=runtime_low_map(stack_bytes,PROT_READ|PROT_WRITE);
     if (stack_memory) pthread_attr_setstack(&host,stack_memory,stack_bytes);
@@ -306,7 +412,8 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); exit(21); }
     if (t->detached) pthread_detach(t->host);
     pthread_mutex_lock(&lock); ++created; pthread_mutex_unlock(&lock);
-    printf("Runtime: guest thread '%s' created (stack=%llu, prio=%d)\n",t->name,(unsigned long long)stack,t->attr.prio);
+    printf("Runtime: guest thread '%s' created (handle=%p, stack=%llu, prio=%d)\n",
+           t->name,(void *)t,(unsigned long long)stack,t->attr.prio);
     return 0;
 }
 static ABI int32_t thread_create(GuestThread **out,ThreadAttr **attr,GuestEntry entry,void *argument,const char *name) {
@@ -419,9 +526,97 @@ uintptr_t runtime_thread_resolve(const char *name) {
         if (!strcmp(name,table[i].nid)) return (uintptr_t)table[i].fn;
     return 0;
 }
+static double seconds_since(const struct timespec *t) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)(now.tv_sec - t->tv_sec) + (double)(now.tv_nsec - t->tv_nsec) / 1e9;
+}
+typedef struct { char name[32]; double ms; } ThreadCpu;
+enum { CPU_REPORT_MAX = 1024, CPU_REPORT_SHOWN = 16 };
+static int by_cpu_desc(const void *a, const void *b) {
+    double x = ((const ThreadCpu *)a)->ms, y = ((const ThreadCpu *)b)->ms;
+    return (x < y) - (x > y);
+}
+static size_t live_thread_cpu(ThreadCpu *out, size_t max) {
+    size_t n = 0;
+#ifdef _WIN32
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 entry = {.dwSize = sizeof(entry)};
+    DWORD pid = GetCurrentProcessId();
+    for (BOOL ok = Thread32First(snap, &entry); ok && n < max; ok = Thread32Next(snap, &entry)) {
+        if (entry.th32OwnerProcessID != pid) continue;
+        HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
+        if (!h) continue;
+        FILETIME c, e, k, u;
+        if (GetThreadTimes(h, &c, &e, &k, &u)) {
+            ThreadCpu *t = &out[n++];
+            uint64_t ticks = (((uint64_t)k.dwHighDateTime << 32) | k.dwLowDateTime) +
+                             (((uint64_t)u.dwHighDateTime << 32) | u.dwLowDateTime);
+            t->ms = (double)ticks / 1e4;
+            PWSTR wide = NULL;
+            t->name[0] = 0;
+            if (SUCCEEDED(GetThreadDescription(h, &wide)) && wide) {
+                WideCharToMultiByte(CP_UTF8, 0, wide, -1, t->name, sizeof(t->name), NULL, NULL);
+                LocalFree(wide);
+            }
+            if (!t->name[0]) snprintf(t->name, sizeof(t->name), "tid %lu", entry.th32ThreadID);
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+#else
+    DIR *dir = opendir("/proc/self/task");
+    if (!dir) return 0;
+    long hz = sysconf(_SC_CLK_TCK);
+    for (struct dirent *d; (d = readdir(dir)) && n < max;) {
+        if (d->d_name[0] == '.') continue;
+        char path[320], line[1024];
+        snprintf(path, sizeof(path), "/proc/self/task/%s/stat", d->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        size_t len = fread(line, 1, sizeof(line) - 1, f);
+        fclose(f);
+        line[len] = 0;
+        char *open_p = strchr(line, '('), *close_p = strrchr(line, ')');
+        unsigned long utime, stime;
+        if (!open_p || !close_p ||
+            sscanf(close_p + 2, "%*c %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu", &utime, &stime) != 2)
+            continue;
+        ThreadCpu *t = &out[n++];
+        t->ms = (double)(utime + stime) * 1000.0 / (double)(hz > 0 ? hz : 100);
+        snprintf(t->name, sizeof(t->name), "%.*s", (int)(close_p - open_p - 1), open_p + 1);
+    }
+    closedir(dir);
+#endif
+    return n;
+}
+static void cpu_report(void) {
+    static ThreadCpu list[CPU_REPORT_MAX];
+    size_t n = live_thread_cpu(list, CPU_REPORT_MAX);
+    double wall = seconds_since(&session_start), total = 0;
+    for (size_t i = 0; i < n; ++i) total += list[i].ms;
+    qsort(list, n, sizeof(*list), by_cpu_desc);
+    long hw = 0;
+#ifdef _WIN32
+    DWORD_PTR process_mask = 0, system_mask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask))
+        hw = __builtin_popcountll(process_mask);
+#else
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (!sched_getaffinity(0, sizeof(set), &set)) hw = CPU_COUNT(&set);
+#endif
+    printf("Runtime: CPU time by thread: session %.0f s, %zu live threads, %.1f s CPU (%.0f%% of %ld hardware threads)\n",
+           wall, n, total / 1000.0, wall > 0 && hw > 0 ? total / 10.0 / wall / (double)hw : 0.0, hw);
+    for (size_t i = 0; i < n && i < CPU_REPORT_SHOWN; ++i)
+        printf("Runtime:   %-24s %9.0f ms (%5.1f%% of one thread)\n",
+               list[i].name, list[i].ms, wall > 0 ? list[i].ms / 10.0 / wall : 0.0);
+}
 void runtime_thread_report(void) {
     pthread_mutex_lock(&lock);
     printf("Runtime: guest threads created=%zu, exited=%zu, joined=%zu\n",created,exited,joined_count);
     pthread_mutex_unlock(&lock);
+    cpu_report();
 }
 

@@ -1240,6 +1240,8 @@ void TextureCache::GarbageCollectImages() {
     const u64 idle_tick = tick_seconds_ago(idle_seconds);
     // Last used a minute ago or more (lru_touched_tick: real use, not the collector's Touch).
     const u64 minute_tick = gc_tick_at_second[(second - 60) % gc_tick_at_second.size()];
+    bool evicted_any = false;
+    {
     std::scoped_lock lock{mutex};
     bool pressured = false;
     bool aggresive = false;
@@ -1303,6 +1305,7 @@ void TextureCache::GarbageCollectImages() {
             ++gc_downloads;
         }
         ++gc_evictions;
+        evicted_any = true;
         FreeImage(image_id);
         if (total_used_memory < critical_gc_memory) {
             if (aggresive) {
@@ -1351,6 +1354,18 @@ void TextureCache::GarbageCollectImages() {
             gc_evictions = gc_downloads = gc_dropped = 0;
         }
     }
+    }
+#ifdef BB_UWP
+    /* FreeImage defers VkImage/VMA destruction via scheduler.DeferOperation until GPU submission
+     * retirement; under Xbox 5 GiB AppMemoryUsage pressure, retire pending destructions immediately
+     * (outside TextureCache::mutex) so D3D12 committed heaps actually return to the UWP budget. */
+    if (evicted_any && bb_uwp_app_memory_usage() >= pressure_gc_memory) {
+        scheduler.Finish();
+        scheduler.PopPendingOperations();
+    }
+#else
+    (void)evicted_any;
+#endif
 }
 
 void TextureCache::GarbageCollectSamplers() {

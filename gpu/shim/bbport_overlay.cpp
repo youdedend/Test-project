@@ -244,7 +244,7 @@ void Menu() {
         }
         ImGui::EndCombo();
     }
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     const bool fsr411_selected = s.upscaler == BbSettings::UpscalerFsr411;
     static const char* fsr411_backends[] = {"Vulkan (fsr4vk)", "AMD DX12"};
     ImGui::BeginDisabled(!fsr411_selected);
@@ -372,6 +372,7 @@ void Menu() {
     Hint("Red/green: horizontal/vertical motion (8 pixels = full brightness). Blue: the pixel has accurate object motion, beyond camera motion. A moving object with no blue or red/green is treated as stationary and may leave trails.");
     ImGui::EndDisabled(); // upscaler off
 
+#ifndef BB_UWP
     ImGui::SeparatorText("Frame generation");
     static const char* frame_gens[] = {"Off", "FSR 3.1 (any GPU)", "DLSS (NVIDIA RTX 40/50)", "AMD ML-FG 4.0.1 (RX 9000, 2x SDR, experimental)"};
     const int frame_gen = s.frame_gen;
@@ -436,6 +437,7 @@ void Menu() {
     if (const char* problem = s.frame_gen_problem.load(); problem && !s.frame_gen_hdr) {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s", problem);
     }
+#endif
 
     ImGui::SeparatorText("Output resolution");
     static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160",

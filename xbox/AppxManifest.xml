@@ -39,6 +39,7 @@
             <uap:DisplayName>Bloodborne PS4 game dump</uap:DisplayName>
             <uap:SupportedFileTypes>
               <uap:FileType>.bin</uap:FileType>
+              <uap:FileType>.elf</uap:FileType>
               <uap:FileType>.sfo</uap:FileType>
               <uap:FileType>.prx</uap:FileType>
               <uap:FileType>.sprx</uap:FileType>
@@ -64,20 +65,28 @@
               <uap:FileType>.parambnd</uap:FileType>
               <uap:FileType>.paramdefbnd</uap:FileType>
               <uap:FileType>.ffxbnd</uap:FileType>
+              <uap:FileType>.shaderbnd</uap:FileType>
               <uap:FileType>.shaderbdle</uap:FileType>
               <uap:FileType>.shadergdb</uap:FileType>
               <uap:FileType>.luabnd</uap:FileType>
+              <uap:FileType>.luagnl</uap:FileType>
+              <uap:FileType>.luahks</uap:FileType>
+              <uap:FileType>.esdbnd</uap:FileType>
               <uap:FileType>.talkesdbnd</uap:FileType>
               <uap:FileType>.nvmbnd</uap:FileType>
               <uap:FileType>.nvmhktbnd</uap:FileType>
               <uap:FileType>.rumblebnd</uap:FileType>
               <uap:FileType>.fgmbnd</uap:FileType>
+              <uap:FileType>.grassbnd</uap:FileType>
+              <uap:FileType>.breakobjbnd</uap:FileType>
               <uap:FileType>.flver</uap:FileType>
               <uap:FileType>.tpf</uap:FileType>
               <uap:FileType>.hkx</uap:FileType>
               <uap:FileType>.hks</uap:FileType>
               <uap:FileType>.tae</uap:FileType>
+              <uap:FileType>.sib</uap:FileType>
               <uap:FileType>.sibcam</uap:FileType>
+              <uap:FileType>.btab</uap:FileType>
               <uap:FileType>.msb</uap:FileType>
               <uap:FileType>.mcg</uap:FileType>
               <uap:FileType>.mcp</uap:FileType>
@@ -100,8 +109,17 @@
               <uap:FileType>.xvag</uap:FileType>
               <uap:FileType>.hirc</uap:FileType>
               <uap:FileType>.bnk</uap:FileType>
+              <uap:FileType>.wem</uap:FileType>
+              <uap:FileType>.pck</uap:FileType>
+              <uap:FileType>.acb</uap:FileType>
+              <uap:FileType>.awb</uap:FileType>
+              <uap:FileType>.sbd</uap:FileType>
               <uap:FileType>.mp4</uap:FileType>
               <uap:FileType>.pam</uap:FileType>
+              <uap:FileType>.bik</uap:FileType>
+              <uap:FileType>.mov</uap:FileType>
+              <uap:FileType>.m2v</uap:FileType>
+              <uap:FileType>.usm</uap:FileType>
               <uap:FileType>.gfx</uap:FileType>
               <uap:FileType>.ccm</uap:FileType>
               <uap:FileType>.fgm</uap:FileType>
@@ -112,6 +130,9 @@
               <uap:FileType>.gnf</uap:FileType>
               <uap:FileType>.dds</uap:FileType>
               <uap:FileType>.png</uap:FileType>
+              <uap:FileType>.jpg</uap:FileType>
+              <uap:FileType>.jpeg</uap:FileType>
+              <uap:FileType>.bmp</uap:FileType>
               <uap:FileType>.dat</uap:FileType>
               <uap:FileType>.trp</uap:FileType>
               <uap:FileType>.xml</uap:FileType>

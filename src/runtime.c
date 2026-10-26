@@ -18,7 +18,10 @@ static ExitHandler *handlers;
 static size_t handler_count, handler_capacity, calls_init, calls_atexit, calls_cxa;
 static uint64_t capabilities;
 static _Atomic size_t guards_acquired, guards_released;
-static uint64_t stack_canary;
+static uint64_t stack_canary_fallback;
+static uint64_t *stack_canary_ptr = &stack_canary_fallback;
+static int32_t need_libc_internal_fallback = 1;
+static int32_t *need_libc_internal_ptr = &need_libc_internal_fallback;
 static _Atomic size_t memory_calls;
 /* Dynamic TLS of linked modules: module IDs 2..7 (1 is the eboot's static TLS). */
 #define TLS_MODULES 8
@@ -44,7 +47,7 @@ static ABI void *guest_tls_get_addr(const uint64_t *index) {
     }
     unsigned char **block=&tls_blocks[index[0]];
     if (!*block) {
-        *block=calloc(1,tls_modules[index[0]].memsz);
+        *block=runtime_low_calloc(1,tls_modules[index[0]].memsz);
         if (!*block) { fputs("Cannot allocate module TLS\n",stderr); exit(1); }
         memcpy(*block,tls_modules[index[0]].data,tls_modules[index[0]].filesz);
     }
@@ -54,6 +57,13 @@ static ABI void *guest_tls_get_addr(const uint64_t *index) {
 void runtime_start(uint64_t flags) {
     capabilities = flags;
     if (!(flags & 1)) return;
+    uint64_t *low_canary = runtime_low_calloc(1, 64);
+    if (low_canary) {
+        stack_canary_ptr = low_canary;
+        need_libc_internal_ptr = (int32_t *)(low_canary + 2);
+        *need_libc_internal_ptr = 1;
+    }
+    uint64_t stack_canary = 0;
 #ifdef _WIN32
     unsigned int halves[2];
     if (rand_s(&halves[0]) || rand_s(&halves[1])) { fputs("Cannot initialize stack canary\n", stderr); exit(1); }
@@ -66,6 +76,7 @@ void runtime_start(uint64_t flags) {
     fclose(random);
 #endif
     stack_canary &= ~UINT64_C(255);
+    *stack_canary_ptr = stack_canary;
 }
 void runtime_report(void) {
     printf("Runtime: _init_env=%zu, atexit=%zu, __cxa_atexit=%zu, registered handlers=%zu\n",
@@ -182,9 +193,8 @@ static ABI __attribute__((noreturn)) void guest_libc_exit(int status) {
 uintptr_t runtime_resolve(const char *name, int is_data) {
     if (!(capabilities & 1)) return 0;
     if (is_data) {
-        static int32_t need_libc_internal = 1; /* SDK marker variable referenced by Fios2 */
-        if (!strcmp(name, "f7uOxY9mM1U#p#J")) return (uintptr_t)&stack_canary;
-        if (!strcmp(name, "ZT4ODD2Ts9o#libSceLibcInternal")) return (uintptr_t)&need_libc_internal;
+        if (!strcmp(name, "f7uOxY9mM1U#p#J")) return (uintptr_t)stack_canary_ptr;
+        if (!strcmp(name, "ZT4ODD2Ts9o#libSceLibcInternal")) return (uintptr_t)need_libc_internal_ptr;
         return 0;
     }
     /* Exact scoped imports for CUSA03173; the suffix identifies library/module. */

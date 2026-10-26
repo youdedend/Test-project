@@ -429,6 +429,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
         if (host<0) {
             e=errno;
             if (e==ENOENT) { ++missing; printf("Runtime: open(%s) -> not found\n",guest); }
+            else printf("Runtime: open(%s -> %s, flags=0x%x) -> failed (errno=%d)\n",guest,path,flags,e);
             return -e;
         }
         if (host_fstat(host,&s)) memset(&s,0,sizeof(s));
@@ -468,6 +469,11 @@ static int64_t do_open(const char *guest,int flags,int mode) {
     snprintf(files[fd].path,sizeof(files[fd].path),"%s",guest);
     ++opens;
     pthread_mutex_unlock(&lock);
+    if (strstr(guest,"dvdroot_ps4/")) {
+        static unsigned logged_assets;
+        if (__atomic_fetch_add(&logged_assets,1,__ATOMIC_RELAXED)<12)
+            printf("Runtime: opened game asset %s -> fd %d (%lld bytes)\n",guest,fd,(long long)s.st_size);
+    }
     if (audio_trace() && strstr(guest,"sound/")) printf("Audio trace: open(%s) -> fd %d, %lld bytes\n",guest,fd,(long long)s.st_size);
     const char *mod_trace=getenv("BB_MOD_TRACE"), *mod_root=getenv("BB_MODS_DIR");
     if (mod_trace && mod_trace[0]=='1' && mod_root) {
@@ -531,6 +537,17 @@ static void touch_for_write(void *buffer,uint64_t size) {
         *b=*b;
     }
 }
+static ssize_t read_retrying(int handle, void *buffer, size_t size, int64_t offset, int positioned) {
+    for (int attempt = 0;; ++attempt) {
+        ssize_t n = positioned ? pread(handle, buffer, size, offset) : host_read(handle, buffer, size);
+        if (n >= 0 || attempt >= 3 || (errno != EIO && errno != EACCES && errno != EINTR)) {
+            return n;
+        }
+#ifdef _WIN32
+        compat_sleep_ns((uint64_t)(attempt + 1) * 25000000ULL);
+#endif
+    }
+}
 #ifdef BB_UWP
 /* On Xbox UWP, guest pages are lazy-committed and may be paged out to LocalState swap or
  * protected for GPU tracking. Kernel ReadFile/WriteFile fails with ERROR_NOACCESS instead of
@@ -550,8 +567,7 @@ static ssize_t paged_io(int handle, void *buffer, uint64_t size, int64_t offset,
         if (writing) memcpy(bounce, (const unsigned char *)buffer + total, count);
         ssize_t n = writing ? (positioned ? pwrite(handle, bounce, count, offset + (int64_t)total)
                                           : host_write(handle, bounce, count))
-                            : (positioned ? pread(handle, bounce, count, offset + (int64_t)total)
-                                          : host_read(handle, bounce, count));
+                            : read_retrying(handle, bounce, count, offset + (int64_t)total, positioned);
         if (n < 0) { error = errno; break; }
         if (!n) break;
         if (!writing) memcpy((unsigned char *)buffer + total, bounce, (size_t)n);
@@ -564,34 +580,46 @@ static ssize_t paged_io(int handle, void *buffer, uint64_t size, int64_t offset,
 }
 #endif
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
+    File *f=get(fd);
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     ssize_t n;
+    runtime_wait_begin("file read", f ? f->path : "fd", buffer, NULL, (uintptr_t)__builtin_return_address(0));
 #ifdef BB_UWP
     if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, buffer, size, 0, 0, 0);
     else
 #endif
     {
         touch_for_write(buffer,size);
-        n=host_read(h,buffer,size);
+        n=read_retrying(h,buffer,(size_t)(size>0x7ffff000 ? 0x7ffff000 : size),0,0);
     }
-    if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
+    runtime_wait_end();
+    if (n<0) {
+        printf("Runtime: read(fd %d [%s], %llu) failed, errno %d\n",fd,f ? f->path : "?",(unsigned long long)size,errno);
+        return -errno;
+    }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;
 }
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
+    File *f=get(fd);
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     ssize_t n;
+    runtime_wait_begin("file pread", f ? f->path : "fd", buffer, NULL, (uintptr_t)__builtin_return_address(0));
 #ifdef BB_UWP
     if (runtime_memory_is_mapped((uintptr_t)buffer, size)) n = paged_io(h, buffer, size, offset, 1, 0);
     else
 #endif
     {
         touch_for_write(buffer,size);
-        n=pread(h,buffer,size,offset);
+        n=read_retrying(h,buffer,(size_t)(size>0x7ffff000 ? 0x7ffff000 : size),offset,1);
     }
-    if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
+    runtime_wait_end();
+    if (n<0) {
+        printf("Runtime: pread(fd %d [%s], %llu @%lld) failed, errno %d\n",fd,f ? f->path : "?",(unsigned long long)size,(long long)offset,errno);
+        return -errno;
+    }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     return n;
 }

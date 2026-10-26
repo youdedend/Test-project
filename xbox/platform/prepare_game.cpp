@@ -682,8 +682,60 @@ std::vector<RedZoneSite> parse_redzone_json(const std::string& json) {
     return sites;
 }
 
+std::string parse_redzone_text_sha256(const std::string& json) {
+    const auto key = json.find("\"text_sha256\"");
+    if (key == std::string::npos) return {};
+    const auto colon = json.find(':', key);
+    if (colon == std::string::npos) return {};
+    const auto q1 = json.find('"', colon + 1);
+    if (q1 == std::string::npos) return {};
+    const auto q2 = json.find('"', q1 + 1);
+    if (q2 == std::string::npos) return {};
+    return json.substr(q1 + 1, q2 - q1 - 1);
+}
+
+std::string compute_eboot_text_sha256(const Self& self, const Bytes& raw_image) {
+    const Segment* text = nullptr;
+    for (const auto& p : self.ph) {
+        if (p.type == 1 && (p.flags & 1)) {
+            text = &p;
+            break;
+        }
+    }
+    const Segment* hdr_seg = find_segment(self.ph, 0x6474e550u);
+    if (!text || !hdr_seg) return {};
+    const uint64_t hdr = hdr_seg->vaddr;
+    if (hdr + 12 > raw_image.size() || raw_image[static_cast<size_t>(hdr + 2)] != 0x03 ||
+        raw_image[static_cast<size_t>(hdr + 3)] != 0x3b) {
+        return {};
+    }
+    const uint32_t count = read_le<uint32_t>(View(raw_image.data(), raw_image.size()), hdr + 8);
+    if (hdr + 12 + uint64_t(count) * 8 > raw_image.size()) return {};
+    const uint64_t text_end = std::min<uint64_t>(text->vaddr + text->filesz, raw_image.size());
+    uint64_t first_start = text_end;
+    View img_view(raw_image.data(), raw_image.size());
+    for (uint32_t i = 0; i < count; ++i) {
+        const int64_t s = static_cast<int64_t>(hdr) + read_le<int32_t>(img_view, hdr + 12 + uint64_t(i) * 8);
+        if (s >= static_cast<int64_t>(text->vaddr) && static_cast<uint64_t>(s) < text_end) {
+            first_start = std::min<uint64_t>(first_start, static_cast<uint64_t>(s));
+        }
+    }
+    if (first_start >= text_end) return {};
+    Sha256 sha;
+    sha.update(raw_image.data() + first_start, static_cast<size_t>(text_end - first_start));
+    return sha.finish_hex();
+}
+
 void apply_red_zones(Bytes& image, std::vector<std::array<uint64_t, 3>>& segments,
-                     const std::vector<Relocation>& relocs, const std::string& redzone_json) {
+                     const std::vector<Relocation>& relocs, const std::string& redzone_json,
+                     const std::string& actual_text_sha256) {
+    const std::string expected_sha = parse_redzone_text_sha256(redzone_json);
+    if (!expected_sha.empty() && actual_text_sha256 != expected_sha) {
+        std::printf("Red-zone trampolines: skipped (eboot text_sha256 %.12s != 01.09 %.12s)\n",
+                    actual_text_sha256.empty() ? "unknown" : actual_text_sha256.c_str(),
+                    expected_sha.c_str());
+        return;
+    }
     const auto sites = parse_redzone_json(redzone_json);
     if (sites.empty()) return;
 
@@ -743,7 +795,7 @@ void apply_red_zones(Bytes& image, std::vector<std::array<uint64_t, 3>>& segment
         image.resize(static_cast<size_t>(base + seg_size), 0xcc);
         segments.push_back({base, seg_size, 5});
     }
-    (void)applied;
+    std::printf("Red-zone trampolines: applied %zu of %zu sites\n", applied, sites.size());
 }
 
 Bytes link_bbprobe5(const Module& main, Probe& probe, const std::vector<Module>& modules,
@@ -797,6 +849,7 @@ Bytes link_bbprobe5(const Module& main, Probe& probe, const std::vector<Module>&
     std::vector<std::array<uint64_t, 7>> table;
 
     Bytes& image = probe.image;
+    const std::string eboot_text_sha256 = compute_eboot_text_sha256(main.self, image);
     uint64_t base = (probe.size + 65535u) & ~uint64_t(65535u);
     patch_fs_loads(image, main.self.ph, 0);
     uint64_t tls_module = 2;
@@ -910,7 +963,7 @@ Bytes link_bbprobe5(const Module& main, Probe& probe, const std::vector<Module>&
     const auto& procparam = require_segment(main.self.ph, 0x61000001);
 
     if (enable_red_zones && !redzone_json.empty()) {
-        apply_red_zones(image, probe.segments, probe.relocs, redzone_json);
+        apply_red_zones(image, probe.segments, probe.relocs, redzone_json, eboot_text_sha256);
     }
 
     Bytes out;

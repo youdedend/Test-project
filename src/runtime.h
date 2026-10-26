@@ -42,6 +42,8 @@ uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
+struct GuestThread;
+struct GuestThread *runtime_thread_current(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
@@ -75,6 +77,17 @@ void runtime_thread_keys_cleanup(void);
 /* Guest-visible errno values are FreeBSD's. */
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
+void *runtime_low_alloc(size_t size, size_t align);
+void *runtime_low_calloc(size_t count, size_t size);
+void runtime_low_free(void *ptr);
+void *runtime_low_stack_alloc(size_t size);
+void runtime_low_stack_free(void *ptr, size_t size);
+/* Guest/host thread wait & stall diagnostics (runtime_thread.c, probe.c). */
+void runtime_wait_begin(const char *kind, const char *object, const void *address, const void *holder, uintptr_t caller);
+void runtime_wait_end(void);
+void runtime_wait_report(void);
+void runtime_sample_threads(void);
+int runtime_entered_game(void);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);

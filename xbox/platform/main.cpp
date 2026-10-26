@@ -52,6 +52,9 @@ void runtime_file_report(void);
 void runtime_audio_report(void);
 void runtime_pad_report(void);
 void runtime_savedata_report(void);
+void runtime_wait_report(void);
+void runtime_sample_threads(void);
+int runtime_entered_game(void);
 int bb_uwp_dialog_key(uint32_t key, int down, int repeat);
 }
 
@@ -60,6 +63,7 @@ static std::atomic<bool> g_game_mode{false};
 static std::atomic<bool> g_window_closed{false};
 static uint64_t g_memory_limit_override = 0;
 static winrt::agile_ref<winrt::Windows::UI::Core::CoreWindow> g_core_window;
+static winrt::Windows::Storage::StorageFolder g_dump_folder_lease{nullptr};
 
 extern "C" void bb_uwp_pager_thread_init(void) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -233,6 +237,21 @@ static void remember_dump(const std::string& dump) {
 }
 
 static std::string chosen_dump() {
+    using namespace winrt::Windows::Storage::AccessCache;
+    std::string broker_dump;
+    try {
+        auto list = StorageApplicationPermissions::FutureAccessList();
+        if (list.ContainsItem(L"dump")) {
+            /* Redeem and hold the StorageFolder token for process lifetime BEFORE probing
+             * direct *FromAppW paths so RuntimeBroker grants full folder access on restarts. */
+            g_dump_folder_lease = list.GetFolderAsync(L"dump").get();
+            if (g_dump_folder_lease) {
+                broker_dump = winrt::to_string(g_dump_folder_lease.Path());
+            }
+        }
+    } catch (const winrt::hresult_error& err) {
+        std::printf("Chosen game folder lookup: 0x%08x\n", static_cast<unsigned>(err.code()));
+    }
     {
         std::ifstream f(game_folder_file());
         std::string dump;
@@ -248,21 +267,15 @@ static std::string chosen_dump() {
             }
         }
     }
-    using namespace winrt::Windows::Storage::AccessCache;
-    try {
-        auto list = StorageApplicationPermissions::FutureAccessList();
-        if (!list.ContainsItem(L"dump")) {
-            return {};
-        }
-        auto dump = winrt::to_string(list.GetFolderAsync(L"dump").get().Path());
-        const bool readable = !dump.empty() && dump_readable(dump);
-        std::printf("Chosen game folder %s: %s\n", dump.c_str(),
+    if (!broker_dump.empty()) {
+        const bool readable = dump_readable(broker_dump);
+        std::printf("Chosen game folder %s: %s\n", broker_dump.c_str(),
                     readable ? "found" : "not readable");
-        return readable ? dump : std::string{};
-    } catch (const winrt::hresult_error& err) {
-        std::printf("Chosen game folder lookup: 0x%08x\n", static_cast<unsigned>(err.code()));
-        return {};
+        if (readable) {
+            return broker_dump;
+        }
     }
+    return {};
 }
 
 static winrt::Windows::Storage::StorageFolder pick_folder() {
@@ -319,6 +332,7 @@ static std::string use_picked(const winrt::Windows::Storage::StorageFolder& fold
                 return {};
             }
         }
+        g_dump_folder_lease = folder;
         winrt::Windows::Storage::AccessCache::StorageApplicationPermissions::FutureAccessList()
             .AddOrReplace(L"dump", folder);
         remember_dump(dump);
@@ -667,14 +681,16 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
     }
 
     if (!cached_ok) {
-        if (player &&
+        const bool upgrading_cache = file_exists(boot_path);
+        if (player && !upgrading_cache &&
             ask_player("Bloodborne found:\n" + dump +
                            "\n\nPrepare the game files for Xbox Series X|S?\n"
                            "This runs once (~10-20 seconds) and caches the linked boot image in LocalState.",
                        {"Prepare & Launch", "Cancel"}) != 0) {
             close_app("game preparation cancelled");
         }
-        std::printf("Preparing Bloodborne boot image from %s...\n", dump.c_str());
+        std::printf("%s Bloodborne boot image from %s...\n",
+                    upgrading_cache ? "Upgrading cached" : "Preparing", dump.c_str());
         std::fflush(stdout);
         const auto t0 = std::chrono::steady_clock::now();
         BbPrepare::BootPrepared res;
@@ -1050,10 +1066,12 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
             CloseHandle(reinterpret_cast<HANDLE>(th));
         }
 
-        // Log memory usage periodically during early boot and support LocalState\diagnostics.txt
-        // and LocalState\quit.txt triggers.
+        // Log memory usage periodically during early boot and support LocalState\diagnostics.txt,
+        // LocalState\threads.txt, and LocalState\quit.txt triggers.
         std::thread([] {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            unsigned entered_ticks = 0;
+            bool auto_sampled = false;
             for (unsigned sample = 0; sample < 24 && !g_finished.load(); ++sample) {
                 Sleep(5000);
                 std::printf(
@@ -1061,6 +1079,16 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                     static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
                     unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
+                if (!auto_sampled && runtime_entered_game()) {
+                    if (++entered_ticks >= 6) {
+                        auto_sampled = true;
+                        std::puts("UWP +30s boot health snapshot:");
+                        runtime_memory_report();
+                        runtime_file_report();
+                        runtime_wait_report();
+                        runtime_sample_threads();
+                    }
+                }
                 std::fflush(stdout);
             }
         }).detach();
@@ -1068,9 +1096,14 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
         std::thread([diag = std::wstring(winrt::Windows::Storage::ApplicationData::Current()
                                              .LocalFolder()
                                              .Path()) +
-                            L"\\diagnostics.txt"] {
+                            L"\\diagnostics.txt",
+                     threads = std::wstring(winrt::Windows::Storage::ApplicationData::Current()
+                                                .LocalFolder()
+                                                .Path()) +
+                               L"\\threads.txt"] {
             WIN32_FILE_ATTRIBUTE_DATA attr{};
             DeleteFileFromAppW(diag.c_str());
+            DeleteFileFromAppW(threads.c_str());
             for (;;) {
                 if (GetFileAttributesExFromAppW(diag.c_str(), GetFileExInfoStandard, &attr)) {
                     DeleteFileFromAppW(diag.c_str());
@@ -1079,6 +1112,14 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     runtime_audio_report();
                     runtime_pad_report();
                     runtime_savedata_report();
+                    runtime_wait_report();
+                    runtime_sample_threads();
+                    std::fflush(stdout);
+                }
+                if (GetFileAttributesExFromAppW(threads.c_str(), GetFileExInfoStandard, &attr)) {
+                    DeleteFileFromAppW(threads.c_str());
+                    runtime_wait_report();
+                    runtime_sample_threads();
                     std::fflush(stdout);
                 }
                 Sleep(500);

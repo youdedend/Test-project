@@ -16,6 +16,7 @@
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #ifdef BBPORT_UWP
 #include <memoryapi.h>
 #endif
@@ -44,6 +45,7 @@ static uint64_t module_count;
 static int entered_game;
 static int gpu_enabled;
 int vulkan_smoke(void);
+int runtime_entered_game(void) { return __atomic_load_n(&entered_game, __ATOMIC_ACQUIRE); }
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
 static uint64_t read64(FILE *f) {
@@ -114,6 +116,18 @@ __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
 #endif
+#ifdef _WIN32
+typedef struct {
+    void (ABI *entry)(void *, void (ABI *)(void));
+    void *params;
+    void (ABI *exit_fn)(void);
+} MainLaunchCtx;
+static void *run_guest_main_on_stack(void *arg) {
+    MainLaunchCtx *ctx = (MainLaunchCtx *)arg;
+    ctx->entry(ctx->params, ctx->exit_fn);
+    return NULL;
+}
+#endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
 /* The game is built for the PS4's AMD Jaguar CPU: AVX throughout, and BMI1 (andn, bextr, blsi, blsr,
  * tzcnt), MOVBE, LZCNT and POPCNT in thousands of places, its libc's string functions among them.
@@ -168,7 +182,6 @@ static void check_cpu(void) {
     exit(24);
 }
 #ifdef _WIN32
-#ifdef BB_UWP
 extern IMAGE_DOS_HEADER __ImageBase;
 static int readable_ptr(uintptr_t address, size_t bytes) {
     MEMORY_BASIC_INFORMATION mbi;
@@ -177,13 +190,12 @@ static int readable_ptr(uintptr_t address, size_t bytes) {
     const uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
     return address >= (uintptr_t)mbi.BaseAddress && bytes <= end - address;
 }
-#endif
 static void describe_address(char *out, size_t size, uintptr_t address) {
-    if (image && address-(uintptr_t)image<0x20000000) { snprintf(out,size,"guest offset 0x%" PRIxPTR,address-(uintptr_t)image); return; }
+    if (image && address-(uintptr_t)image<0x20000000) { snprintf(out,size,"guest+0x%" PRIxPTR,address-(uintptr_t)image); return; }
 #ifdef BB_UWP
     PVOID base = NULL;
     if (RtlPcToFileHeader((PVOID)address, &base) && base) {
-        if (base == (PVOID)&__ImageBase) snprintf(out, size, "bbport-uwp.exe+0x%" PRIxPTR, address - (uintptr_t)base);
+        if (base == (PVOID)&__ImageBase) snprintf(out, size, "bloodborne.exe+0x%" PRIxPTR, address - (uintptr_t)base);
         else snprintf(out, size, "%p+0x%" PRIxPTR, base, address - (uintptr_t)base);
         return;
     }
@@ -199,6 +211,90 @@ static void describe_address(char *out, size_t size, uintptr_t address) {
 #endif
     snprintf(out,size,"%p",(void *)address);
 }
+
+/* Sample live host/guest threads (LocalState\threads.txt or stall watchdog): briefly suspends each
+ * thread, unwinds Win64 .pdata frames + guest SysV RBP frame chains, resumes immediately, and logs. */
+void runtime_sample_threads(void) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        printf("Thread samples: CreateToolhelp32Snapshot failed (%lu)\n", GetLastError());
+        return;
+    }
+    THREADENTRY32 entry = {.dwSize = sizeof(entry)};
+    const DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+    for (BOOL ok = Thread32First(snap, &entry); ok; ok = Thread32Next(snap, &entry)) {
+        if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self) continue;
+        HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+                              FALSE, entry.th32ThreadID);
+        if (!h) continue;
+        char name[64] = "";
+        PWSTR wide = NULL;
+        if (SUCCEEDED(GetThreadDescription(h, &wide)) && wide) {
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, name, sizeof(name), NULL, NULL);
+            LocalFree(wide);
+        }
+        if (!name[0]) snprintf(name, sizeof(name), "tid %lu", entry.th32ThreadID);
+        DWORD64 frames[16];
+        unsigned count = 0;
+        DWORD64 reg_rdi = 0, reg_rsp = 0;
+        if (SuspendThread(h) != (DWORD)-1) {
+            _Alignas(16) CONTEXT c;
+            memset(&c, 0, sizeof(c));
+            c.ContextFlags = CONTEXT_FULL;
+            if (GetThreadContext(h, &c)) {
+                reg_rdi = c.Rdi;
+                reg_rsp = c.Rsp;
+                for (; count < 16 && c.Rip;) {
+                    frames[count++] = c.Rip;
+                    DWORD64 base = 0, establisher = 0, previous = c.Rsp;
+                    void *handler_data = NULL;
+                    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+                    if (fn) {
+                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c,
+                                         &handler_data, &establisher, NULL);
+                        if (c.Rsp <= previous) break;
+                    } else {
+                        /* Guest PS4 SysV frame: inspect [rsp] return slot, then walk rbp chain. */
+                        uintptr_t ret_slot = 0;
+                        if (count == 1 && readable_ptr((uintptr_t)c.Rsp, sizeof(ret_slot))) {
+                            memcpy(&ret_slot, (const void *)(uintptr_t)c.Rsp, sizeof(ret_slot));
+                            if (image && ret_slot - (uintptr_t)image < 0x20000000 && count < 16)
+                                frames[count++] = ret_slot;
+                        }
+                        uintptr_t rbp = (uintptr_t)c.Rbp;
+                        while (count < 16 && rbp && readable_ptr(rbp, 16)) {
+                            uintptr_t fpair[2];
+                            memcpy(fpair, (const void *)rbp, sizeof(fpair));
+                            if (fpair[0] <= rbp || !fpair[1]) break;
+                            frames[count++] = fpair[1];
+                            rbp = fpair[0];
+                        }
+                        break;
+                    }
+                }
+            }
+            ResumeThread(h);
+        }
+        if (count) {
+            char line[1600];
+            size_t used = 0;
+            for (unsigned i = 0; i < count && used + 80 < sizeof(line); ++i) {
+                char where[160];
+                describe_address(where, sizeof(where), (uintptr_t)frames[i]);
+                used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " < " : "", where);
+            }
+            printf("Thread sample %-24s (rdi=%016llx rsp=%016llx): %s\n",
+                   name, (unsigned long long)reg_rdi, (unsigned long long)reg_rsp, line);
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    fflush(stdout);
+}
+#else
+void runtime_sample_threads(void) {}
+#endif
+#ifdef _WIN32
 static int fatal_reported;
 static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) { Sleep(INFINITE); }
@@ -206,12 +302,17 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     const CONTEXT *c=info->ContextRecord;
     char where[MAX_PATH+64];
     describe_address(where,sizeof(where),(uintptr_t)c->Rip);
-    if (record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2)
+    if (record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
         fprintf(stderr,"Fault: %s access to %p at %s (thread %lu)\n",
                 record->ExceptionInformation[0]==1 ? "write" : record->ExceptionInformation[0]==8 ? "execute" : "read",
                 (void *)record->ExceptionInformation[1],where,GetCurrentThreadId());
-    else
+        printf("Fault: %s access to %p at %s (thread %lu)\n",
+               record->ExceptionInformation[0]==1 ? "write" : record->ExceptionInformation[0]==8 ? "execute" : "read",
+               (void *)record->ExceptionInformation[1],where,GetCurrentThreadId());
+    } else {
         fprintf(stderr,"Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
+        printf("Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
+    }
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
     if (gpu_enabled) bbgpu_dump_guest_writes(info);
@@ -814,13 +915,41 @@ int main(int argc, char **argv) {
         }
     }
     bbnet_initialize(); /* the online session starts with the game */
-    printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
-    entered_game=1;
-    struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};
+    __atomic_store_n(&entered_game, 1, __ATOMIC_RELEASE);
 #ifdef _WIN32
     typedef void (ABI *Entry)(void *, void (ABI *)(void));
-    ((Entry)(image + entry))(&params, guest_exit);
+    const char *low_env = getenv("BB_LOW_STACKS");
+#ifdef BB_UWP
+    int need_low_main = (!low_env || low_env[0] != '0');
 #else
+    int need_low_main = (low_env && low_env[0] == '1') || ((uintptr_t)&entry >= UINT64_C(0x1000000000));
+#endif
+    if (need_low_main) {
+        enum { MAIN_STACK = 8 * 1024 * 1024 };
+        unsigned char *stack = runtime_low_stack_alloc(MAIN_STACK);
+        if (!stack) fail("cannot allocate guest main stack below 1 TiB");
+        /* Place argv[0] and params in the reserved top 4 KiB page while keeping
+         * StackLimit (stack) and StackBase (stack + MAIN_STACK - 4096) 4 KiB page-aligned. */
+        char *arg0 = (char *)(stack + MAIN_STACK - 256);
+        memcpy(arg0, "/app0/eboot.bin", sizeof("/app0/eboot.bin"));
+        struct { uint64_t argc; const char *argv[2]; } *low_params =
+            (void *)(stack + MAIN_STACK - 192);
+        low_params->argc = 1;
+        low_params->argv[0] = arg0;
+        low_params->argv[1] = NULL;
+        printf("Entering original x86-64 code at guest offset 0x%" PRIx64
+               " (image=%p, self=%p, main_stack=%p)\n",
+               entry, (void *)image, (void *)runtime_thread_current(), (void *)stack);
+        MainLaunchCtx ctx = {(Entry)(image + entry), low_params, guest_exit};
+        compat_call_on_low_stack(run_guest_main_on_stack, &ctx, stack, MAIN_STACK - 4096);
+    } else {
+        struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};
+        printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
+        ((Entry)(image + entry))(&params, guest_exit);
+    }
+#else
+    struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};
+    printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
     /* The guest main thread runs on a stack below 1 TiB like PS4 stacks. */
     enum { MAIN_STACK=8*1024*1024 };
     unsigned char *stack=runtime_low_map(MAIN_STACK,PROT_READ|PROT_WRITE);

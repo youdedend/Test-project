@@ -17,6 +17,7 @@ typedef struct Rwlock {
     pthread_rwlock_t native;
     Holder *holders;
     unsigned inflight;
+    char name[32];
     struct Rwlock *next;
 } Rwlock;
 typedef struct { int64_t seconds, nanoseconds; } GuestTime;
@@ -43,20 +44,20 @@ static Rwlock *find_locked(Rwlock *handle) {
     for (Rwlock *r=registry; r; r=r->next) if (r==handle) return r;
     return NULL;
 }
-static int create_locked(Rwlock **out) {
-    Rwlock *r=calloc(1,sizeof(*r));
+static int create_locked(Rwlock **out, const char *name) {
+    Rwlock *r=runtime_low_calloc(1,sizeof(*r));
     if (!r) return ENOMEM;
+    if (name) snprintf(r->name,sizeof(r->name),"%s",name);
     int e=pthread_rwlock_init(&r->native,NULL);
-    if (e) { free(r); return e; }
+    if (e) { runtime_low_free(r); return e; }
     r->next=registry; registry=r; *out=r; ++created; return 0;
 }
 static ABI int32_t rw_init(Rwlock **out, void *const *attr, const char *name) {
-    (void)name;
     if (!out || (attr && !*attr)) return error(EINVAL);
     if (attr) { fputs("STOP: non-default PS4 rwlock attributes are not implemented\n",stderr); exit(21); }
     pthread_mutex_lock(&registry_lock);
     /* POSIX allows uninitialized storage, so never read *out during init. */
-    int e=create_locked(out);
+    int e=create_locked(out,name);
     pthread_mutex_unlock(&registry_lock); return error(e);
 }
 static void prune_locked(Rwlock *r, Holder *h) {
@@ -73,7 +74,7 @@ static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time
     int timed=op==TIMED_READ || op==TIMED_WRITE;
     pthread_mutex_lock(&registry_lock);
     int e=0;
-    if (!*handle) e=create_locked(handle);
+    if ((uintptr_t)*handle < 2) e=create_locked(handle,NULL);
     Rwlock *r=e ? NULL : find_locked(*handle);
     if (!r) { pthread_mutex_unlock(&registry_lock); return error(e ? e : EINVAL); }
     Holder *h=r->holders;
@@ -91,12 +92,20 @@ static int32_t acquire(Rwlock **handle, enum Operation op, const GuestTime *time
     pthread_mutex_unlock(&registry_lock);
     /* Timed operations first try the lock, matching POSIX timeout validation. */
     if (attempt || timed) e=writer ? pthread_rwlock_trywrlock(&r->native) : pthread_rwlock_tryrdlock(&r->native);
-    else e=writer ? pthread_rwlock_wrlock(&r->native) : pthread_rwlock_rdlock(&r->native);
+    else {
+        runtime_wait_begin(writer ? "rwlock write" : "rwlock read", r->name, handle, NULL,
+                           (uintptr_t)__builtin_return_address(0));
+        e=writer ? pthread_rwlock_wrlock(&r->native) : pthread_rwlock_rdlock(&r->native);
+        runtime_wait_end();
+    }
     if (timed && e==EBUSY) {
         if (!time || time->nanoseconds<0 || time->nanoseconds>=1000000000) e=EINVAL;
         else {
             struct timespec deadline={.tv_sec=(time_t)time->seconds,.tv_nsec=(long)time->nanoseconds};
+            runtime_wait_begin(writer ? "rwlock write" : "rwlock read", r->name, handle, NULL,
+                               (uintptr_t)__builtin_return_address(0));
             e=writer ? pthread_rwlock_timedwrlock(&r->native,&deadline) : pthread_rwlock_timedrdlock(&r->native,&deadline);
+            runtime_wait_end();
         }
     }
     pthread_mutex_lock(&registry_lock);
@@ -138,7 +147,7 @@ static ABI int32_t rw_destroy(Rwlock **handle) {
     if (!e) {
         Rwlock **link=&registry;
         while (*link!=r) link=&(*link)->next;
-        *link=r->next; free(r); *handle=(Rwlock *)(uintptr_t)1;
+        *link=r->next; runtime_low_free(r); *handle=(Rwlock *)(uintptr_t)1;
     }
     pthread_mutex_unlock(&registry_lock); return error(e);
 }
