@@ -43,7 +43,7 @@
 extern "C" void bbgpu_flush_caches(void);
 
 #ifndef BB_PREPARED_FORMAT
-#define BB_PREPARED_FORMAT "1"
+#define BB_PREPARED_FORMAT "3"
 #endif
 
 extern "C" {
@@ -727,6 +727,37 @@ struct DumpSelection {
     }
 };
 
+/// What the packaged patch set can do to what will actually run.
+enum class PatchState {
+    Required, ///< the effective build is the one the patch set was reverse engineered for
+    Optional, ///< a newer build: only the in-image fingerprint check can decide, patches may be empty
+    Skipped,  ///< base game only (or the update turned off): red-zone patches must not run
+};
+
+static const char* PatchStateName(PatchState state) {
+    switch (state) {
+    case PatchState::Required:
+        return "required";
+    case PatchState::Optional:
+        return "optional";
+    default:
+        return "skipped";
+    }
+}
+
+/// The red-zone patch set is only valid for the exact build it was reverse engineered for
+/// (patches/redzone.json). Anything else must not get the trampolines, whatever the dump layout.
+static PatchState EffectivePatchState(const DumpSelection& selection) {
+    const std::string effective = selection.EffectiveVersion();
+    if (BbPrepare::IsPatchTargetVersion(effective)) {
+        return PatchState::Required;
+    }
+    if (BbPrepare::CompareVersions(effective, BbPrepare::kPatchTargetVersion) > 0) {
+        return PatchState::Optional;
+    }
+    return PatchState::Skipped;
+}
+
 /// Redeems the StorageFolder token of a previously picked update folder so RuntimeBroker grants
 /// direct *FromAppW access to it on this launch, exactly like the game folder token.
 static void redeem_patch_lease() {
@@ -1006,6 +1037,24 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         DeleteTree(prepared + "\\overlay");
     }
 
+    // One line per launch says exactly what is being prepared and which patches can apply to it.
+    const PatchState patch_state = EffectivePatchState(selection);
+    const std::string base_ver = selection.layout.base.Version();
+    const std::string patch_ver = selection.layout.patch_path.empty()
+                                      ? std::string("-")
+                                      : selection.layout.patch.Version();
+    const std::string effective_ver = selection.EffectiveVersion();
+    std::printf("Prepare: base_app_ver=%s; patch_app_ver=%s; effective=%s; patches=%s\n",
+                base_ver.empty() ? "unknown" : base_ver.c_str(),
+                patch_ver.empty() ? "unknown" : patch_ver.c_str(),
+                effective_ver.empty() ? "unknown" : effective_ver.c_str(),
+                PatchStateName(patch_state));
+    if (patch_state == PatchState::Skipped) {
+        std::printf("Prepare: red-zone patches are skipped, the game runs the unpatched build%s\n",
+                    selection.unpatched_confirmed ? " (as confirmed by the player)" : "");
+    }
+    std::fflush(stdout);
+
     BbPrepare::Bytes redzone_bytes;
     if (!read_file_bytes(pkg_path + "\\patches\\redzone.json", redzone_bytes)) {
         stop_with_message("Packaged patches\\redzone.json is missing. Reinstall the app.", player);
@@ -1090,7 +1139,8 @@ static bool prepare_game_and_patches(const std::string& dump, const std::string&
         BbPrepare::BootPrepared res;
         try {
             const char* rz_env = std::getenv("BB_RED_ZONE");
-            const bool redzone = !(rz_env && std::strcmp(rz_env, "0") == 0);
+            const bool redzone =
+                patch_state != PatchState::Skipped && !(rz_env && std::strcmp(rz_env, "0") == 0);
             res = BbPrepare::PrepareBoot(files, redzone_json, redzone);
         } catch (const std::exception& ex) {
             stop_with_message(std::string("Preparing Bloodborne failed:\n") + ex.what(), player);

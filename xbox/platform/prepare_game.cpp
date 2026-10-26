@@ -737,9 +737,9 @@ void apply_red_zones(Bytes& image, std::vector<std::array<uint64_t, 3>>& segment
                      const std::string& actual_text_sha256) {
     const std::string expected_sha = parse_redzone_text_sha256(redzone_json);
     if (!expected_sha.empty() && actual_text_sha256 != expected_sha) {
-        std::printf("Red-zone trampolines: skipped (eboot text_sha256 %.12s != 01.09 %.12s)\n",
+        std::printf("Red-zone trampolines: skipped (eboot text_sha256 %.12s != %s %.12s)\n",
                     actual_text_sha256.empty() ? "unknown" : actual_text_sha256.c_str(),
-                    expected_sha.c_str());
+                    std::string(kPatchTargetVersion).c_str(), expected_sha.c_str());
         return;
     }
     const auto sites = parse_redzone_json(redzone_json);
@@ -1961,9 +1961,10 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
         return res;
     };
 
-    const std::string target_ver = "01.09";
+    const std::string target_ver(kPatchTargetVersion);
     if (!app_ver.empty() && app_ver != target_ver && !force_patches) {
-        return make_empty("game version " + app_ver + " != 01.09; running unpatched 30 FPS");
+        return make_empty("game version " + app_ver + " != " + target_ver +
+                          "; running unpatched 30 FPS");
     }
 
     const auto metas = parse_patch_xml(patch_xml);
@@ -2025,7 +2026,8 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
                           "49fbe0e9fddc3d02edc4b121f4f0b5a9a79705cb802460b7cf2d4d406771d70b";
 
     if (!ok_fps && !ok_res && !ok_effects) {
-        return make_empty("eboot.bin fingerprint does not match clean 01.09; running unpatched");
+        return make_empty("eboot.bin fingerprint does not match clean " + target_ver +
+                          "; running unpatched");
     }
 
     std::vector<std::string> names;
