@@ -17,9 +17,14 @@ bool g_text_dialog_active = false;
 int g_text_dialog_state = 0; // 0 typing, 1 confirmed, 2 cancelled
 std::string g_text_dialog_value;
 std::string g_text_dialog_prompt;
+bool g_shift_down = false;
 } // namespace
 
 extern "C" int bb_uwp_dialog_key(uint32_t key, int down, int repeat) {
+    if (key == VK_SHIFT || key == VK_LSHIFT || key == VK_RSHIFT) {
+        g_shift_down = (down != 0);
+        return 0;
+    }
     {
         std::scoped_lock lock(g_text_dialog_mutex);
         if (g_text_dialog_active) {
@@ -44,7 +49,7 @@ extern "C" int bb_uwp_dialog_key(uint32_t key, int down, int repeat) {
             }
             if (!repeat && key >= 0x20 && key <= 0x7E && g_text_dialog_value.size() < 16) {
                 char c = static_cast<char>(key);
-                if (key >= 'A' && key <= 'Z' && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+                if (key >= 'A' && key <= 'Z' && !g_shift_down) {
                     c = static_cast<char>(c + ('a' - 'A'));
                 }
                 g_text_dialog_value.push_back(c);
@@ -214,12 +219,4 @@ extern "C" void bbgpu_uwp_on_resuming(void) {}
 extern "C" uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free) {
     (void)target_bytes_to_free;
     return 0;
-}
-
-extern "C" {
-void bbgpu_uwp_set_core_window(void*, int32_t, int32_t) {}
-BbGpuBackend bbgpu_uwp_active_backend(void) { return BB_GPU_BACKEND_D3D12; }
-void bbgpu_uwp_on_suspending(void) {}
-void bbgpu_uwp_on_resuming(void) {}
-uint64_t bbgpu_uwp_trim_memory(uint64_t) { return 0; }
 }

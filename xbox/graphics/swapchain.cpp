@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "present_bridge.h"
 #include "sdl_window.h"
-#include "bbport_settings.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace Vulkan {
+namespace {
+bool VsyncEnabled() {
+    const char* env = std::getenv("BB_VSYNC");
+    return !(env && std::strcmp(env, "0") == 0);
+}
+} // namespace
+
 Swapchain::Swapchain(const Instance& i, const Frontend::WindowSDL& w) : instance(i), window(w) {
     surface_format = {vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear};
     view_format = surface_format.format;
-    present_mode = BbSettings::Get().vsync.load() ? vk::PresentModeKHR::eFifo
-                                                  : vk::PresentModeKHR::eImmediate;
+    present_mode = VsyncEnabled() ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate;
     Create(w.GetWidth(), w.GetHeight());
 }
 
@@ -46,7 +53,7 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present(vk::Queue) {
-    const bool vsync = BbSettings::Get().vsync.load();
+    const bool vsync = VsyncEnabled();
     present_mode = vsync ? vk::PresentModeKHR::eFifo : vk::PresentModeKHR::eImmediate;
     return bridge->Present(vsync);
 }

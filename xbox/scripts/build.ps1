@@ -43,9 +43,14 @@ if ($LASTEXITCODE) {
 $buildLog = Join-Path $local 'build.log'
 & cmake --build $build --parallel $([Environment]::ProcessorCount) *> $buildLog
 if ($LASTEXITCODE) {
-    $errs = @(Select-String -LiteralPath $buildLog -Pattern 'error:|fatal error:|FAILED:|lld-link:|undefined symbol' -Context 0, 2 | ForEach-Object { $_.ToString() })
-    if (!$errs.Count) { $errs = @(Get-Content $buildLog -Tail 80) }
-    $summary = ($errs | Select-Object -First 80) -join "`n"
+    $errs = @(Get-Content $buildLog | Where-Object {
+        $_ -notmatch 'clang-cl\.exe\s+/nologo' -and
+        $_ -match 'error:|fatal error:|FAILED:|lld-link:|undefined symbol'
+    })
+    if (!$errs.Count) {
+        $errs = @(Get-Content $buildLog | Where-Object { $_ -notmatch 'clang-cl\.exe\s+/nologo' } | Select-Object -Last 60)
+    }
+    $summary = ($errs | Select-Object -First 60) -join "`n"
     Write-Output $summary
     Emit-ErrorAnnotation 'CMake Build Failed' $summary
     throw 'Xbox UWP build failed; see xbox/.local/build.log'

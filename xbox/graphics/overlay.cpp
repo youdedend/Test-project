@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <thread>
 
-extern "C" void runtime_file_profile_report(void);
+extern "C" void runtime_file_report(void);
 
 namespace BbUwp::Overlay {
 namespace {
@@ -88,6 +88,6 @@ void Render(const Vulkan::Instance& instance) {
         static_cast<unsigned long long>(stats.total.statistics.allocationBytes >> 20),
         static_cast<unsigned long long>(stats.total.statistics.blockBytes >> 20));
     reported = now;
-    runtime_file_profile_report();
+    runtime_file_report();
 }
 } // namespace BbUwp::Overlay
