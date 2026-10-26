@@ -65,7 +65,12 @@ _Static_assert(sizeof(SearchCond)==64 && sizeof(SearchResult)==56,"dir name sear
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static int initialized;
 static char title_id[16]="UNKNOWN";
-static struct { int used; char host[700], meta[700]; } slots[SLOTS];
+/* A mount slot is reference counted: Bloodborne mounts the same save directory twice (its
+ * FrpgSaveLoadMan startup pass and the SLSession the loading screen opens) and unmounts once or
+ * twice. Reporting ERR_BAD_MOUNTED (0x809F000D) for the second mount, or tearing the mount down on
+ * the first umount, left the second session with a dangling /savedataN. Mounting an already
+ * mounted directory now returns the same point and bumps the reference count. */
+static struct { int used; int refs; char host[700], meta[700]; } slots[SLOTS];
 static char memory_path[720];
 static uint64_t memory_size;
 static size_t mounts_done, memory_writes;
@@ -164,13 +169,27 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint32
     pthread_mutex_lock(&lock);
     int slot=-1;
     for (int i=0;i<SLOTS;++i) {
-        if (slots[i].used && !strcmp(slots[i].host,host)) { pthread_mutex_unlock(&lock); return ERR_BAD_MOUNTED; }
+        if (slots[i].used && !strcmp(slots[i].host,host)) {
+            /* Already mounted: hand out the same point and count the additional user. */
+            ++slots[i].refs;
+            memset(result,0,sizeof(*result));
+            char point[32];
+            snprintf(point,sizeof(point),"/savedata%d",i&15);
+            memcpy(result->point.data,point,strlen(point)+1);
+            result->status=0; /* ALREADY_MOUNTED */
+            const int refs=slots[i].refs;
+            ++mounts_done;
+            pthread_mutex_unlock(&lock);
+            printf("Runtime: save data '%s' already mounted at %s (refs=%d)\n",dir->data,point,refs);
+            return 0;
+        }
         if (!slots[i].used && slot<0) slot=i;
     }
     if (slot<0) { pthread_mutex_unlock(&lock); return ERR_MOUNT_FULL; }
     if (!exists && (make_dirs(host) || make_dirs(meta))) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
     if (!exists) { Param empty={0}; write_param(meta,&empty); }
     slots[slot].used=1;
+    slots[slot].refs=1;
     snprintf(slots[slot].host,sizeof(slots[slot].host),"%s",host);
     snprintf(slots[slot].meta,sizeof(slots[slot].meta),"%s",meta);
     memset(result,0,sizeof(*result));
@@ -202,9 +221,21 @@ static ABI int32_t save_umount(const MountPoint *point) {
     if (!initialized) return ERR_NOT_INITIALIZED;
     pthread_mutex_lock(&lock);
     int slot=slot_of(point);
-    if (slot>=0) { runtime_file_unmount(point->data); slots[slot].used=0; }
+    int released=0;
+    if (slot>=0) {
+        if (--slots[slot].refs<=0) {
+            runtime_file_unmount(point->data);
+            slots[slot].used=0;
+            slots[slot].refs=0;
+            released=1;
+        }
+    }
+    int refs=slot>=0 ? slots[slot].refs : 0;
     pthread_mutex_unlock(&lock);
-    if (slot>=0) runtime_quit_on_save_done();
+    if (slot>=0 && !released) {
+        printf("Runtime: save data %s still in use (refs=%d)\n",point->data,refs);
+    }
+    if (released) runtime_quit_on_save_done();
     return slot>=0 ? 0 : ERR_NOT_FOUND;
 }
 int runtime_savedata_mounted(void) {
