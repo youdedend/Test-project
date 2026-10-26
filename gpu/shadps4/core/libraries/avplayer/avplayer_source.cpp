@@ -275,14 +275,17 @@ bool AvPlayerSource::Start() {
             // Two frames are the minimum the decoder and the presentation callback need; with
             // fewer the stream cannot run, so fail it cleanly instead of dereferencing null.
             LOG_ERROR(Lib_AvPlayer,
-                      "Video '{}': only {} of {} frame buffers of {} bytes could be allocated "
+                      "Video stream {}: only {} of {} frame buffers of {} bytes could be allocated "
                       "(pitch={}, height={})",
-                      path, allocated, m_max_num_video_framebuffers, size, pitch, height);
+                      m_video_stream_index.value(), allocated, m_max_num_video_framebuffers, size,
+                      pitch, height);
             return false;
         }
         if (allocated != m_max_num_video_framebuffers) {
-            LOG_WARNING(Lib_AvPlayer, "Video '{}': {} of {} frame buffers allocated, playing with {}",
-                        path, allocated, m_max_num_video_framebuffers, allocated);
+            LOG_WARNING(Lib_AvPlayer,
+                        "Video stream {}: {} of {} frame buffers allocated, playing with {}",
+                        m_video_stream_index.value(), allocated, m_max_num_video_framebuffers,
+                        allocated);
         }
     }
     if (m_audio_stream_index) {
@@ -319,8 +322,8 @@ bool AvPlayerSource::Start() {
             ++allocated;
         }
         if (allocated < 2) {
-            LOG_ERROR(Lib_AvPlayer, "Audio '{}': only {} of {} buffers of {} bytes could be allocated",
-                      path, allocated, m_max_num_video_framebuffers * 2, size);
+            LOG_ERROR(Lib_AvPlayer, "Audio stream {}: only {} of {} buffers of {} bytes could be allocated",
+                      m_audio_stream_index.value(), allocated, m_max_num_video_framebuffers * 2, size);
             return false;
         }
     }
