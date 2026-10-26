@@ -962,7 +962,10 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             Vulkan::GraphicsPipelineKey key{};
             key.prim_type = AmdGpu::PrimitiveType::TriangleList;
             key.polygon_mode = AmdGpu::PolygonMode::Fill;
-            key.z_format = AmdGpu::DepthBuffer::ZFormat::Float;
+            key.z_format = AmdGpu::DepthBuffer::ZFormat::Z32Float;
+            if (fs.mrtz_mask & 2u) {
+                key.stencil_format = AmdGpu::DepthBuffer::StencilFormat::Stencil8;
+            }
             key.depth_clip_enable = 1;
             key.num_samples = 1;
             key.depth_samples = 1;
@@ -1057,7 +1060,7 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             Vulkan::GraphicsPipelineKey key{};
             key.prim_type = AmdGpu::PrimitiveType::TriangleList;
             key.polygon_mode = AmdGpu::PolygonMode::Fill;
-            key.z_format = AmdGpu::DepthBuffer::ZFormat::Float;
+            key.z_format = AmdGpu::DepthBuffer::ZFormat::Z32Float;
             key.depth_clip_enable = 1;
             key.num_samples = 1;
             key.depth_samples = 1;
