@@ -324,3 +324,108 @@ player sees and every summary line in `loader.log.txt` now comes from `xbox/plat
 `SkippedPatchesLine`, `OverlayChangedLine`). `main.cpp` keeps only the dialog plumbing, and
 `dump_layout_test.cpp` pins the three launcher states verbatim and prints them, so the states and the
 `Prepare:`/`Launch target:` lines appear in the CI log instead of only on a console.
+
+### Status after the CI loop (branch `arena/c39edde2-test-project`)
+
+Twelve commits on top of the pre-mission branch head, all pushed, all compiled and tested by CI:
+
+```
+dc2bd97  Compare dump paths after normalizing both sides in the CI test
+c344a14  Classify a container by APP_TYPE, not by its CONTENT_ID update group
+a7cb3de  Report UWP platform unit test failures as CI annotations
+d94cfdc  Document update/patch handling in handoff.md
+0be18f1  Record the overlay in overlay.json and invalidate both caches when it changes
+a32bc83  Gate the red-zone patches on the version that will actually run
+2658229  Lay a separately dumped update over the game dump without copying it
+087767f  Show the dump layout in the launcher and remember the patch folder
+be9222f  Detect whether the dump is merged, split or base-only
+a13b6e0  Read param.sfo defensively and never guess 01.00
+21b0d3a  Record the CI loop that found the APP_TYPE and path-comparison defects
+7a6ef60  Pin the launcher panel text and the Prepare lines in CI
+```
+
+(`a13b6e0` … `0be18f1` are the six steps of this task, `d94cfdc` is the first version of this
+section, `a7cb3de`/`c344a14`/`dc2bd97` are the two real defects the CI loop found, `21b0d3a` and
+`7a6ef60` are this documentation and the panel-text test.)
+
+| Run | Head | Result |
+|---|---|---|
+| `40389855254` | `0be18f1` | `Dozen for UWP` ok, `Xbox UWP package` failed in "Build and run UWP platform unit tests" |
+| `40391383955` | `a7cb3de` | same step, annotation still unreadable (see below) |
+| `40395148890` | `dc2bd97` | **green**, both jobs |
+| `40396701707` | `21b0d3a` | **green**, both jobs (documentation only) |
+| `40399498409` | `7a6ef60` | **green**, both jobs |
+
+What the failing annotation actually said, once `Publish()` stopped publishing the log tail:
+
+```
+FAIL: the preferred patch path is kept (got 'C:/Users/RUNNER~1/.../MyPatch',
+      expected 'C:\Users\RUNNER~1\...\MyPatch')
+FAIL: the sibling base folder supplies the data (...)
+FAIL: the picked patch folder is the executable source (...)
+3 check(s) failed
+```
+
+i.e. the *test* was wrong on Windows, not the launcher — which is why the fix (`dc2bd97`) normalizes
+both sides instead of changing `DetectDumpLayout`. The lesson worth keeping: a check-run annotation
+is truncated to the first 4096 characters, so publish the filtered failure lines, not the tail.
+
+Local test results after `7a6ef60` (the same binaries CI builds):
+
+| Binary | Checks |
+|---|---|
+| `dump_layout_test` (links the real `prepare_game.cpp`) | **92** — 75 layout/overlay/manifest + 17 panel/`Prepare:`-line |
+| `ini_file_test` | 42 |
+| `sfo_version_test` | 25 |
+| `overlay_index_test` | 33 |
+| `dense_arena_lifetime_test` | pass (unchanged) |
+
+```
+g++ -std=c++20 -I xbox/platform xbox/tests/dump_layout_test.cpp xbox/platform/prepare_game.cpp \
+    -o /tmp/dlt && /tmp/dlt
+g++ -std=c++20 -I xbox/platform xbox/tests/ini_file_test.cpp -o /tmp/ini && /tmp/ini
+g++ -std=c++20 -I xbox/platform xbox/tests/sfo_version_test.cpp -o /tmp/sfo && /tmp/sfo
+g++ -std=c++20 -I xbox/platform xbox/tests/overlay_index_test.cpp -o /tmp/ovl && /tmp/ovl
+```
+
+The launcher states are now part of the test output, which is what the CI log carries:
+
+```
+--- launcher panel, merged dump ---
+Base dump:  E:\dumps\Bloodborne - app_ver=01.09 (gp) CUSA03173
+Patch dump: none found
+Effective version: 01.09
+
+--- launcher panel, split dump ---
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 (gp) CUSA03173
+Patch dump: E:\dumps\Bloodborne-patch - app_ver=01.09 (patch) CUSA03173 (in use)
+Effective version: 01.09
+
+--- launcher panel, base only ---
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 (gp) CUSA03173
+Patch dump: none found
+Effective version: 01.00 - patches will be SKIPPED
+
+! No 01.09 update folder was found.
+Without it the red-zone patches are skipped: the game runs unpatched at 30 FPS and can crash when
+gameplay starts.
+
+Choose the update folder - the one holding eboot.bin and sce_sys\param.sfo with APP_TYPE=patch
+(usually next to the game folder: E:\dumps\Bloodborne-patch).
+
+The game folder itself is never modified.
+```
+
+These are produced by the shipped string builders (`xbox/platform/dump_panel.h`) on the CI machine,
+**not** on a console: the dialogs themselves are WinRT and only exist in the app.
+
+### What is still missing before this can merge
+
+1. **The Series S run with a split 01.09 dump** — `presents > 10,000` in Yharnam, zero faults at
+   `+0x3003f0`, and `effective=01.09; patches=required` in `loader.log.txt`. Nothing in this section
+   has been exercised on hardware yet; the CI machine cannot boot the game.
+2. **The three launcher screenshots and the before/after first 15 lines of `loader.log.txt`** for the
+   split case — they need that run. Until then the excerpts above are the honest substitute: the
+   exact text, from the exact code, without a console behind it.
+3. `PR #10` must not be merged before (1) passes. The PR description now carries the layout table,
+   the three panel states, the overlay design, the verification table and the CI-loop table.
