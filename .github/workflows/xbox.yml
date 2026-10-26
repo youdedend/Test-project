@@ -196,8 +196,14 @@ jobs:
           # Compiler and test output is echoed and (on failure) annotated: the job log is not always
           # reachable, while a check-run annotation always is.
           function Publish($title, $text) {
-            $flat = ($text | Out-String) -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
-            if ($flat.Length -gt 60000) { $flat = $flat.Substring($flat.Length - 60000) }
+            # GitHub keeps 4096 characters of an annotation and truncates from the end, so publish
+            # the failing checks first and the surrounding output only if there is room.
+            $lines = $text | Out-String -Stream
+            $interesting = $lines | Where-Object { $_ -match 'FAIL|FATAL|error:|warning:|check\(s\) failed|did not compile' }
+            $flat = ($interesting -join "`n")
+            if (-not $flat) { $flat = ($lines | Select-Object -Last 40) -join "`n" }
+            $flat = $flat -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
+            if ($flat.Length -gt 3800) { $flat = $flat.Substring(0, 3800) }
             Write-Output "::error title=$title::$flat"
           }
           foreach ($test in $tests) {

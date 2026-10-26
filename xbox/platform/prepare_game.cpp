@@ -1309,7 +1309,10 @@ std::string CheckTitle(const Bytes& sfo, std::string* out_title_id, std::string*
 }
 
 bool SfoInfo::IsPatch() const {
-    return BbPrepare::IsPatchAppType(app_type) || !update_ver.empty();
+    // APP_TYPE is authoritative: a merged dump keeps APP_TYPE=gp while its CONTENT_ID still carries
+    // the update group (…-A0109-V0100), so the encoded version is only a fallback for dumps that
+    // ship without APP_TYPE at all.
+    return BbPrepare::IsPatchAppType(app_type) || (app_type.empty() && !update_ver.empty());
 }
 
 const std::string& SfoInfo::Version() const {
@@ -1366,7 +1369,8 @@ std::optional<SfoInfo> ParseParamSfo(const Bytes& sfo, const std::string& path) 
                 info.content_id.empty() ? "?" : info.content_id.c_str(),
                 info.update_ver.empty() ? "" : " content_ver=",
                 info.update_ver.empty() ? "" : info.update_ver.c_str());
-    std::printf("Prepare: param.sfo kind=%s\n", info.IsPatch() ? "patch" : "base");
+    std::printf("Prepare: param.sfo kind=%s (app_type=%s)\n", info.IsPatch() ? "patch" : "base",
+                info.app_type.empty() ? "unknown" : info.app_type.c_str());
     std::fflush(stdout);
     return info;
 }
@@ -1608,7 +1612,7 @@ DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& p
                     continue;
                 }
                 auto info = ReadParamSfo(sibling);
-                if (!info || info->IsPatch() || !HasContainerFiles(sibling)) {
+                if (!info || IsPatchAppType(info->app_type) || !HasContainerFiles(sibling)) {
                     continue;
                 }
                 if (!layout.base.title_id.empty() && !info->title_id.empty() &&
@@ -1647,7 +1651,8 @@ DumpLayout DetectDumpLayout(const std::string& user_picked, const std::string& p
         }
         std::string why;
         if (!IsUsablePatch(path, *info, layout.base, &why)) {
-            if (info->IsPatch() || CompareVersions(info->Version(), layout.base.Version()) > 0) {
+            if (IsPatchAppType(info->app_type) ||
+                CompareVersions(info->Version(), layout.base.Version()) > 0) {
                 std::printf("Prepare: ignoring patch candidate %s (%s)\n", path.c_str(),
                             why.c_str());
             }
