@@ -1,27 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include "shader_recompiler/resource.h"
+// Xbox UWP dense ordinary-buffer arena backing + logical DMA page-table views
+// (Cosmo/uncharted_xbox 5c74fc18 RetireTicks=64 safe deferred arena release).
+
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+
 #include <algorithm>
-#include <atomic>
-#include <cstdint>
 #include <cstdio>
 #include <set>
 
-namespace {
-std::atomic<std::uint64_t> g_uwp_pending_retired_arena_bytes{0};
-}
-
-extern "C" std::uint64_t bbgpu_uwp_pending_retired_arena_bytes() noexcept {
-    return g_uwp_pending_retired_arena_bytes.load(std::memory_order_acquire);
-}
-
 namespace VideoCore {
-
-static_assert(BufferCache::DmaViewCount == Shader::NUM_DMA_BUFFERS,
-              "BufferCache::DmaViewCount must match Shader::NUM_DMA_BUFFERS");
 
 void BufferCache::InitializeDenseBuffers() {
     block_shift = 16;
@@ -33,8 +23,8 @@ void BufferCache::InitializeDenseBuffers() {
     bda_pagetable_buffer = std::make_unique<Buffer>(
         instance, 0, pages * sizeof(u64), MemoryType::DeviceLocal, "Logical DMA Page Table");
     runtime.FillBuffer(bda_pagetable_buffer.get(), 0, pages * sizeof(u64), 0);
-    null_buffer = std::make_unique<Buffer>(instance, 0, 64_KB, MemoryType::DeviceLocal,
-                                           "Read-only zero binding");
+    null_buffer = std::make_unique<Buffer>(
+        instance, 0, 64_KB, MemoryType::DeviceLocal, "Read-only zero binding");
     runtime.FillBuffer(null_buffer.get(), 0, 64_KB, 0);
     runtime.FlushBarriers();
     scheduler.Finish();
@@ -61,6 +51,7 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         existing->cpu_addr + existing->size_bytes > (last_block << block_shift)) {
         return existing;
     }
+
     std::set<const Buffer*> previous;
     bool expanded = false;
     do {
@@ -76,27 +67,35 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         }
     } while (expanded);
 
-    if (!previous.empty()) {
-        scheduler.PopPendingOperations();
+    Buffer* arena = nullptr;
+    {
+        std::scoped_lock lk{dense_arena_mutex};
+        arena = &dense_arenas.emplace_back(instance, first_page << arena_page_bits,
+                                           (last_page - first_page + 1) << arena_page_bits,
+                                           MemoryType::DeviceLocal);
     }
 
-    auto arena = &arenas.emplace_back(instance, first_page << arena_page_bits,
-                                      (last_page - first_page + 1) << arena_page_bits,
-                                      MemoryType::DeviceLocal);
     u64 retired_bytes = 0;
     for (auto old : previous) {
         const vk::BufferCopy copy{0, old->cpu_addr - arena->cpu_addr, old->size_bytes};
         runtime.CopyBuffer(old, arena, std::span{&copy, 1});
-        auto* mutable_old = const_cast<Buffer*>(old);
-        const u64 old_bytes = mutable_old->size_bytes;
-        retired_bytes += old_bytes;
-        arena_backed -= std::min<u64>(arena_backed, old_bytes);
-        g_uwp_pending_retired_arena_bytes.fetch_add(old_bytes, std::memory_order_acq_rel);
-        scheduler.DeferOperation([mutable_old, old_bytes]() {
-            mutable_old->buffer.Destroy();
-            g_uwp_pending_retired_arena_bytes.fetch_sub(old_bytes, std::memory_order_acq_rel);
-        });
+        retired_bytes += old->size_bytes;
+        arena_backed -= std::min<u64>(arena_backed, old->size_bytes);
     }
+
+    // Replaced arenas hold whole copies of their ranges; keep them alive until the GPU has
+    // finished RetireTicks submissions past this point so commands recorded shortly after the
+    // replacement (DrawPipe / prepared draws / copy flushes) never hit a destroyed VkBuffer.
+    if (!previous.empty()) {
+        std::scoped_lock lk{dense_arena_mutex};
+        const u64 tick = scheduler.CurrentTick();
+        for (auto it = dense_arenas.begin(); it != dense_arenas.end(); ++it) {
+            if (previous.contains(&*it)) {
+                retired_arenas.push_back({it, tick});
+            }
+        }
+    }
+
     arena_backed += arena->size_bytes;
     for (u64 page = first_page; page <= last_page; ++page) {
         address_space[page] = arena;
@@ -105,6 +104,7 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         ASSERT_MSG(entry->second < DmaViewCount, "Logical DMA view capacity reached (%u)", DmaViewCount);
         dense_views[entry->second] = {arena, (page - first_page) << arena_page_bits};
     }
+
     std::printf("UWP dense GPU arena: %#llx, %llu MiB (retired %llu MiB, live %llu MiB), %zu/%u DMA views\n",
                 static_cast<unsigned long long>(arena->cpu_addr),
                 static_cast<unsigned long long>(arena->size_bytes >> 20),
@@ -113,6 +113,21 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
                 dense_slots.size(), DmaViewCount);
     std::fflush(stdout);
     return arena;
+}
+
+void BufferCache::ReleaseRetiredArenas() {
+    constexpr u64 RetireTicks = 64;
+    std::scoped_lock lk{dense_arena_mutex};
+    std::erase_if(retired_arenas, [&](const RetiredArena& retired) {
+        if (!scheduler.IsFree(retired.tick + RetireTicks)) {
+            return false;
+        }
+        std::printf("UWP dense GPU arena: %#llx, %llu MiB released\n",
+                    static_cast<unsigned long long>(retired.arena->cpu_addr),
+                    static_cast<unsigned long long>(retired.arena->size_bytes >> 20));
+        dense_arenas.erase(retired.arena);
+        return true;
+    });
 }
 
 void BufferCache::EnsureDenseResident(const Buffer* arena, u64 first_block, u64 last_block) {

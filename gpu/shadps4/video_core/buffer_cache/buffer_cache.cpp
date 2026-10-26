@@ -341,6 +341,12 @@ void PrintBufferStats() {
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
+#ifdef BB_UWP
+    if (size == 0 || device_addr >= (u64{1} << ADDRESS_SPACE_BITS) ||
+        size > (u64{1} << ADDRESS_SPACE_BITS) - device_addr) {
+        return {null_buffer.get(), 0};
+    }
+#endif
     const bool stats = BufferStatsEnabled();
     if (stats) {
         PrintBufferStats();
@@ -795,6 +801,9 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
 }
 
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
+#ifdef BB_UWP
+    ReleaseRetiredArenas();
+#endif
     if (pending_binds.empty()) {
         return;
     }

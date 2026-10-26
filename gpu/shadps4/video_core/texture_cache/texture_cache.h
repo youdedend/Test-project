@@ -116,7 +116,7 @@ public:
     void InvalidateMemory(VAddr addr, size_t size);
 
     /// Marks an image as dirty if it exists at the provided address.
-    void InvalidateMemoryFromGPU(VAddr address, size_t max_size);
+    void InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range = false);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
@@ -233,8 +233,15 @@ public:
     }
 
     /// Get the associated depth stencil image if it is still valid.
-    ImageId GetAssociatedDepth(Image& image) {
+    ImageId GetAssociatedDepth(Image& image, vk::Format format) {
         if (!image.depth_id) {
+            return {};
+        }
+        // Only 8-bit integer/unorm color aliases can be stencil exports of a depth target; a
+        // wider color view at a reused guest address is an ordinary color target.
+        if (format != vk::Format::eS8Uint && format != vk::Format::eR8Uint &&
+            format != vk::Format::eR8Unorm) {
+            image.DisassociateDepth();
             return {};
         }
         if (slot_images.is_allocated(image.depth_id)) {
@@ -345,8 +352,13 @@ private:
     /// Iterate over all page indices in a range
     template <typename Func>
     static void ForEachPage(PAddr addr, size_t size, Func&& func) {
+        static constexpr u64 MaxAddress = u64{1} << 40;
+        if (size == 0 || addr >= MaxAddress) {
+            return;
+        }
         static constexpr bool RETURNS_BOOL = std::is_same_v<std::invoke_result<Func, u64>, bool>;
-        const u64 page_end = (addr + size - 1) >> Traits::PageBits;
+        const u64 max_len = MaxAddress - addr;
+        const u64 page_end = (addr + std::min<u64>(size, max_len) - 1) >> Traits::PageBits;
         for (u64 page = addr >> Traits::PageBits; page <= page_end; ++page) {
             if constexpr (RETURNS_BOOL) {
                 if (func(page)) {

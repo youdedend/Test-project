@@ -728,6 +728,16 @@ int main(int argc, char **argv) {
     }
 #endif
     (void)timeout_seconds; /* no watchdog on Windows */
+#ifdef BB_UWP
+    /* Developer check of the guest memory manager on the console (LocalState\run.txt "memory"):
+     * the fault handler above resolves the commit-on-touch pages the test walks. */
+    if (argc == 2 && !strcmp(argv[1], "--memory-selftest")) {
+        const int result = runtime_memory_selftest();
+        printf("Memory contract self-test returned %d\n", result);
+        fflush(stdout);
+        return result;
+    }
+#endif
 #else
     page_size = (size_t)sysconf(_SC_PAGESIZE);
     struct sigaction sa = {0}; sa.sa_sigaction = fault; sa.sa_flags = SA_SIGINFO;

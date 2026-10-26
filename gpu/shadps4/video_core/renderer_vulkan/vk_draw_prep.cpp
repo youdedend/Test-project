@@ -56,7 +56,7 @@ u32 DefaultWorkerCount() {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
 #ifdef BB_UWP
-    return 1;
+    return 0;
 #else
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
@@ -68,7 +68,7 @@ u32 DefaultWorkerCount() {
 /// prepared draw's data while the worker keeps appending.
 struct FlatArena {
     static constexpr size_t ChunkWords = 16 * 1024;
-    std::vector<std::unique_ptr<u32[]>> chunks;
+    std::vector<std::unique_ptr<u32[]>>* chunks = nullptr;
     size_t used = ChunkWords;
 
     const u32* Append(const std::vector<u32>& data) {
@@ -81,11 +81,11 @@ struct FlatArena {
         static_assert(std::is_trivially_copyable_v<T> && alignof(T) <= 8);
         const size_t words = (count * sizeof(T) + sizeof(u32) - 1) / sizeof(u32);
         used = (used + 1) & ~size_t(1);
-        if (chunks.empty() || words > ChunkWords - std::min(used, ChunkWords)) {
-            chunks.push_back(std::make_unique<u32[]>(std::max(ChunkWords, words)));
+        if (chunks->empty() || words > ChunkWords - std::min(used, ChunkWords)) {
+            chunks->push_back(std::make_unique<u32[]>(std::max(ChunkWords, words)));
             used = 0;
         }
-        u32* dst = chunks.back().get() + used;
+        u32* dst = chunks->back().get() + used;
         if (count) {
             std::memcpy(dst, data, count * sizeof(T));
         }
@@ -434,7 +434,6 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
     sel.regs = regs.get();
     PrepWorker prep_worker{};
     sel.worker = &prep_worker;
-    FlatArena arena;
     std::vector<std::shared_ptr<Submission>> path;
 
     // The nearest scanned buffer the GPU thread has not reached and no worker has claimed.
@@ -493,7 +492,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         path.clear();
         u64 checksum = target->start_checksum;
         u32 ordinal = 0;
-        arena = FlatArena{};
+        target->flat_chunks.clear();
+        FlatArena arena{&target->flat_chunks};
         ForEachPacket(target->commands, [&](const AmdGpu::PM4Header* header) {
             AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(*regs, header, checksum);
             if (!IsDirectDraw(header->type3.opcode)) {
@@ -535,8 +535,6 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             ++ordinal;
         });
-        // The arena's chunks live as long as the submission.
-        target->flat_chunks = std::move(arena.chunks);
         position = target->seq + 1;
     }
 }

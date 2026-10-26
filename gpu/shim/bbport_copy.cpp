@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <memory>
@@ -20,6 +21,34 @@ namespace BbCopy {
 namespace {
 
 thread_local bool in_copy_thread = false;
+/// Tasks this thread is running (RunAsync): a fault inside one can wait for copies again
+/// (GPU-side threads read GPU-written memory back inline and submit, which waits for copies).
+thread_local std::size_t running_here = 0;
+/// SetDeferredPoster: asks the GPU command thread to call RunDeferred().
+std::atomic<void (*)()> deferred_poster{nullptr};
+/// SetGpuSideCheck: true on threads that handle faults on GPU-written memory inline.
+std::atomic<bool (*)()> gpu_side_check{nullptr};
+bool GpuSideThread() {
+    const auto check = gpu_side_check.load(std::memory_order_acquire);
+    return !check || check();
+}
+
+/// Runs `work` under a recovery point: on a copy thread, a read of guest memory the GPU wrote jumps
+/// back here (page_manager.cpp declines the fault) instead of waiting for the GPU thread, which may
+/// be waiting for this copy. False: `work` did not finish and must run again on a GPU-side thread.
+template <typename Work>
+bool RunRecoverable(Work& work) {
+    sigjmp_buf recover;
+    sigjmp_buf* volatile previous = runtime_fault_recover;
+    if (sigsetjmp(recover, 0)) {
+        runtime_fault_recover = previous;
+        return false;
+    }
+    runtime_fault_recover = &recover;
+    work();
+    runtime_fault_recover = previous;
+    return true;
+}
 
 class Pool {
 public:
@@ -75,7 +104,11 @@ public:
     }
 
     void WaitAll() {
-        // The waiting thread helps instead of only spinning.
+        // The waiting thread helps instead of only spinning. One that is not GPU-side (the
+        // presenter) would wait for the GPU thread at a fault on GPU-written memory, which may be
+        // waiting for these copies (a hang in play): it runs tasks under the recovery point like
+        // a copy thread and leaves stopped ones to a GPU-side thread.
+        const bool gpu_side = GpuSideThread();
         while (true) {
             Task task;
             {
@@ -83,13 +116,23 @@ public:
                 if (pending == 0 && epochs.size() == 1 && !draining) {
                     return;
                 }
-                if (!async_tasks.empty()) {
+                // Inside a task of this thread (a deferred copy that faulted again on the GPU
+                // command thread, which then submits): that task cannot finish while this waits,
+                // so only the others count. Waiting for itself hung the game.
+                if (running_here != 0 && pending <= running_here) {
+                    return;
+                }
+                // Tasks a copy thread stopped at a fault first: only a GPU-side thread finishes them.
+                if (gpu_side && !deferred.empty()) {
+                    task = std::move(deferred.front());
+                    deferred.pop_front();
+                } else if (!async_tasks.empty()) {
                     task = std::move(async_tasks.front());
                     async_tasks.pop_front();
                 }
             }
             if (task.run) {
-                RunAsync(task);
+                RunAsync(task, !gpu_side);
             } else {
                 std::this_thread::yield();
             }
@@ -111,9 +154,31 @@ public:
         while (job->done.load(std::memory_order_acquire) < count) {
             std::this_thread::yield();
         }
-        std::scoped_lock lk{mutex};
-        if (current == job) {
-            current.reset();
+        {
+            std::scoped_lock lk{mutex};
+            if (current == job) {
+                current.reset();
+            }
+        }
+        // Parts a copy thread stopped at a fault run here, where the fault is handled.
+        for (const std::size_t i : job->failed) {
+            task(i);
+        }
+    }
+
+    /// RunDeferred(): the tasks copy threads stopped at a fault, on this (GPU-side) thread.
+    void RunDeferred() {
+        while (true) {
+            Task task;
+            {
+                std::scoped_lock lk{mutex};
+                if (deferred.empty()) {
+                    return;
+                }
+                task = std::move(deferred.front());
+                deferred.pop_front();
+            }
+            RunAsync(task);
         }
     }
 
@@ -133,14 +198,48 @@ private:
         std::size_t count{};
         std::atomic<std::size_t> next{0};
         std::atomic<std::size_t> done{0};
+        std::mutex failed_mutex;
+        std::vector<std::size_t> failed; ///< parts stopped at a fault, run again by the caller
     };
 
-    void RunAsync(Task& task) {
+    /// `recoverable`: on a copy thread (Loop), where a fault on GPU-written memory stops the task.
+    void RunAsync(Task& task, bool recoverable = false) {
         const bool was = in_copy_thread;
         in_copy_thread = true;
-        task.run();
+        ++running_here;
+        bool finished = true;
+        if (recoverable) {
+            finished = RunRecoverable(task.run);
+        } else {
+            task.run();
+        }
+        --running_here;
         in_copy_thread = was;
+        if (!finished) {
+            Defer(std::move(task));
+            return;
+        }
         Complete(task.epoch);
+    }
+
+    /// A task stopped at a fault stays pending (its epoch's callbacks wait) until a GPU-side
+    /// thread runs it: WaitAll(), or the GPU command thread asked through the poster.
+    void Defer(Task task) {
+        bool first;
+        {
+            std::scoped_lock lk{mutex};
+            first = deferred.empty();
+            deferred.push_back(std::move(task));
+        }
+        static std::atomic<unsigned> logged{0};
+        if (const unsigned n = logged.fetch_add(1, std::memory_order_relaxed); n < 8) {
+            std::printf("Copy threads: a copy reached memory the GPU wrote; a GPU-side thread runs it again (%u)\n",
+                        n + 1);
+            std::fflush(stdout);
+        }
+        if (auto* post = deferred_poster.load(std::memory_order_acquire); first && post) {
+            post();
+        }
     }
 
     /// Retires a task and runs the callbacks of epochs with nothing left, oldest first. One
@@ -174,11 +273,17 @@ private:
         draining = false;
     }
 
-    static void Work(Job& job) {
+    static void Work(Job& job, bool recoverable = false) {
         const bool was = in_copy_thread;
         in_copy_thread = true;
         for (std::size_t i; (i = job.next.fetch_add(1, std::memory_order_relaxed)) < job.count;) {
-            (*job.task)(i);
+            auto part = [&job, i] { (*job.task)(i); };
+            if (!recoverable) {
+                part();
+            } else if (!RunRecoverable(part)) {
+                std::scoped_lock lk{job.failed_mutex};
+                job.failed.push_back(i);
+            }
             job.done.fetch_add(1, std::memory_order_release);
         }
         in_copy_thread = was;
@@ -199,14 +304,14 @@ private:
                 Task task = std::move(async_tasks.front());
                 async_tasks.pop_front();
                 lk.unlock();
-                RunAsync(task);
+                RunAsync(task, true);
                 lk.lock();
                 continue;
             }
             seen = generation;
             const auto job = current;
             lk.unlock();
-            Work(*job);
+            Work(*job, true);
             lk.lock();
         }
     }
@@ -218,8 +323,9 @@ private:
     u64 generation = 0;
     bool stop = false;
     std::deque<Task> async_tasks;
-    std::deque<Epoch> epochs; ///< back() is open for new copies
-    u64 epoch_base = 0;       ///< epoch number of epochs.front()
+    std::deque<Task> deferred; ///< stopped at a fault on a copy thread (RunAsync), still pending
+    std::deque<Epoch> epochs;  ///< back() is open for new copies
+    u64 epoch_base = 0;        ///< epoch number of epochs.front()
     std::size_t pending = 0;
     bool draining = false;
 };
@@ -236,6 +342,22 @@ struct Batch {
 thread_local Batch batch;
 
 } // namespace
+
+bool InCopyThread() {
+    return in_copy_thread;
+}
+
+void SetDeferredPoster(void (*post)()) {
+    deferred_poster.store(post, std::memory_order_release);
+}
+
+void RunDeferred() {
+    GetPool().RunDeferred();
+}
+
+void SetGpuSideCheck(bool (*check)()) {
+    gpu_side_check.store(check, std::memory_order_release);
+}
 
 bool Enabled() {
     return GetPool().Enabled() && !BbToggle::Disabled(BbToggle::ParallelCopies);
@@ -269,7 +391,6 @@ void QueueCopy(const Item& item) {
         item.run(item);
         return;
     }
-    // Smaller batches (32 items / 64 KiB, done before the next fence) measured slower.
     batch.items.push_back(item);
     batch.bytes += item.size;
     if (batch.bytes >= 512 * 1024 || batch.items.size() >= 256) {
@@ -283,7 +404,11 @@ void AfterCopies(std::function<void()> callback) {
 }
 
 void WaitAsync() {
-    // The caller's own batch runs here: handing it over only to wait for it costs a wakeup.
+    // The caller's own batch runs here: handing it over only to wait for it costs a wakeup. A
+    // thread that is not GPU-side hands it over, so it runs under a recovery point (WaitAll).
+    if (!batch.items.empty() && Enabled() && !GpuSideThread()) {
+        FlushBatch();
+    }
     if (!batch.items.empty()) {
         for (const auto& item : batch.items) {
             item.run(item);

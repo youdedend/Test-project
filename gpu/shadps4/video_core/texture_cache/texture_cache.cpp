@@ -28,7 +28,6 @@
 #ifdef BB_UWP
 extern "C" uint64_t bb_uwp_app_memory_usage();
 extern "C" uint64_t bb_uwp_app_memory_limit();
-extern "C" uint64_t bbgpu_uwp_pending_retired_arena_bytes() noexcept;
 #endif
 
 namespace VideoCore {
@@ -229,12 +228,11 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     });
 }
 
-void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
+void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
-        // Only consider images that match base address.
-        // TODO: Maybe also consider subresources
-        if (image.info.guest_address != address) {
+        // Only consider images that match base address unless invalidating a whole DMA range.
+        if (!whole_range && image.info.guest_address != address) {
             return;
         }
         // Ensure image is reuploaded when accessed again.
@@ -1380,15 +1378,8 @@ void TextureCache::GarbageCollectImages() {
     }
     }
 #ifdef BB_UWP
-    /* FreeImage and dense-arena growth defer VkImage/VkBuffer VMA destruction via
-     * scheduler.DeferOperation until GPU submission retirement; under Xbox 5 GiB AppMemoryUsage
-     * pressure or heavy arena retirement, retire pending destructions immediately (outside
-     * TextureCache::mutex and outside any render pass) so D3D12 committed heaps return promptly. */
-    if ((evicted_any && bb_uwp_app_memory_usage() >= pressure_gc_memory) ||
-        bbgpu_uwp_pending_retired_arena_bytes() >= 64_MB) {
-        scheduler.Finish();
-        scheduler.PopPendingOperations();
-    }
+    (void)evicted_any;
+    scheduler.PopPendingOperations();
 #else
     (void)evicted_any;
 #endif
@@ -1551,7 +1542,24 @@ void TextureCache::DeleteImage(ImageId image_id, bool now) {
 
     // Reclaim image and any image views it references.
     if (now) {
-        EraseImage(image_id);
+        std::vector<ImageViewId> deferred_views;
+        for (auto& backing : image.backing_images) {
+            for (const ImageViewId image_view_id : backing.image_view_ids) {
+                if (slot_image_views.is_allocated(image_view_id)) {
+                    slot_image_views[image_view_id].image_view.reset();
+                    deferred_views.push_back(image_view_id);
+                }
+            }
+            backing.image_view_ids.clear();
+        }
+        image.backing_images.clear();
+        image.backing = nullptr;
+        scheduler.DeferOperation([this, image_id, views = std::move(deferred_views)] {
+            for (const ImageViewId view_id : views) {
+                slot_image_views.erase(view_id);
+            }
+            EraseImage(image_id);
+        });
         return;
     }
     scheduler.DeferOperation([this, image_id] { EraseImage(image_id); });

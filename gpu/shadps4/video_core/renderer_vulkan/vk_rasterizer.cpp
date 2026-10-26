@@ -5,6 +5,7 @@
 #include <mutex>
 #include <set>
 #include "video_core/renderer_vulkan/ui_composition.h"
+#include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -75,9 +76,17 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
     });
+    static std::atomic<Rasterizer*> gpu_side_rasterizer{nullptr};
+    gpu_side_rasterizer.store(this, std::memory_order_release);
+    BbCopy::SetGpuSideCheck([] {
+        auto* r = gpu_side_rasterizer.load(std::memory_order_acquire);
+        return !r || r->IsGpuSideThread();
+    });
 }
 
-Rasterizer::~Rasterizer() = default;
+Rasterizer::~Rasterizer() {
+    BbCopy::SetGpuSideCheck(nullptr);
+}
 
 inline const AmdGpu::Regs& Rasterizer::Regs() const {
     return stage_regs ? *stage_regs : liverpool->regs;
@@ -1500,7 +1509,8 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         }
         VideoCore::ImageId image_id = entry.found_id;
         auto* image = &texture_cache.GetImage(image_id);
-        if (const auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
+        if (const auto depth_image_id =
+                texture_cache.GetAssociatedDepth(*image, entry.desc.info.pixel_format)) {
             image_id = depth_image_id;
             image = &texture_cache.GetImage(image_id);
         }
@@ -2163,22 +2173,33 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
                 }
-                const auto [buffer, offset] = buffer_cache.ObtainBuffer(
-                    vsharp.base_address, size, desc.is_written, desc.is_formatted);
-                const u64 offset_aligned = Common::AlignDown(offset, alignment);
-                const u64 adjust = offset - offset_aligned;
-                if (adjust % 4 != 0) {
-                    LOG_WARNING(Render_Vulkan, "Buffer binding in shader {:#x} isn't dword aligned",
-                                stage.pgm_hash);
+                if (size == 0) {
+#ifdef BB_UWP
+                    const auto* null_buffer = buffer_cache.GetNullBuffer();
+                    buffer_infos.emplace_back(null_buffer->Handle(), 0, null_buffer->SizeBytes());
+#else
+                    buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+#endif
+                } else {
+                    const auto [buffer, offset] = buffer_cache.ObtainBuffer(
+                        vsharp.base_address, size, desc.is_written, desc.is_formatted);
+                    const u64 offset_aligned = Common::AlignDown(offset, alignment);
+                    const u64 adjust = offset - offset_aligned;
+                    if (adjust % 4 != 0) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "Buffer binding in shader {:#x} isn't dword aligned",
+                                    stage.pgm_hash);
+                    }
+                    push_data.AddOffset(binding.buffer, adjust);
+                    buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
+                    bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
+                    if (desc.is_written) {
+                        // Raw storage-buffer writes can also make an aliased cached image stale.
+                        texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    }
+                    needs_barrier |=
+                        runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
                 }
-                push_data.AddOffset(binding.buffer, adjust);
-                buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
-                bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
-                if (desc.is_written) {
-                    // Raw storage-buffer writes can also make an aliased cached image stale.
-                    texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
-                }
-                needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
             }
         }
 
@@ -2339,7 +2360,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 binding_proxy_ok.push_back(proxy_candidate);
                 texture_cache.MarkFound(image_id);
                 auto* image = &texture_cache.GetImage(image_id);
-                if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
+                if (auto depth_image_id = texture_cache.GetAssociatedDepth(
+                        *image, desc_entry.found_desc.info.pixel_format)) {
                     image_id = depth_image_id;
                     image = &texture_cache.GetImage(image_id);
                 }
@@ -2375,7 +2397,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 desc_entry.view_memo = {};
             }
             auto* image = &texture_cache.GetImage(image_id);
-            if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
+            if (auto depth_image_id =
+                    texture_cache.GetAssociatedDepth(*image, desc.info.pixel_format)) {
                 // If this image has an associated depth image, it's a stencil attachment.
                 // Redirect the access to the actual depth-stencil buffer.
                 image_id = depth_image_id;
@@ -3078,6 +3101,9 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
 }
 
 void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
+    if (num_bytes == 0) {
+        return;
+    }
     DrainDrawPipe();
     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
                "FillBuffer address and size must be a multiple of 4 bytes");
@@ -3099,6 +3125,9 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
+    if (num_bytes == 0) {
+        return;
+    }
     DrainDrawPipe();
     if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
@@ -3108,7 +3137,7 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
             return;
         }
     }
-    texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
+    texture_cache.InvalidateMemoryFromGPU(dst, num_bytes, true);
     const auto* gds_buffer = buffer_cache.GetGdsBuffer();
     const auto [src_buffer, src_offset] = [&] -> std::pair<const VideoCore::Buffer*, u64> {
         if (src_gds) {
@@ -3200,9 +3229,22 @@ void Rasterizer::RegisterMemory(VAddr addr, u64 size) {
 }
 
 void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
-    DrainDrawPipe();
-    buffer_cache.InvalidateMemory(addr, size);
-    texture_cache.UnmapMemory(addr, size);
+    if (size == 0) {
+        return;
+    }
+    auto unmap = [&] {
+        DrainDrawPipe();
+        buffer_cache.InvalidateMemory(addr, size);
+        texture_cache.UnmapMemory(addr, size);
+    };
+    // DrainDrawPipe and TextureCache/BufferCache teardown are owned by the GPU command processor
+    // thread; guest CPU threads call UnmapMemory asynchronously via sceKernelReleaseDirectMemory /
+    // munmap and must marshal onto Liverpool::Process.
+    if (AmdGpu::Liverpool::OnProcessorThread() || !liverpool) {
+        unmap();
+    } else {
+        liverpool->SendCommand<true>(unmap);
+    }
     {
         std::scoped_lock lock{mapped_ranges_mutex};
         mapped_ranges -= decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);

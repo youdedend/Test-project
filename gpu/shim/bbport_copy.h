@@ -42,4 +42,20 @@ void WaitAsync();
 /// Callbacks run in the order they were registered.
 void AfterCopies(std::function<void()> callback);
 
+/// True on a copy thread while it runs a task (and on any thread running copy work inline).
+bool InCopyThread();
+
+/// A copy thread that reads guest memory the GPU wrote must not wait for the GPU thread to read
+/// it back: that thread may be waiting for the copy (a deadlock). Such a task stops at the fault
+/// (page_manager.cpp) and stays pending until a GPU-side thread runs it again with RunDeferred(),
+/// where the fault is handled inline. WaitAsync() does so; `post` (set by the GPU command thread)
+/// asks that thread to call RunDeferred() without waiting for it.
+void SetDeferredPoster(void (*post)());
+void RunDeferred();
+
+/// Whether the calling thread is GPU-side (handles faults on GPU-written memory inline; set by the
+/// rasterizer). Other threads that wait for copies (the presenter) and help run them do so under
+/// the recovery point too, and leave stopped copies to a GPU-side thread.
+void SetGpuSideCheck(bool (*check)());
+
 } // namespace BbCopy

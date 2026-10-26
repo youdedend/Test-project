@@ -744,6 +744,11 @@ static inline bool PushPtr(Xbyak::CodeGenerator& c, PassInfo& pass_info, const I
     c.mov(r10, 0xFFFFFFFFFFFFULL);
     c.and_(rdi, r10);
 #ifdef BB_UWP
+    c.cmp(rdi, 0x10000);
+    c.jb(null_ptr, Xbyak::CodeGenerator::T_NEAR);
+    c.mov(r10, 0x10000000000ULL);
+    c.cmp(rdi, r10);
+    c.jae(null_ptr, Xbyak::CodeGenerator::T_NEAR);
     c.jmp(done_ptr, Xbyak::CodeGenerator::T_NEAR);
     c.L(null_ptr);
     c.xor_(edi, edi);
@@ -1027,8 +1032,10 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
             inst && inst->GetOpcode() == IR::Opcode::ReadFirstLane) {
             continue;
         }
-        ASSERT_MSG(IsReadConstSource(base->Arg(0)), "ReadConst base low not from constant memory");
-        ASSERT_MSG(IsReadConstSource(base->Arg(1)), "ReadConst base high not from constant memory");
+        if (!IsReadConstSource(base->Arg(0)) || !IsReadConstSource(base->Arg(1))) {
+            LOG_ERROR(Render_Recompiler, "Skipping non-constant ReadConst base in SRT pass");
+            continue;
+        }
 
         IR::Inst* ptr_lo = base->Arg(0).Inst();
         ptr_lo = pass_info.DeduplicateInstruction(ptr_lo);

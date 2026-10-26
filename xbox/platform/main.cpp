@@ -167,6 +167,13 @@ static void set_env_var(const char* name, const std::string& value) {
     SetEnvironmentVariableW(winrt::to_hstring(name).c_str(), winrt::to_hstring(value).c_str());
 }
 
+static void set_default_env_var(const char* name, const std::string& value) {
+    if (const char* existing = std::getenv(name); existing && *existing) {
+        return;
+    }
+    set_env_var(name, value);
+}
+
 static int ask_player(const std::string& text, const std::vector<std::string>& buttons) {
     std::printf("Player dialog: %s\n", text.c_str());
     auto choice = std::make_shared<std::promise<int>>();
@@ -1076,7 +1083,7 @@ static void run_loader() {
         }
         std::printf("Active Bloodborne dump: %s (%s)\n", dump.c_str(),
                     describe_place(dump).c_str());
-    } else if (dump.empty()) {
+    } else if (dump.empty() && mode != "memory") {
         std::puts("STOP: dump path missing on line 2 of LocalState\\run.txt");
         g_finished = true;
         return;
@@ -1103,8 +1110,27 @@ static void run_loader() {
     set_env_var("TEMP", temp_str);
     set_env_var("TMP", temp_str);
     set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
-    set_env_var("BB_UPSCALER", "off");
-    set_env_var("BB_FPS_LOG", "1");
+    set_default_env_var("BB_UPSCALER", "off");
+    set_default_env_var("BB_FPS_LOG", "1");
+    set_default_env_var("BB_PRECOMPILE", "0");
+    set_default_env_var("BB_PREP_WORKERS", "0");
+
+    // Developer check of the guest memory manager on the console (LocalState\run.txt first line
+    // "memory"): guest mappings, aliases, 4 KiB protections, the sparse pager and the release
+    // paths are exercised without any game files, and the first failing check is left in the log
+    // (cosmo/gow3_xbox xbox/platform/guest_memory_test.inc).
+    if (mode == "memory") {
+        std::puts("UWP memory: running the guest memory contract self-test");
+        std::fflush(stdout);
+        char app_name[] = "bloodborne-uwp";
+        char selftest_flag[] = "--memory-selftest";
+        char* args[] = {app_name, selftest_flag};
+        const int result = bbport_uwp_run_probe(2, args);
+        std::printf("Memory contract self-test returned %d\n", result);
+        std::fflush(stdout);
+        g_finished = true;
+        return;
+    }
 
     if (!prepare_game_and_patches(dump, prepared_str, ini_path, player, mode == "prepare") ||
         mode == "prepare") {

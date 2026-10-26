@@ -578,6 +578,32 @@ static ssize_t paged_io(int handle, void *buffer, uint64_t size, int64_t offset,
     if (!total && error) { errno = error; return -1; }
     return (ssize_t)total;
 }
+/* Cosmo/gow3_xbox: a guest read and write whose buffer spans more than the swap window. The
+ * memory self-test calls it on a paged guest range; the file lives beside the swap file. */
+int runtime_file_paged_selftest(void *buffer, uint64_t size) {
+    const char *swap = getenv("BB_UWP_SWAP_FILE");
+    if (!swap || !*swap) return 1;
+    char path[4096];
+    snprintf(path, sizeof(path), "%s", swap);
+    char *slash = strrchr(path, '/');
+    if (!slash) slash = strrchr(path, '\\');
+    if (slash) slash[1] = 0;
+    else path[0] = 0;
+    const size_t used = strlen(path);
+    snprintf(path + used, sizeof(path) - used, "bloodborne-pager-io-selftest.bin");
+    FILE *file = fopen(path, "w+b");
+    if (!file) return 2;
+    const int fd = _fileno(file);
+    int result = 0;
+    if (paged_io(fd, buffer, size, 0, 1, 1) != (ssize_t)size) result = 3;
+    if (!result) {
+        memset(buffer, 0, (size_t)size);
+        if (paged_io(fd, buffer, size, 0, 1, 0) != (ssize_t)size) result = 4;
+    }
+    fclose(file);
+    remove(path);
+    return result;
+}
 #endif
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     File *f=get(fd);

@@ -376,13 +376,15 @@ static void *uwp_pager(void *unused) {
         uint64_t used = bb_uwp_app_memory_usage();
         uint64_t out = 0;
         if (limit > (UINT64_C(1024) << 20)) {
-            if (used > limit - (UINT64_C(896) << 20)) draining = 1;
-            if (used <= limit - (UINT64_C(1024) << 20)) draining = 0;
-            if (draining) {
-                int urgent = used > limit - (UINT64_C(560) << 20);
-                out = uwp_swap_reclaim(urgent ? (UINT64_C(16) << 20) : (UINT64_C(4) << 20),
-                                       urgent ? 1 : 0);
-            }
+            /* cosmo/gow3_xbox guest_swap.inc: page out only inside the last 384 MiB of the app
+             * budget and stop again at 512 MiB of headroom. Starting at 896 MiB meant paging
+             * during the loading spikes themselves, and the urgent pass recycled shared-frame
+             * window pages (include_views = 1) that the GPU still read: every pass then freed
+             * less private commit than it churned, and the guest threads it stalled were the
+             * ones loading the next area. A 2 MiB pass keeps the copy thread cheap. */
+            if (used > limit - (UINT64_C(384) << 20)) draining = 1;
+            if (used <= limit - (UINT64_C(512) << 20)) draining = 0;
+            if (draining) out = uwp_swap_reclaim(UINT64_C(2) << 20, 0);
         }
         uint64_t now = GetTickCount64();
         if (now - reported >= 5000) {
@@ -411,6 +413,6 @@ void runtime_memory_start_paging(void) {
     if (pthread_create(&thread, NULL, uwp_pager, NULL)) uwp_fail("pager thread", 0);
     pthread_detach(thread);
     uwp_swap_started = 1;
-    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=896 MiB\n",
+    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=384 MiB\n",
            bb_uwp_app_memory_limit() >> 20);
 }

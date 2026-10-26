@@ -6,6 +6,8 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <list>
+#include <mutex>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -148,11 +150,19 @@ private:
 #ifdef BB_UWP
     void InitializeDenseBuffers();
     const Buffer* GetDenseArena(u64 first_block, u64 last_block);
+    void ReleaseRetiredArenas();
     void EnsureDenseResident(const Buffer* arena, u64 first_block, u64 last_block);
     struct DenseView {
         const Buffer* arena{};
         u64 offset{};
     };
+    struct RetiredArena {
+        std::list<Buffer>::iterator arena;
+        u64 tick{};
+    };
+    std::list<Buffer> dense_arenas;
+    std::vector<RetiredArena> retired_arenas;
+    mutable std::mutex dense_arena_mutex;
     std::array<DenseView, DmaViewCount> dense_views{};
     std::unordered_map<u64, u32> dense_slots;
     std::unique_ptr<Buffer> null_buffer;

@@ -15,10 +15,6 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
-#ifdef BB_UWP
-#include <winrt/Windows.System.h>
-#endif
-
 namespace Vulkan {
 
 using VideoCore::MemoryType;
@@ -30,9 +26,12 @@ namespace {
 // in between and copies into them ran at 0.3 GB/s (stutter). Blocks now live 30 s idle, the
 // upload ring keeps BB_STAGING_KEEP_MB (512) and is populated at startup.
 #ifdef BB_UWP
-constexpr u64 RING_IDLE_FRAMES = 90;
-constexpr u64 VRAM_RING_IDLE_FRAMES = 60;
-constexpr u64 LARGE_IDLE_FRAMES = 30;
+// cosmo/gow3_xbox vk_staging_buffer_pool.cpp: a block lives 120 frames after its last use. The
+// GPU can still be reading a copy recorded two or three frames ago, and the kernel populates a
+// re-created 16 MiB block on first write (~2 ms), so trimming early costs both correctness and time.
+constexpr u64 RING_IDLE_FRAMES = 120;
+constexpr u64 VRAM_RING_IDLE_FRAMES = 120;
+constexpr u64 LARGE_IDLE_FRAMES = 120;
 constexpr u64 PREWARM_BLOCKS = 2;
 constexpr u64 DEFAULT_KEEP_MB = 32;
 constexpr u64 DEFAULT_KEEP_VRAM_MB = 16;
@@ -186,30 +185,18 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
-    bool urgent_trim = false;
-#ifdef BB_UWP
-    try {
-        using winrt::Windows::System::MemoryManager;
-        const u64 used = MemoryManager::AppMemoryUsage();
-        const u64 limit = MemoryManager::AppMemoryUsageLimit();
-        urgent_trim = limit > 0 && used + 896_MB >= limit;
-    } catch (...) {
-    }
-#endif
+    // cosmo/gow3_xbox vk_staging_buffer_pool.cpp: no urgent pass. Trimming the rings down to one
+    // idle frame under memory pressure destroyed blocks that commands recorded a frame or two
+    // earlier still referenced (DrawPipe / BbCopy use-after-free) and re-created blocks the kernel
+    // then had to populate again. Guest memory is released on demand by the allocators instead
+    // (buffer.cpp and image.cpp page out before an allocation that would cross the app limit).
     for (u32 type = 0; type < rings.size(); ++type) {
         const bool vram = type == u32(MemoryType::DeviceLocal);
-        const u64 keep = urgent_trim ? (vram ? 0 : 1) : (vram ? keep_vram_blocks : keep_blocks);
-        const u64 idle = urgent_trim ? 1 : (vram ? VRAM_RING_IDLE_FRAMES : RING_IDLE_FRAMES);
-        TrimRing(rings[type], keep, idle);
+        TrimRing(rings[type], vram ? keep_vram_blocks : keep_blocks,
+                 vram ? VRAM_RING_IDLE_FRAMES : RING_IDLE_FRAMES);
     }
     for (auto& cache : large_caches) {
-        if (urgent_trim) {
-            std::erase_if(cache, [this](const LargeBuffer& entry) {
-                return !entry.held && scheduler.IsFree(entry.tick);
-            });
-        } else {
-            TrimLarge(cache);
-        }
+        TrimLarge(cache);
     }
     PublishStats();
 }

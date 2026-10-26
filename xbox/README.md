@@ -75,3 +75,41 @@ via SMB (`\\<xbox-ip>\DevelopmentFiles`) or Xbox Device Portal **File Explorer**
 - **Gestures (Left PS4 Touchpad):** Hold **View + D-Pad Left**.
 - **In-Game Settings Overlay (FPS, VSync, Resolution, Effect Toggles, Save & Quit):** Click **L3 + R3**
   together at any time.
+
+---
+
+## 5. Memory management (ported from `gow3_xbox`)
+
+Bloodborne runs inside the **5,120 MiB** Game Mode budget, shared by guest PS4 memory, the sparse
+`LocalState` swap file, D3D12 resources and the driver's own allocations. The memory manager is the
+one from `cosmo/gow3_xbox`, adapted to Bloodborne's guest runtime:
+
+- **Commit-on-touch guest pages** (`xbox/platform/guest_memory.inc`): guest mappings are placeholders;
+  a 16 KiB guest page becomes host memory only when the game touches it, and the GPU page-tracking
+  window (256 KiB) is unprotected with one call per 16 KiB page instead of one per 4 KiB page.
+- **Sparse pager** (`xbox/platform/guest_swap.inc`): pages are written to a temporary sparse file in
+  `LocalState` only when the app is inside the **last 384 MiB** of its budget, and paging stops again
+  at **512 MiB** of headroom. Each pass releases 2 MiB and never recycles the shared page-in window
+  (`include_views = 0`), so paging cannot churn pages the GPU is reading. The buffer and image
+  allocators page memory out on demand when an allocation would cross the limit.
+- **Staging rings** (`vk_staging_buffer_pool.cpp`): upload and scratch blocks stay allocated for
+  **120 frames** after their last use, so a copy recorded two or three frames ago is never trimmed
+  under the GPU, and the kernel does not have to populate a re-created 16 MiB block again.
+- **Region-table stall report**: add `BB_IO_STATS=1` to `LocalState\graphics-debug.txt` to log every
+  guest map/unmap/protect that held the memory table for **40 ms** or more
+  (`Memory lock: <operation> held the region table for <n> ms`).
+
+### Memory contract self-test (on the console)
+
+1. In **Xbox Device Portal → File Explorer**, open `LocalState` of the app.
+2. Create `run.txt` whose **first line** is `memory` (a second line is only needed for game modes).
+3. Launch the app. The log then prints `UWP memory contract self-test starting`, the swap probe
+   numbers, seven `PASS:` lines and `Memory contract self-test returned 0`.
+
+The test walks real guest mappings: lazy zero pages, remap preservation, live aliases, 4 KiB
+protection boundaries inside one 16 KiB page, protected host writes, nested region queries with a
+queued writer, concurrent commits, disk eviction with checksummed page-in, concurrent readers while
+the pager evicts, guest file I/O across a paged range, guest-code pins and released pages. A failure
+prints `STOP: swap self-test <n>` (or returns `<n>` from the contract test) so the first broken
+invariant is identifiable from the log alone. Delete `run.txt` (or change the first line to `boot`)
+to start the game again.

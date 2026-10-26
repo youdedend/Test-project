@@ -82,7 +82,23 @@ static pthread_rwlock_t lock=PTHREAD_RWLOCK_INITIALIZER;
 static __thread unsigned exclusive_depth;
 /* Odd while a writer holds the lock; readers' region caches are valid for one even value. */
 static uint64_t table_generation;
-static void write_lock(void) {
+#ifdef BB_UWP
+/* cosmo/gow3_xbox runtime_memory.c: the operations that keep the region table for tens of
+ * milliseconds are what guest threads and the GPU thread stall on (GPU page tracking protects
+ * 256 KiB windows under this lock, and a map/unmap walks every page of its range).
+ * BB_IO_STATS=1 prints each operation that held the table for 40 ms or more. */
+static __thread uint64_t profile_write_started;
+static __thread const char *profile_write_operation;
+static int profile_memory_lock(void) {
+    static int value = -1;
+    if (value < 0) {
+        const char *env = getenv("BB_IO_STATS");
+        value = (env && *env == '1') ? 1 : 0;
+    }
+    return value;
+}
+#endif
+static void write_lock_at(const char *operation) {
     if (!exclusive_depth++) {
 #ifdef BB_UWP
         AcquireSRWLockExclusive(&lock);
@@ -90,15 +106,34 @@ static void write_lock(void) {
         pthread_rwlock_wrlock(&lock);
 #endif
         __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL);
+#ifdef BB_UWP
+        profile_write_started = profile_memory_lock() ? GetTickCount64() : 0;
+        profile_write_operation = operation;
+#else
+        (void)operation;
+#endif
     }
 }
+/* Every caller uses write_lock(); the wrapper names the operation for the stall report. */
+#define write_lock() write_lock_at(__func__)
 static void write_unlock(void) {
     if (!--exclusive_depth) {
+#ifdef BB_UWP
+        const uint64_t elapsed =
+            profile_write_started ? GetTickCount64() - profile_write_started : 0;
+#endif
         __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE);
 #ifdef BB_UWP
         ReleaseSRWLockExclusive(&lock);
 #else
         pthread_rwlock_unlock(&lock);
+#endif
+#ifdef BB_UWP
+        if (elapsed >= 40) {
+            printf("Memory lock: %s held the region table for %llu ms\n", profile_write_operation,
+                   (unsigned long long)elapsed);
+            fflush(stdout);
+        }
 #endif
     }
 }
@@ -1128,3 +1163,9 @@ void runtime_memory_report(void) {
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
 
+/* The guest memory contract self-test (cosmo/gow3_xbox xbox/platform/guest_memory_test.inc).
+ * It is compiled here, after every mapping function it exercises, and only runs when
+ * LocalState\run.txt asks for the "memory" mode. */
+#ifdef BB_UWP
+#include "../xbox/platform/guest_memory_test.inc"
+#endif

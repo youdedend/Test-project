@@ -110,6 +110,9 @@ int runtime_rebirth_free_level(int level);
 int runtime_memory_handle_commit_fault_at(uintptr_t address, int kind, int guest_code);
 uint64_t runtime_memory_page_out(uint64_t need);
 void runtime_memory_start_paging(void);
+/* The guest memory contract self-test (xbox/platform/guest_memory_test.inc): 0 when every
+ * check passed, else the number of the first failing one. Run with "memory" in run.txt. */
+int runtime_memory_selftest(void);
 void bb_uwp_request_quit(void);
 #endif
 void runtime_savedata_configure(const char *title);
