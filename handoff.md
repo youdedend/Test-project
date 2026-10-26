@@ -430,3 +430,52 @@ These are produced by the shipped string builders (`xbox/platform/dump_panel.h`)
    exact text, from the exact code, without a console behind it.
 3. `PR #10` must not be merged before (1) passes. The PR description now carries the layout table,
    the three panel states, the overlay design, the verification table and the CI-loop table.
+
+### Final state of this branch
+
+`HEAD` is documentation only from here on; every code commit below has a green CI run.
+
+| Run | Head | Both jobs |
+|---|---|---|
+| `40389855254` | `0be18f1` | failed in "Build and run UWP platform unit tests" |
+| `40391383955` | `a7cb3de` | same step |
+| `40395148890` | `dc2bd97` | **green** |
+| `40396701707` | `21b0d3a` | **green** |
+| `40399498409` | `7a6ef60` | **green** |
+| `40402529867` | `6019252` | **green** (handoff.md only) |
+| `40402540016` | `7d17bf0` | **green** (handoff.md only) |
+| `40402572925` | `30ca026` | **green** (handoff.md only) |
+| `40402609734` | `2f6c410` | **green** (handoff.md only) |
+
+#### Findings verified in the code, not assumed
+
+- **The dump is never written.** Every write the launcher performs goes to `LocalState`: `bbport.ini`,
+  `Prepared\boot-linked.bin` / `content.bin` / `eboot.elf` / `app_ver.txt` / `format.txt` /
+  `patches.bin` / `overlay\*` / `overlay.json`, the crash quarantine file and `dozen.log`. There is no
+  `bb_uwp_mkdir`/`CreateFile2FromAppW` call against the game or update folder anywhere in
+  `xbox/platform/main.cpp`, which is what makes the "USB dump byte-identical" acceptance testable
+  with a SHA-256 of both folders before and after.
+- **The update is not copied.** `BuildOverlayedImage` copies only the boot container (`eboot.bin`,
+  `sce_sys\param.sfo`, `sce_module\*.prx` and other root/`sce_*` files) — a handful of megabytes — and
+  writes every other path the update provides into `Prepared\overlay\files.txt`, which
+  `bb_uwp_overlay_configure()` turns into a redirect in the platform file layer. A 10 GB
+  `dvdroot_ps4` never lands in `LocalState`.
+- **01.09 is written down once.** `kPatchTargetVersion` in `xbox/platform/sfo_version.h` is the only
+  definition (8 uses in non-test code); the string `"01.09"` appears elsewhere only in two comments in
+  `prepare_game.h`. A future 01.10 update changes one line.
+- **The launcher text has one source.** Every sentence in a dialog and every summary line in
+  `loader.log.txt` comes from `xbox/platform/dump_panel.h`; `main.cpp` only wraps it in
+  `MessageDialog`/`printf`. That is why the three states can be pinned in CI at all.
+- **No new capabilities.** The patch folder is remembered through the same
+  `StorageApplicationPermissions::FutureAccessList` token mechanism as the game folder (token `patch`,
+  redeemed into `g_patch_folder_lease`), so `runFullTrust`/`broadFileSystemAccess` stay absent and
+  `check-imports.ps1` still passes.
+
+#### Still blocking the merge
+
+1. Series S run with a split 01.09 dump: `presents > 10,000` in Yharnam, zero faults at
+   `+0x3003f0`, `effective=01.09; patches=required`.
+2. The three launcher screenshots and the before/after first 15 lines of `loader.log.txt` from that
+   run (the excerpts above are the same strings from the same code, produced on the CI machine).
+3. `PR #10` description carries the layout table, the three panel states, the overlay design, the
+   verification table and the CI-loop table; it must not be merged before (1).
