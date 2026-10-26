@@ -13,6 +13,11 @@
 #include "video_core/texture_cache/image.h"
 
 #include <vk_mem_alloc.h>
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+extern "C" uint64_t bb_uwp_app_memory_limit();
+extern "C" uint64_t runtime_memory_page_out(uint64_t bytes);
+#endif
 #include <cstdio>
 #include <cstdlib>
 
@@ -186,6 +191,18 @@ bool UniqueImage::TryCreate(const vk::ImageCreateInfo& image_ci) {
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
+#ifdef BB_UWP
+    for (unsigned attempt = 0; result == VK_ERROR_OUT_OF_DEVICE_MEMORY && attempt < 4; ++attempt) {
+        const auto released = runtime_memory_page_out(UINT64_C(64) << 20);
+        if (!released) {
+            break;
+        }
+        std::printf("UWP image allocation retry %u: swap released %llu MiB\n", attempt + 1,
+                    static_cast<unsigned long long>(released >> 20));
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
+                                &alloc_info);
+    }
+#endif
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         // bbport: VRAM full (6 GB cards, high resolutions). Past the budget the driver keeps the
         // image in system memory, which is slower but no crash.
@@ -243,6 +260,11 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
     }
 
     usage_flags = ImageUsageFlags(instance, info);
+#ifdef BB_UWP
+    if (info.props.is_block && !instance.IsBlockTexelViewSupported()) {
+        usage_flags &= ~vk::ImageUsageFlagBits::eStorage;
+    }
+#endif
     format_features = FormatFeatureFlags(usage_flags);
     if (info.props.is_depth) {
         aspect_mask = vk::ImageAspectFlagBits::eDepth;

@@ -74,13 +74,21 @@ enum Prompts : int {
 inline constexpr int FovDefault = 43, FovMin = 30, FovMax = 90;
 
 struct Values {
+#ifdef BB_UWP
+    std::atomic<int> upscaler{UpscalerOff};
+#else
     std::atomic<int> upscaler{UpscalerFsr3};
+#endif
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
     std::atomic<bool> jitter{true};
     std::atomic<bool> reactive{false};
+#ifdef BB_UWP
+    std::atomic<bool> object_motion{false};
+#else
     std::atomic<bool> object_motion{true};
+#endif
     /// Shared launcher/overlay preferences, applied on the next game start.
     std::atomic<int> fsr411_backend{Fsr411Vulkan};
     std::atomic<bool> object_motion_cache{false};
@@ -88,11 +96,19 @@ struct Values {
     std::atomic<float> reactive_threshold{0.2f};
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
+#ifdef BB_UWP
+    std::atomic<bool> show_fps{true};
+#else
     std::atomic<bool> show_fps{false};
+#endif
     /// Silence the game while its window does not have focus (bbgpu_audio_muted).
     std::atomic<bool> mute_unfocused{false};
     /// Keyboard and mouse button prompts: with the device in use (auto), or always one kind.
+#ifdef BB_UWP
+    std::atomic<int> button_prompts{PromptsXbox};
+#else
     std::atomic<int> button_prompts{PromptsAuto};
+#endif
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};

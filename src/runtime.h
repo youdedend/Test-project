@@ -90,6 +90,15 @@ const char *runtime_file_user_dir(void);
 void runtime_rebirth_set_image(unsigned char *base);
 int runtime_rebirth(void);
 int runtime_rebirth_free_level(int level);
+#if defined(BB_UWP) && !defined(BBPORT_UWP)
+#define BBPORT_UWP 1
+#endif
+#ifdef BB_UWP
+int runtime_memory_handle_commit_fault_at(uintptr_t address, int kind, int guest_code);
+uint64_t runtime_memory_page_out(uint64_t need);
+void runtime_memory_start_paging(void);
+void bb_uwp_request_quit(void);
+#endif
 void runtime_savedata_configure(const char *title);
 uintptr_t runtime_savedata_resolve(const char *name);
 void runtime_savedata_report(void);

@@ -56,6 +56,13 @@ class TextureCache {
     using PageTable = MultiLevelPageTable<Traits>;
 
 public:
+#ifdef BB_UWP
+    vk::ImageView NullView() const {
+        return *null_view;
+    }
+    UniqueImage null_image;
+    vk::UniqueImageView null_view;
+#endif
     enum class BindingType : u32 {
         Texture,
         Storage,

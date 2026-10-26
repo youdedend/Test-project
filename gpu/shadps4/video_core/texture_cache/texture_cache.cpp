@@ -25,6 +25,10 @@
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/texture_cache/tile_manager.h"
 #include <vk_mem_alloc.h>
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+extern "C" uint64_t bb_uwp_app_memory_limit();
+#endif
 
 namespace VideoCore {
 
@@ -38,6 +42,51 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
       buffer_cache{buffer_cache_}, tracker{tracker_}, blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
       readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
+#ifdef BB_UWP
+    null_image = UniqueImage(instance.GetDevice(), instance.GetAllocator());
+    null_image.Create({
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .extent = {1, 1, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eOptimal,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage |
+                 vk::ImageUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eExclusive,
+    });
+    null_view = Vulkan::Check(instance.GetDevice().createImageViewUnique({
+        .image = null_image.image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    }));
+    scheduler.Record([image = null_image.image](vk::CommandBuffer cmd) {
+        vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                            vk::ImageMemoryBarrier{
+                                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+                                .oldLayout = vk::ImageLayout::eUndefined,
+                                .newLayout = vk::ImageLayout::eGeneral,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = image,
+                                .subresourceRange = range,
+                            });
+        cmd.clearColorImage(image, vk::ImageLayout::eGeneral,
+                            vk::ClearColorValue{std::array<float, 4>{0, 0, 0, 0}}, range);
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                            vk::PipelineStageFlagBits::eAllCommands, {},
+                            vk::MemoryBarrier{
+                                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                                .dstAccessMask = vk::AccessFlagBits::eShaderRead |
+                                                 vk::AccessFlagBits::eShaderWrite,
+                            },
+                            {}, {});
+    });
+#endif
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
@@ -1112,6 +1161,20 @@ void TextureCache::ReportMemory() {
 }
 
 void TextureCache::GarbageCollectImages() {
+#ifdef BB_UWP
+    // CPU guest pages and GPU heaps share the UWP app limit on Xbox.
+    total_used_memory = bb_uwp_app_memory_usage();
+    static const u64 test_budget = [] {
+        const char* env = std::getenv("BB_GC_BUDGET_MB");
+        const u64 mb = env ? std::strtoull(env, nullptr, 10) : 0;
+        return mb >= 1024 && mb <= 65536 ? mb << 20 : 0;
+    }();
+    const u64 app_budget = test_budget ? std::min(test_budget, bb_uwp_app_memory_limit())
+                                       : bb_uwp_app_memory_limit();
+    trigger_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget / 2;
+    pressure_gc_memory = app_budget > 512_MB ? app_budget - 512_MB : app_budget * 3 / 4;
+    critical_gc_memory = app_budget > 256_MB ? app_budget - 256_MB : app_budget * 7 / 8;
+#else
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
         // bbport: the buffer cache's reserve (512 MiB of VRAM allocated at start for the game's
@@ -1139,6 +1202,7 @@ void TextureCache::GarbageCollectImages() {
             }
         }
     }
+#endif
     // bbport: gc_tick (one per guest submission, hundreds a second) at each of the last 64
     // seconds, for ages in seconds. The usage compared is all of our VRAM, not only images: on a
     // discrete GPU it stays over the trigger, where an age of 16 ticks (~3 frames) would evict

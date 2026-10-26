@@ -194,10 +194,17 @@ bool g_window_ready;
 
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
+#ifdef BB_UWP
+        const char* env = std::getenv("BB_DISPLAY_HZ");
+        const u32 rate = env && *env ? u32(std::strtoul(env, nullptr, 10)) : 60u;
+        std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate ? rate : 60u);
+        return std::max<u32>(rate, 60u);
+#else
         const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
         const u32 rate = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 60;
         std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate);
         return std::max<u32>(rate, 60);
+#endif
     }();
     return hz;
 }
@@ -245,7 +252,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         }
         g_window_cv.notify_all();
         while (window->PollEvents()) {
+#ifndef BB_UWP
             SDL_Delay(2);
+#endif
         }
         LOG_INFO(Frontend, "Window closed by user");
         std::fflush(stdout);
@@ -367,6 +376,21 @@ extern "C" int bbgpu_text_input_poll(char* out, uint64_t size) {
         out[n] = 0;
     }
     return state;
+}
+
+extern "C" int bbgpu_choice_begin(const char* title, const char* const* items, int count, int focus) {
+    if (!g_window || count <= 0 || !items) return 0;
+    std::vector<std::string> labels;
+    labels.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        labels.emplace_back(items[i] ? items[i] : "");
+    }
+    BbOverlay::BeginChoice(title ? title : "", std::move(labels), focus);
+    return 1;
+}
+
+extern "C" int bbgpu_choice_poll(void) {
+    return BbOverlay::PollChoice();
 }
 
 extern "C" void bbgpu_mouse_take(BbMouseInput* out) {

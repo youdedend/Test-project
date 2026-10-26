@@ -9,7 +9,11 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
-add_compile_options(-fno-omit-frame-pointer)
+if (MSVC)
+    add_compile_options(/Oy-)
+else()
+    add_compile_options(-fno-omit-frame-pointer)
+endif()
 if (MINGW)
     # Headers newer libc++ no longer includes transitively (see the file).
     add_compile_options(
@@ -46,7 +50,21 @@ elseif (BB_PGO STREQUAL "use")
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
 endif()
 
-if (BBPORT_UWP)
+if (BB_UWP)
+    include(../xbox/graphics/dependencies.cmake)
+    add_library(magic_enum INTERFACE)
+    add_library(magic_enum::magic_enum ALIAS magic_enum)
+    target_include_directories(magic_enum INTERFACE third_party/magic_enum/include
+                                                    third_party/magic_enum/include/magic_enum)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    add_subdirectory(third_party/miniz EXCLUDE_FROM_ALL)
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+    add_library(miniz::miniz ALIAS miniz)
+elseif (BBPORT_UWP)
     add_compile_definitions(BBPORT_UWP NOMINMAX WIN32_LEAN_AND_MEAN)
     add_library(bbgpu STATIC
         ../uwp/renderer/d3d12/D3D12Backend.cpp
@@ -62,61 +80,74 @@ if (BBPORT_UWP)
         ${CMAKE_CURRENT_SOURCE_DIR}/../uwp/renderer/d3d11)
     target_link_libraries(bbgpu PUBLIC d3d12 d3d11 dxgi dxguid dxcompiler WindowsApp)
     return()
+else()
+    find_package(Vulkan REQUIRED)
+    find_package(fmt REQUIRED)
+    find_package(Boost REQUIRED)
+    # bbport (Windows): MSYS2 has no magic_enum/miniz packages; the submodules are used instead.
+    find_package(magic_enum QUIET)
+    if (NOT magic_enum_FOUND)
+        add_library(magic_enum INTERFACE)
+        add_library(magic_enum::magic_enum ALIAS magic_enum)
+        target_include_directories(magic_enum INTERFACE third_party/magic_enum/include
+                                                        third_party/magic_enum/include/magic_enum)
+    endif()
+    find_package(tsl-robin-map REQUIRED)
+    find_package(VulkanMemoryAllocator CONFIG QUIET)
+    if (NOT VulkanMemoryAllocator_FOUND)
+        # MSYS2 ships the header (include/vma/vk_mem_alloc.h) without a CMake package.
+        find_path(VMA_INCLUDE_DIR vk_mem_alloc.h PATH_SUFFIXES vma REQUIRED)
+        add_library(VulkanMemoryAllocator INTERFACE)
+        add_library(GPUOpen::VulkanMemoryAllocator ALIAS VulkanMemoryAllocator)
+        target_include_directories(VulkanMemoryAllocator INTERFACE ${VMA_INCLUDE_DIR})
+    endif()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
+    pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
+    if (NOT WIN32)
+        pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+    endif()
+    find_package(miniz QUIET)
+    if (NOT miniz_FOUND)
+        set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
+        set(BUILD_SHARED_LIBS OFF)
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+        add_subdirectory(third_party/miniz EXCLUDE_FROM_ALL)
+        unset(CMAKE_POLICY_VERSION_MINIMUM)
+        add_library(miniz::miniz ALIAS miniz)
+    endif()
+    find_package(Zydis REQUIRED)
+    find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 endif()
-
-find_package(Vulkan REQUIRED)
-find_package(fmt REQUIRED)
-find_package(Boost REQUIRED)
-# bbport (Windows): MSYS2 has no magic_enum/miniz packages; the submodules are used instead.
-find_package(magic_enum QUIET)
-if (NOT magic_enum_FOUND)
-    add_library(magic_enum INTERFACE)
-    add_library(magic_enum::magic_enum ALIAS magic_enum)
-    target_include_directories(magic_enum INTERFACE third_party/magic_enum/include
-                                                    third_party/magic_enum/include/magic_enum)
-endif()
-find_package(tsl-robin-map REQUIRED)
-find_package(VulkanMemoryAllocator CONFIG QUIET)
-if (NOT VulkanMemoryAllocator_FOUND)
-    # MSYS2 ships the header (include/vma/vk_mem_alloc.h) without a CMake package.
-    find_path(VMA_INCLUDE_DIR vk_mem_alloc.h PATH_SUFFIXES vma REQUIRED)
-    add_library(VulkanMemoryAllocator INTERFACE)
-    add_library(GPUOpen::VulkanMemoryAllocator ALIAS VulkanMemoryAllocator)
-    target_include_directories(VulkanMemoryAllocator INTERFACE ${VMA_INCLUDE_DIR})
-endif()
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
-pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
-if (NOT WIN32)
-    pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
-endif()
-find_package(miniz QUIET)
-if (NOT miniz_FOUND)
-    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(BUILD_FUZZERS OFF CACHE BOOL "" FORCE)
-    set(BUILD_SHARED_LIBS OFF)
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-    add_subdirectory(third_party/miniz EXCLUDE_FROM_ALL)
-    unset(CMAKE_POLICY_VERSION_MINIMUM)
-    add_library(miniz::miniz ALIAS miniz)
-endif()
-find_package(Zydis REQUIRED)
-find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
+if (BB_UWP)
+    get_target_property(SIRIT_OPTIONS sirit COMPILE_OPTIONS)
+    if (SIRIT_OPTIONS)
+        list(REMOVE_ITEM SIRIT_OPTIONS /MP)
+        set_target_properties(sirit PROPERTIES COMPILE_OPTIONS "${SIRIT_OPTIONS}")
+    endif()
+endif()
 
-# bbport: FSR 3.1 temporal upscaling / frame generation, native Vulkan (MIT, FireBurn/FSR-Vulkan).
-set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+if (NOT BB_UWP)
+    # bbport: FSR 3.1 temporal upscaling / frame generation, native Vulkan (MIT, FireBurn/FSR-Vulkan).
+    set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+endif()
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
 set(SHADER_INCLUDE ${CMAKE_CURRENT_BINARY_DIR}/include)
 set(SHADER_DIR ${SHADER_INCLUDE}/video_core/host_shaders)
 set(SHADER_HEADERS "")
+set(HOST_SHADER_ENV vulkan1.3)
+if (BB_UWP)
+    set(HOST_SHADER_ENV vulkan1.2)
+endif()
 function(add_host_shader FILENAME SHADER_NAME)
     set(OUT ${SHADER_DIR}/${SHADER_NAME}.h)
     string(TOUPPER ${SHADER_NAME} SYMBOL)
@@ -124,12 +155,15 @@ function(add_host_shader FILENAME SHADER_NAME)
     list(TRANSFORM DEFINES PREPEND "-D")
     add_custom_command(OUTPUT ${OUT}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_DIR}
-        COMMAND ${GLSLANG_COMPILER} --target-env vulkan1.3 -o ${OUT} --vn ${SYMBOL} ${DEFINES} ${SHADER_SRC}/${FILENAME}
+        COMMAND ${GLSLANG_COMPILER} --target-env ${HOST_SHADER_ENV} -o ${OUT} --vn ${SYMBOL} ${DEFINES} ${SHADER_SRC}/${FILENAME}
         COMMAND ${CMAKE_COMMAND} "-DHEADER_FILE=${OUT}" -P ${SHADER_SRC}/AddShaderHeaderInclude.cmake
         DEPENDS ${SHADER_SRC}/${FILENAME} VERBATIM)
     set(SHADER_HEADERS ${SHADER_HEADERS} ${OUT} PARENT_SCOPE)
 endfunction()
 add_host_shader(color_to_ms_depth.frag color_to_ms_depth_frag)
+if (BB_UWP)
+    add_host_shader(color_to_ms_depth.frag color_to_ms_depth_fallback_frag SAMPLE_FALLBACK=1)
+endif()
 add_host_shader(ms_image_blit.frag ms_image_blit_frag)
 add_host_shader(ms_image_blit.frag ms_image_blit_msaa_frag SRC_MSAA=1)
 add_host_shader(fault_buffer_process.comp fault_buffer_process_comp)
@@ -140,8 +174,10 @@ add_host_shader(post_process.frag post_process_frag)
 add_host_shader(camera_motion.comp camera_motion_comp)
 add_host_shader(upscale_merge.comp upscale_merge_comp)
 add_host_shader(upscale_reactive.comp upscale_reactive_comp)
-add_host_shader(fsr4vk_prepare.comp fsr4vk_prepare_comp)
-add_host_shader(test_fsr411_consume.comp test_fsr411_consume_comp)
+if (NOT BB_UWP)
+    add_host_shader(fsr4vk_prepare.comp fsr4vk_prepare_comp)
+    add_host_shader(test_fsr411_consume.comp test_fsr411_consume_comp)
+endif()
 add_host_shader(taa.comp taa_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
@@ -171,8 +207,23 @@ set(COMMON
     shadps4/common/string_util.cpp shadps4/common/thread.cpp shadps4/common/signal_context.cpp
     shim/common/logging/log.cpp)
 file(GLOB AVPLAYER CONFIGURE_DEPENDS shadps4/core/libraries/avplayer/*.cpp)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
+if (NOT BB_UWP)
+    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
+endif()
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
+if (BB_UWP)
+    list(FILTER VIDEO_CORE EXCLUDE REGEX
+        "(fsr411/fsr411|fsr4vk_post|vk_fsr411_native|vk_fsr4vk|vk_fsr4|vk_dlss|vk_temporal_upscaler|vk_frame_generation|vk_swapchain)\\.cpp$")
+    list(FILTER SHIM_SOURCES EXCLUDE REGEX "window\\.cpp$")
+    list(APPEND VIDEO_CORE
+        ../xbox/graphics/swapchain.cpp
+        ../xbox/graphics/native_resolution.cpp
+        ../xbox/graphics/present_bridge.cpp
+        ../xbox/graphics/overlay.cpp
+        ../xbox/graphics/dense_buffers.cpp
+        ../xbox/graphics/descriptor_fallback.cpp)
+    list(APPEND SHIM_SOURCES ../xbox/graphics/window.cpp)
+endif()
 # Windows: a DLL cannot leave the runtime_* symbols for bb-probe.exe to resolve, so the
 # library is static there and linked into the executable.
 if (WIN32)
@@ -186,61 +237,69 @@ add_library(bbgpu ${BBGPU_KIND} ${VIDEO_CORE} ${RECOMPILER} ${COMMON} ${SHIM_SOU
     shadps4/core/libraries/kernel/equeue.cpp ${AVPLAYER}
     shadps4/core/libraries/videodec/video_utils.cpp)
 add_dependencies(bbgpu host_shaders)
-# bbport online: shadPS4 v.0.20.0's network, NP and shadNet sources (bbnet/vendor/shadps4,
-# 529ceb3, with bbnet/vendor-changes.diff) and The Hunter's Dream backend (bbnet/thd, from
-# droogie's bbhost), as Awaken (Awakenchan/BloodBorneButPc) put them together.
-# See bbnet/SHADNET-PORT.md.
-find_package(Protobuf CONFIG REQUIRED)
-set(BBNET_VENDOR "${CMAKE_CURRENT_SOURCE_DIR}/bbnet/vendor/shadps4")
-set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
-file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
-add_custom_command(
-    OUTPUT "${SHADNET_PROTO_OUT}/shadnet.pb.cc" "${SHADNET_PROTO_OUT}/shadnet.pb.h"
-    COMMAND protobuf::protoc "--proto_path=${BBNET_VENDOR}/shadnet"
-            "--cpp_out=${SHADNET_PROTO_OUT}" "${BBNET_VENDOR}/shadnet/shadnet.proto"
-    DEPENDS "${BBNET_VENDOR}/shadnet/shadnet.proto")
-file(GLOB_RECURSE BBNET_SOURCES CONFIGURE_DEPENDS
-    bbnet/vendor/shadps4/core/libraries/net/*.cpp bbnet/vendor/shadps4/core/libraries/network/*.cpp
-    bbnet/vendor/shadps4/core/libraries/np/*.cpp bbnet/vendor/shadps4/core/net/*.cpp
-    bbnet/vendor/shadps4/shadnet/*.cpp)
-# Trophies, commerce and the profile and Facebook dialogs stay in the C runtime.
-list(FILTER BBNET_SOURCES EXCLUDE REGEX
-    "np_trophy|trophy_ui|np_sns_facebook_dialog|np_profile_dialog/|np_commerce/")
-file(GLOB BBNET_THD_SOURCES CONFIGURE_DEPENDS bbnet/thd/*.cpp)
-find_package(nlohmann_json CONFIG REQUIRED)
-add_library(bbnet STATIC ${BBNET_SOURCES} ${BBNET_THD_SOURCES} "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
-    bbnet/bbnet_glue.cpp)
-target_include_directories(bbnet PRIVATE bbnet/include bbnet shim "${BBNET_VENDOR}"
-    "${BBNET_VENDOR}/shadnet" shadps4 "${SHADNET_PROTO_OUT}" third_party/imgui third_party/httplib)
-target_link_libraries(bbnet PRIVATE nlohmann_json::nlohmann_json)
-# HTTPS (the community game server only speaks TLS) and gzip replies in cpp-httplib.
-find_package(OpenSSL REQUIRED)
-find_package(ZLIB REQUIRED)
-target_compile_definitions(bbnet PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
-# OpenSSL verifies the server's chain (with the Windows ROOT and CA stores) and the host name.
-# cpp-httplib's second check on Windows rebuilt the chain from the leaf alone and could pick an
-# expired cross-signed "ISRG Root X2" from the user's intermediate store: "SSL server
-# verification failed" (error 10) for The Hunter's Dream on some PCs.
-target_compile_definitions(bbnet PRIVATE CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
-target_link_libraries(bbnet PRIVATE OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
-if (WIN32)
-    target_sources(bbnet PRIVATE third_party/wepoll/wepoll.c)
-    target_include_directories(bbnet PRIVATE third_party/wepoll)
-    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
-    find_library(MINIUPNPC_LIBRARY NAMES libminiupnpc.a miniupnpc REQUIRED)
-    target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
-    target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB)
-    target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
-endif()
-target_compile_definitions(bbnet PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
-target_compile_options(bbnet PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
-target_link_libraries(bbnet PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
-    protobuf::libprotobuf)
-if (WIN32)
-    target_compile_definitions(bbnet PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_compile_options(bbnet PRIVATE
-        $<$<COMPILE_LANGUAGE:CXX>:-include ${CMAKE_CURRENT_SOURCE_DIR}/bbnet/include/bb_win_compat.h>)
-    target_link_libraries(bbnet PUBLIC ws2_32 iphlpapi bcrypt crypt32)
+if (BB_UWP)
+    # Xbox UWP: offline mode uses the clean HLE Net/Np/Http/Ssl contracts in src/runtime_services.c
+    # without OpenSSL, Protobuf, wepoll or miniupnpc desktop dependencies.
+    add_library(bbnet STATIC ../xbox/stubs/bbnet_stub.cpp)
+    target_include_directories(bbnet PRIVATE .. shim shadps4)
+    target_compile_definitions(bbnet PUBLIC BB_UWP BBPORT_UWP NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+    # bbport online: shadPS4 v.0.20.0's network, NP and shadNet sources (bbnet/vendor/shadps4,
+    # 529ceb3, with bbnet/vendor-changes.diff) and The Hunter's Dream backend (bbnet/thd, from
+    # droogie's bbhost), as Awaken (Awakenchan/BloodBorneButPc) put them together.
+    # See bbnet/SHADNET-PORT.md.
+    find_package(Protobuf CONFIG REQUIRED)
+    set(BBNET_VENDOR "${CMAKE_CURRENT_SOURCE_DIR}/bbnet/vendor/shadps4")
+    set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
+    file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
+    add_custom_command(
+        OUTPUT "${SHADNET_PROTO_OUT}/shadnet.pb.cc" "${SHADNET_PROTO_OUT}/shadnet.pb.h"
+        COMMAND protobuf::protoc "--proto_path=${BBNET_VENDOR}/shadnet"
+                "--cpp_out=${SHADNET_PROTO_OUT}" "${BBNET_VENDOR}/shadnet/shadnet.proto"
+        DEPENDS "${BBNET_VENDOR}/shadnet/shadnet.proto")
+    file(GLOB_RECURSE BBNET_SOURCES CONFIGURE_DEPENDS
+        bbnet/vendor/shadps4/core/libraries/net/*.cpp bbnet/vendor/shadps4/core/libraries/network/*.cpp
+        bbnet/vendor/shadps4/core/libraries/np/*.cpp bbnet/vendor/shadps4/core/net/*.cpp
+        bbnet/vendor/shadps4/shadnet/*.cpp)
+    # Trophies, commerce and the profile and Facebook dialogs stay in the C runtime.
+    list(FILTER BBNET_SOURCES EXCLUDE REGEX
+        "np_trophy|trophy_ui|np_sns_facebook_dialog|np_profile_dialog/|np_commerce/")
+    file(GLOB BBNET_THD_SOURCES CONFIGURE_DEPENDS bbnet/thd/*.cpp)
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_library(bbnet STATIC ${BBNET_SOURCES} ${BBNET_THD_SOURCES} "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
+        bbnet/bbnet_glue.cpp)
+    target_include_directories(bbnet PRIVATE bbnet/include bbnet shim "${BBNET_VENDOR}"
+        "${BBNET_VENDOR}/shadnet" shadps4 "${SHADNET_PROTO_OUT}" third_party/imgui third_party/httplib)
+    target_link_libraries(bbnet PRIVATE nlohmann_json::nlohmann_json)
+    # HTTPS (the community game server only speaks TLS) and gzip replies in cpp-httplib.
+    find_package(OpenSSL REQUIRED)
+    find_package(ZLIB REQUIRED)
+    target_compile_definitions(bbnet PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+    # OpenSSL verifies the server's chain (with the Windows ROOT and CA stores) and the host name.
+    # cpp-httplib's second check on Windows rebuilt the chain from the leaf alone and could pick an
+    # expired cross-signed "ISRG Root X2" from the user's intermediate store: "SSL server
+    # verification failed" (error 10) for The Hunter's Dream on some PCs.
+    target_compile_definitions(bbnet PRIVATE CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+    target_link_libraries(bbnet PRIVATE OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+    if (WIN32)
+        target_sources(bbnet PRIVATE third_party/wepoll/wepoll.c)
+        target_include_directories(bbnet PRIVATE third_party/wepoll)
+        find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
+        find_library(MINIUPNPC_LIBRARY NAMES libminiupnpc.a miniupnpc REQUIRED)
+        target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
+        target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB)
+        target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
+    endif()
+    target_compile_definitions(bbnet PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
+    target_compile_options(bbnet PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
+    target_link_libraries(bbnet PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
+        protobuf::libprotobuf)
+    if (WIN32)
+        target_compile_definitions(bbnet PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_compile_options(bbnet PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:-include ${CMAKE_CURRENT_SOURCE_DIR}/bbnet/include/bb_win_compat.h>)
+        target_link_libraries(bbnet PUBLIC ws2_32 iphlpapi bcrypt crypt32)
+    endif()
 endif()
 target_link_libraries(bbgpu PUBLIC bbnet)
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
@@ -255,16 +314,30 @@ set_source_files_properties(shim/bbport_overlay.cpp PROPERTIES
     OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf)
 target_include_directories(bbgpu PRIVATE shim shadps4 ${SHADER_INCLUDE} third_party/gcn/include third_party/half/include)
 target_compile_definitions(bbgpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
-target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
+if (MSVC)
+    target_compile_options(bbgpu PRIVATE /EHsc
+        /clang:-Wno-deprecated-declarations /clang:-Wno-missing-field-initializers)
+else()
+    target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
+endif()
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
 if (NOT WIN32)
     target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan
-    ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+if (NOT BB_UWP)
+    target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan
+        ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
+endif()
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
-if (WIN32)
+if (BB_UWP)
+    target_compile_definitions(bbgpu PUBLIC BB_UWP BBPORT_UWP VK_USE_PLATFORM_WIN32_KHR
+        NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(bbgpu PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/shim/bb_win_compat.h")
+    target_include_directories(bbgpu PRIVATE .. ../xbox/graphics third_party/xbyak)
+    target_link_libraries(bbgpu PUBLIC d3d12 dxgi dxguid WindowsApp)
+    return()
+elseif (WIN32)
     # Guest code is entered with the System V ABI; NOMINMAX/WIN32_LEAN_AND_MEAN keep
     # <windows.h> out of the way of std::min/max and the Vulkan/SDL headers.
     target_compile_definitions(bbgpu PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN VK_USE_PLATFORM_WIN32_KHR)

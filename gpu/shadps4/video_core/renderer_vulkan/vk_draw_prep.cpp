@@ -51,9 +51,13 @@ u32 DefaultWorkerCount() {
     if (const char* env = std::getenv("BB_PREP_WORKERS")) {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
+#ifdef BB_UWP
+    return std::clamp<u32>(BbThreads::Available() / 2, 1, 2);
+#else
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
     return std::clamp<u32>(BbThreads::Available() / 2, 1, 8);
+#endif
 }
 
 /// Flattened user data of one submission: chunks never move, so the GPU thread can read a

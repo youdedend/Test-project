@@ -1,0 +1,217 @@
+name: Xbox build
+
+# Builds Bloodborne Launcher (.appx + Microsoft.VCLibs.x64.14.00.appx) for Xbox Series X|S
+# Developer Mode:
+#   1. Builds Mesa Dozen (vulkan_dzn.dll) with MSVC 14.44 (never MSVC 19.51).
+#   2. Fetches DirectX Shader Compiler v1.9.2609 (dxil.dll) and pinned LGPL/MIT third-party deps.
+#   3. Builds bloodborne.exe with clang-cl (System V AMD64 ABI + Liverpool shadPS4 renderer).
+#   4. Verifies strict UWP AppContainer PE imports (WindowsApp.lib + Store CRT + packaged DLLs)
+#      and packs + signs BloodborneLauncher_<version>_x64.appx.
+# Zero copyrighted game code or Sony assets are included.
+
+on:
+  push:
+    branches:
+      - 'arena/**'
+      - 'main'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Publish the signed Xbox package as a GitHub pre-release
+        type: boolean
+        default: true
+      title:
+        description: "Release title (empty: Bloodborne Xbox Launcher <version>)"
+        type: string
+        required: false
+      whats_new:
+        description: "Optional bullet points separated by | for the top of the release notes"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  MESA_REPOSITORY: Cosmo/mesa_ai_slop_version
+  MESA_COMMIT: a76cd3caa23f14839f15259cd3abbfa400b1b217
+  DXC_URL: https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip
+  DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
+
+jobs:
+  dozen:
+    name: Dozen for UWP
+    # Build Mesa Dozen with Visual Studio 2022 MSVC 14.44 (MSVC 19.51 miscompiles Dozen).
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Cache Dozen DLL
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\dozen
+          key: dozen-uwp-${{ env.MESA_COMMIT }}-msvc14.44
+
+      - name: Checkout Mesa fork
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MESA_REPOSITORY }}
+          ref: ${{ env.MESA_COMMIT }}
+          path: mesa
+          fetch-depth: 1
+
+      - name: Build Dozen (MSVC 14.44)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --quiet meson==1.12.1 ninja==1.13.2 Mako==1.4.3 PyYAML==6.0.3 packaging==26.3
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not (Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Where-Object Name -like '14.44.*')) {
+            Start-Process -Wait -FilePath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe" -ArgumentList `
+              'modify', '--installPath', "`"$vs`"", '--add', 'Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64', '--quiet', '--norestart', '--nocache'
+          }
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -DevCmdArguments '-arch=x64 -host_arch=x64 -vcvars_ver=14.44' -SkipAutomaticLocation | Out-Null
+          $delayLoad = "['/DELAYLOAD:user32.dll', '/DELAYLOAD:gdi32.dll', '/DELAYLOAD:shell32.dll', '/DELAYLOAD:version.dll', 'delayimp.lib']"
+          meson setup build mesa --backend=ninja -Dbuildtype=release -Dplatforms=windows -Dgallium-drivers= `
+            -Dvulkan-drivers=microsoft-experimental -Dllvm=disabled -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dopengl=false `
+            -Dgles1=disabled -Dgles2=disabled -Dspirv-tools=disabled -Dmicrosoft-clc=disabled -Dbuild-tests=false -Dvideo-codecs= `
+            -Dzlib=disabled -Dzstd=disabled -Dexpat=disabled -Db_ndebug=true -Db_vscrt=mt -Dmin-windows-version=10 `
+            "-Dc_link_args=$delayLoad" "-Dcpp_link_args=$delayLoad"
+          meson compile -C build
+          $out = "$env:RUNNER_TEMP\dozen"
+          New-Item -ItemType Directory $out -Force | Out-Null
+          Copy-Item build\src\microsoft\vulkan\vulkan_dzn.dll, mesa\licenses\MIT $out
+
+      - name: Upload Dozen artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dozen-uwp
+          path: ${{ runner.temp }}\dozen\
+          if-no-files-found: error
+
+  xbox:
+    name: Xbox UWP package
+    needs: dozen
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Git settings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download Dozen artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dozen-uwp
+          path: ${{ runner.temp }}\dozen
+
+      - name: Fetch DXC (dxil.dll)
+        run: |
+          $zip = "$env:RUNNER_TEMP\dxc.zip"
+          Invoke-WebRequest $env:DXC_URL -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:DXC_SHA256) {
+            throw 'DXC archive SHA-256 verification failed'
+          }
+          Expand-Archive $zip "$env:RUNNER_TEMP\dxc"
+
+      - name: Cache third-party dependencies
+        uses: actions/cache@v4
+        with:
+          path: xbox\.local\deps
+          key: bb-deps-vs2026-${{ hashFiles('xbox/scripts/fetch-deps.py', 'xbox/scripts/build-deps.ps1', 'xbox/scripts/boost-headers.py') }}
+
+      - name: MSYS2 build tools
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed make diffutils zstd mingw-w64-ucrt-x86_64-winpthreads'
+
+      - name: Ensure LLVM clang-cl
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if (-not (Test-Path "$vs\VC\Tools\Llvm\x64\bin\clang-cl.exe")) {
+            Start-Process -Wait -FilePath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe" -ArgumentList `
+              'modify', '--installPath', "`"$vs`"", '--add', 'Microsoft.VisualStudio.Component.VC.Llvm.Clang', '--quiet', '--norestart', '--nocache'
+          }
+          & "$vs\VC\Tools\Llvm\x64\bin\clang-cl.exe" --version
+
+      - name: Write local build settings
+        run: |
+          New-Item -ItemType Directory xbox\.local -Force | Out-Null
+          @{
+            python       = 'python'
+            mesa_root    = ''
+            dozen_dll    = "$env:RUNNER_TEMP\dozen\vulkan_dzn.dll"
+            mesa_license = "$env:RUNNER_TEMP\dozen\MIT"
+            dxc_root     = "$env:RUNNER_TEMP\dxc"
+          } | ConvertTo-Json | Set-Content xbox\.local\settings.json
+
+      - name: Build Bloodborne Xbox UWP
+        run: .\xbox\scripts\build.ps1
+
+      - name: Verify UWP imports & package .appx
+        id: package
+        run: |
+          $lines = .\xbox\scripts\package.ps1 -Out "$env:RUNNER_TEMP\package"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $lines
+          foreach ($line in $lines) {
+            if ($line -match '^(version|zip)=') {
+              $line >> $env:GITHUB_OUTPUT
+            }
+          }
+
+      - name: Upload signed Xbox UWP package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BloodborneXbox-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.zip }}
+          if-no-files-found: error
+
+      - name: Publish pre-release
+        if: github.event_name == 'workflow_dispatch' && inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ZIP: ${{ steps.package.outputs.zip }}
+          TITLE: ${{ inputs.title }}
+          WHATS_NEW: ${{ inputs.whats_new }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $source = "https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA"
+          $notes = @"
+          Xbox Series X|S Developer Mode UWP package for **Bloodborne (v1.09)**. Contains **no** copyrighted game code or assets — supply your own decrypted PS4 Bloodborne dump (`eboot.bin`, `sce_module`, `sce_sys`, `dvdroot_ps4`).
+
+          **Install on Xbox Series X|S**
+          1. Unzip `BloodborneXbox-$env:VERSION.zip` on a PC.
+          2. In **Xbox Device Portal → Add**, upload `BloodborneLauncher_$($env:VERSION)_x64.appx` and `Dependencies\Microsoft.VCLibs.x64.14.00.appx`.
+          3. On Dev Home, press **View** on **Bloodborne Launcher → View details** and set **App type** to **Game** (unlocks the full 5,120 MiB Game Mode memory pool).
+          4. Copy your decrypted PS4 Bloodborne v1.09 dump to `E:\dumps\Bloodborne` on a USB 3.0 drive or `D:\DevelopmentFiles\Bloodborne` on internal storage.
+          5. Launch **Bloodborne Launcher**: confirm **Prepare & Launch** once, optionally run **Precompile shaders**, then select **Start game**.
+
+          Press **L3 + R3** in-game to open the settings overlay; tap **View** for Personal Effects and hold **View + D-Pad Left** for Gestures. [Full guide]($source/xbox/README.md) · [Credits]($source/xbox/CREDITS.md)
+          "@
+          $whats_new = "$env:WHATS_NEW".Trim()
+          if ($whats_new -and -not $whats_new.Contains("`n")) {
+            $whats_new = ($whats_new -split '\s*\|\s*' | Where-Object { $_ } | ForEach-Object { "- $_" }) -join "`n"
+          }
+          if ($whats_new) { $notes = "**What's new**`n$whats_new`n`n---`n`n" + $notes }
+          $title = "$env:TITLE".Trim()
+          if (-not $title) { $title = "Bloodborne Xbox Launcher $env:VERSION" }
+          Set-Content "$env:RUNNER_TEMP\notes.md" $notes -Encoding utf8NoBOM
+          $parts = "$env:VERSION".Split('.')
+          $parts[3] = $parts[3].PadLeft(4, '0')
+          gh release create "xbox-alpha-$($parts -join '.')" $env:ZIP --target $env:GITHUB_SHA --prerelease --title $title --notes-file "$env:RUNNER_TEMP\notes.md"

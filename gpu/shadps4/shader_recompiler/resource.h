@@ -14,6 +14,7 @@ namespace Shader {
 static constexpr u32 NUM_USER_DATA_REGS = 16;
 static constexpr u32 NUM_IMAGES = 64;
 static constexpr u32 NUM_BUFFERS = 40;
+static constexpr u32 NUM_DMA_BUFFERS = 128;
 static constexpr u32 NUM_SAMPLERS = 16;
 static constexpr u32 NUM_FMASKS = 8;
 
@@ -70,6 +71,7 @@ enum class BufferType : u8 {
     Flatbuf,
     BdaPagetable,
     FaultBuffer,
+    DmaBuffers,
     GdsBuffer,
     SharedMemory,
     ClipPlanes,

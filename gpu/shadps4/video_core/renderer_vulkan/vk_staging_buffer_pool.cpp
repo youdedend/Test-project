@@ -28,7 +28,13 @@ namespace {
 constexpr u64 RING_IDLE_FRAMES = 3000;
 constexpr u64 VRAM_RING_IDLE_FRAMES = 600; ///< bbport: a few seconds
 constexpr u64 LARGE_IDLE_FRAMES = 3000;
+#ifdef BB_UWP
+constexpr u64 PREWARM_BLOCKS = 4;
+constexpr u64 DEFAULT_KEEP_MB = 64;
+#else
 constexpr u64 PREWARM_BLOCKS = 8;
+constexpr u64 DEFAULT_KEEP_MB = 512;
+#endif
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
 
@@ -42,7 +48,7 @@ u64 RoundAllocationSize(u64 size) {
 StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& scheduler_)
     : instance{instance_}, scheduler{scheduler_} {
     const char* env = std::getenv("BB_STAGING_KEEP_MB");
-    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : 512) * 1_MB / BLOCK_SIZE;
+    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : DEFAULT_KEEP_MB) * 1_MB / BLOCK_SIZE;
     // bbport: the VRAM ring (scratch for detiling and copies) keeps far less: blocks kept for a
     // burst of uploads at an area load stayed in VRAM for good (~300 MiB on the test route).
     const char* vram_env = std::getenv("BB_STAGING_KEEP_VRAM_MB");

@@ -115,6 +115,7 @@ public:
 
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
     Frame* PrepareLastFrame();
+    void PresentLoadingFrame();
 
 private:
     Frame* GetRenderFrame();

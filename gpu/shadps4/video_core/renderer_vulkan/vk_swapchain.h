@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <vector>
 #include "common/types.h"
@@ -11,6 +12,12 @@
 namespace Frontend {
 class WindowSDL;
 }
+
+#ifdef BB_UWP
+namespace BbUwp {
+class Presenter;
+}
+#endif
 
 namespace Vulkan {
 
@@ -98,6 +105,14 @@ public:
                present_mode == vk::PresentModeKHR::eFifoRelaxed;
     }
 
+    static constexpr vk::ImageLayout PresentLayout() {
+#ifdef BB_UWP
+        return vk::ImageLayout::eGeneral;
+#else
+        return vk::ImageLayout::ePresentSrcKHR;
+#endif
+    }
+
 private:
     /// Selects the best available swapchain image format
     void FindPresentFormat();
@@ -140,6 +155,9 @@ private:
     bool needs_recreation = true;
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
+#ifdef BB_UWP
+    std::unique_ptr<BbUwp::Presenter> bridge;
+#endif
 };
 
 } // namespace Vulkan

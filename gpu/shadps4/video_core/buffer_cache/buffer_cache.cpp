@@ -60,6 +60,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
+#ifdef BB_UWP
+    InitializeDenseBuffers();
+    return;
+#endif
     while (arena_page_bits > MIN_ARENA_PAGE_BITS &&
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
@@ -160,6 +164,10 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
+#ifdef BB_UWP
+    BbCopy::QueueCopy(item);
+    return;
+#endif
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
         scheduler.RecordHostCopy([item] { item.run(item); });
         return;
@@ -435,6 +443,9 @@ void BufferCache::SynchronizeDmaBuffers() {
 }
 
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
+#ifdef BB_UWP
+    return GetDenseArena(first_block, last_block);
+#endif
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
     ASSERT_MSG(last_page - first_page <= 1,
@@ -489,6 +500,10 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
 }
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+#ifdef BB_UWP
+    EnsureDenseResident(arena, first_block, last_block);
+    return;
+#endif
     u32 resident_blocks{};
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1, [&](u64 start, u64 end) {

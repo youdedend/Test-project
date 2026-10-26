@@ -16,10 +16,16 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
+#ifdef BB_UWP
+extern "C" uint64_t bb_uwp_app_memory_usage();
+extern "C" uint64_t bb_uwp_app_memory_limit();
+#endif
+
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
-#ifdef _WIN32
+#if defined(_WIN32)
 asm(".section .rdata,\"dr\"\n"
     ".balign 16\n"
     ".global bb_font_ttf\n"
@@ -57,6 +63,14 @@ bool dirty = false; // settings changed while open: saved on close
 // The game's text dialog (SetTextEntry), guarded by imgui_mutex.
 bool text_entry_active = false;
 std::string text_entry_prompt, text_entry_text;
+std::atomic<bool> loading{false};
+std::atomic<u32> loading_done{0}, loading_total{0};
+std::string loading_label = "Preparing graphics pipelines...";
+bool choice_active = false;
+std::string choice_title;
+std::vector<std::string> choice_items, choice_notes;
+int choice_index = 0;
+std::atomic<int> choice_result{-1};
 float base_scale = 1.0f;
 
 // Present rate for the FPS counter.
@@ -67,7 +81,9 @@ void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
+#ifndef BB_UWP
     ImGui::GetIO().MouseDrawCursor = value;
+#endif
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -579,6 +595,11 @@ void FpsCounter() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
+#ifdef BB_UWP
+    ImGui::Text("%s  %llu/%llu MiB", FpsText().c_str(),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20));
+#else
     const auto& s = BbSettings::Get();
     ImGui::Text("%s  %s", FpsText().c_str(),
                 s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
@@ -587,6 +608,66 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                                                          : "");
+#endif
+    ImGui::End();
+}
+
+void LoadingScreen() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x * 0.48f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::Begin("##loading", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "Bloodborne");
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", loading_label.c_str());
+    const u32 done = loading_done.load(), total = loading_total.load();
+    if (total > 0) {
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "%u / %u", done, total);
+        ImGui::ProgressBar(float(done) / float(total), ImVec2(-1.0f, 0.0f), overlay);
+    }
+    ImGui::End();
+}
+
+void ChoiceBox() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(viewport->WorkSize.x * 0.46f, 0.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.86f, viewport->WorkSize.y * 0.84f));
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGui::Begin("##choice", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoNav);
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", choice_title.c_str());
+    ImGui::Separator();
+    for (int i = 0; i < int(choice_items.size()); ++i) {
+        const bool selected = (i == choice_index);
+        if (selected) {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.55f, 0.22f, 0.18f, 0.90f));
+        }
+        if (ImGui::Selectable(choice_items[size_t(i)].c_str(), selected)) {
+            choice_index = i;
+            choice_result = i;
+            choice_active = false;
+        }
+        if (selected) {
+            ImGui::PopStyleColor();
+        }
+        if (selected && size_t(i) < choice_notes.size() && !choice_notes[size_t(i)].empty()) {
+            ImGui::TextDisabled("  %s", choice_notes[size_t(i)].c_str());
+        }
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("D-Pad Up/Down: select   A: confirm   B: back");
     ImGui::End();
 }
 
@@ -618,13 +699,35 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                    int(bb_font_ttf_end - bb_font_ttf), 18.0f, &font_config);
 
     const vk::Instance vk_instance = instance.GetInstance();
-    ImGui_ImplVulkan_LoadFunctions(
-        instance.ApiVersion(),
+    struct LoaderContext {
+        VkInstance instance;
+        VkDevice device;
+    };
+    LoaderContext loader{vk_instance, static_cast<VkDevice>(instance.GetDevice())};
+    const bool functions_loaded = ImGui_ImplVulkan_LoadFunctions(
+        std::min(instance.ApiVersion(), Vulkan::TargetVulkanApiVersion),
         [](const char* name, void* user) {
-            return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(
-                *static_cast<const vk::Instance*>(user), name);
+            auto& loader = *static_cast<LoaderContext*>(user);
+            auto proc = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr(loader.device, name);
+            if (!proc) {
+                proc = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(loader.instance, name);
+            }
+#ifdef BB_UWP
+            if (!proc && (std::strstr(name, "Surface") || std::strstr(name, "Swapchain"))) {
+                return reinterpret_cast<PFN_vkVoidFunction>(+[] {
+                    std::fputs("Overlay: ImGui called an unsupported WSI function on UWP\n", stderr);
+                    std::abort();
+                });
+            }
+#endif
+            return proc;
         },
-        const_cast<vk::Instance*>(&vk_instance));
+        &loader);
+    if (!functions_loaded) {
+        std::puts("Overlay: required Vulkan functions unavailable, disabled");
+        ImGui::DestroyContext();
+        return;
+    }
 
     const VkFormat color_format = static_cast<VkFormat>(format);
     ImGui_ImplVulkan_InitInfo info{};
@@ -678,6 +781,23 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
+        if (choice_active) {
+            if (down && !event.key.repeat && !choice_items.empty()) {
+                if (event.key.key == SDLK_UP) {
+                    choice_index = (choice_index + int(choice_items.size()) - 1) % int(choice_items.size());
+                } else if (event.key.key == SDLK_DOWN) {
+                    choice_index = (choice_index + 1) % int(choice_items.size());
+                } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
+                           event.key.key == SDLK_SPACE) {
+                    choice_result = choice_index;
+                    choice_active = false;
+                } else if (event.key.key == SDLK_ESCAPE) {
+                    choice_result = int(choice_items.size()) - 1;
+                    choice_active = false;
+                }
+            }
+            return true;
+        }
         if (down && !event.key.repeat &&
             (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);
@@ -698,6 +818,22 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
         const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         const u8 button = event.gbutton.button;
+        if (choice_active) {
+            if (down && !choice_items.empty()) {
+                if (button == SDL_GAMEPAD_BUTTON_DPAD_UP) {
+                    choice_index = (choice_index + int(choice_items.size()) - 1) % int(choice_items.size());
+                } else if (button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) {
+                    choice_index = (choice_index + 1) % int(choice_items.size());
+                } else if (button == SDL_GAMEPAD_BUTTON_SOUTH || button == SDL_GAMEPAD_BUTTON_START) {
+                    choice_result = choice_index;
+                    choice_active = false;
+                } else if (button == SDL_GAMEPAD_BUTTON_EAST) {
+                    choice_result = int(choice_items.size()) - 1;
+                    choice_active = false;
+                }
+            }
+            return true;
+        }
         if (button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
             l3_down = down;
         } else if (button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
@@ -758,11 +894,38 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps);
+    return initialized &&
+           (loading || choice_active || menu_open || text_entry_active || BbSettings::Get().show_fps);
 }
 
 bool CapturesInput() {
-    return menu_open || text_entry_active;
+    return menu_open || text_entry_active || choice_active;
+}
+
+void SetLoading(bool active, u32 done, u32 total) {
+    loading_done = done;
+    loading_total = total;
+    loading = active;
+}
+
+void SetLoadingLabel(const std::string& label) {
+    std::scoped_lock lock{imgui_mutex};
+    loading_label = label;
+}
+
+void BeginChoice(const std::string& prompt, const std::vector<std::string>& items,
+                 const std::vector<std::string>& notes, int default_index) {
+    std::scoped_lock lock{imgui_mutex};
+    choice_title = prompt;
+    choice_items = items;
+    choice_notes = notes;
+    choice_index = (default_index >= 0 && default_index < int(items.size())) ? default_index : 0;
+    choice_result = -1;
+    choice_active = true;
+}
+
+int PollChoice() {
+    return choice_result.load();
 }
 
 void SetTextEntry(bool active, const std::string& prompt, const std::string& text) {
@@ -822,10 +985,16 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
 
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if (loading) {
+        LoadingScreen();
+    }
+    if (choice_active) {
+        ChoiceBox();
+    }
     if (menu_open) {
         Menu();
     }
-    if (BbSettings::Get().show_fps && !menu_open) {
+    if (BbSettings::Get().show_fps && !menu_open && !loading && !choice_active) {
         FpsCounter();
     }
     if (text_entry_active) {

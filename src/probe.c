@@ -158,7 +158,7 @@ static void check_cpu(void) {
     while (*name==' ') ++name;
     if (!*name) name="unknown processor";
     fprintf(stderr,"STOP: unsupported CPU %s: missing %s (needs Intel Core 4th generation or newer, or AMD Ryzen)\n",name,missing);
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(BB_UWP)
     char text[512];
     snprintf(text,sizeof(text),"This processor cannot run the game:\n%s\n\nMissing instructions: %s\n\n"
              "The game uses instructions of the PS4's processor. They need an Intel Core of the 4th "
@@ -168,16 +168,35 @@ static void check_cpu(void) {
     exit(24);
 }
 #ifdef _WIN32
+#ifdef BB_UWP
+extern IMAGE_DOS_HEADER __ImageBase;
+static int readable_ptr(uintptr_t address, size_t bytes) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((const void *)address, &mbi, sizeof(mbi))) return 0;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return 0;
+    const uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    return address >= (uintptr_t)mbi.BaseAddress && bytes <= end - address;
+}
+#endif
 static void describe_address(char *out, size_t size, uintptr_t address) {
+    if (image && address-(uintptr_t)image<0x20000000) { snprintf(out,size,"guest offset 0x%" PRIxPTR,address-(uintptr_t)image); return; }
+#ifdef BB_UWP
+    PVOID base = NULL;
+    if (RtlPcToFileHeader((PVOID)address, &base) && base) {
+        if (base == (PVOID)&__ImageBase) snprintf(out, size, "bbport-uwp.exe+0x%" PRIxPTR, address - (uintptr_t)base);
+        else snprintf(out, size, "%p+0x%" PRIxPTR, base, address - (uintptr_t)base);
+        return;
+    }
+#else
     HMODULE module=NULL;
     char name[MAX_PATH]="?";
-    if (image && address-(uintptr_t)image<0x20000000) { snprintf(out,size,"guest offset 0x%" PRIxPTR,address-(uintptr_t)image); return; }
     if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)address,&module) && module) {
         GetModuleFileNameA(module,name,sizeof(name));
         const char *base=strrchr(name,'\\');
         snprintf(out,size,"%s+0x%" PRIxPTR,base ? base+1 : name,address-(uintptr_t)module);
         return;
     }
+#endif
     snprintf(out,size,"%p",(void *)address);
 }
 static int fatal_reported;
@@ -200,11 +219,20 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
      * keep no frame pointers, so the rbp chain below can skip their caller. */
     for (int slot=0, shown=0; slot<64 && shown<6; ++slot) {
         uintptr_t value=0;
+#ifdef BB_UWP
+        const uintptr_t sp_slot = (uintptr_t)(c->Rsp + slot * 8);
+        if (!readable_ptr(sp_slot, sizeof(value))) break;
+        memcpy(&value, (const void *)sp_slot, sizeof(value));
+        PVOID owner = NULL;
+        int code_ref = (image && value - (uintptr_t)image < 0x20000000) ||
+                       (RtlPcToFileHeader((PVOID)value, &owner) && owner == (PVOID)&__ImageBase);
+#else
         SIZE_T got=0;
         if (!ReadProcessMemory(GetCurrentProcess(),(void *)(uintptr_t)(c->Rsp+slot*8),&value,sizeof(value),&got) || got!=sizeof(value)) break;
         HMODULE owner=NULL;
         int code_ref=(image && value-(uintptr_t)image<0x20000000) ||
                      (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)value,&owner) && owner==GetModuleHandleA(NULL));
+#endif
         if (!code_ref) continue;
         describe_address(where,sizeof(where),value);
         fprintf(stderr,"  [rsp+0x%x] %s\n",slot*8,where);
@@ -214,8 +242,14 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     uintptr_t rbp=(uintptr_t)c->Rbp;
     for (int depth=0; depth<24 && rbp; ++depth) {
         uintptr_t frame[2];
+#ifdef BB_UWP
+        if (!readable_ptr(rbp, sizeof(frame))) break;
+        memcpy(frame, (const void *)rbp, sizeof(frame));
+        if (frame[0] <= rbp) break;
+#else
         SIZE_T got=0;
         if (!ReadProcessMemory(GetCurrentProcess(),(void *)rbp,frame,sizeof(frame),&got) || got!=sizeof(frame) || frame[0]<=rbp) break;
+#endif
         describe_address(where,sizeof(where),frame[1]);
         fprintf(stderr,"  #%d %s\n",depth,where);
         rbp=frame[0];
@@ -228,6 +262,14 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
+#ifdef BB_UWP
+        /* A reserved or swapped-out UWP guest page must be committed/paged-in before GPU tracking
+         * resolves its access; otherwise GPU fault handling would retry an uncommitted page. */
+        uintptr_t fault_pc=(uintptr_t)info->ContextRecord->Rip;
+        int guest_code=image && fault_pc-(uintptr_t)image<0x20000000;
+        if (runtime_memory_handle_commit_fault_at((uintptr_t)record->ExceptionInformation[1],(int)record->ExceptionInformation[0],guest_code))
+            return EXCEPTION_CONTINUE_EXECUTION;
+#endif
         /* GPU page tracking (write-protected guest pages) is resolved first. */
         if (gpu_enabled && bbgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
         if (runtime_fault_recover) {
@@ -248,6 +290,12 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         /* Faults in guest code, the loader or the runtime end the process with a report; drivers
          * and system libraries may handle their own exceptions. */
         uintptr_t rip=(uintptr_t)info->ContextRecord->Rip;
+#ifdef BB_UWP
+        PVOID module = NULL;
+        RtlPcToFileHeader((PVOID)rip, &module);
+        int ours = (image && rip - (uintptr_t)image < 0x20000000) ||
+                   module == (PVOID)&__ImageBase || !module;
+#else
         HMODULE self=GetModuleHandleA(NULL), module=NULL;
         int ours=(image && rip-(uintptr_t)image<0x20000000) ||
                  (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)rip,&module) && module==self) ||
@@ -258,13 +306,16 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         if (!ours && module && (module==GetModuleHandleA("ucrtbase.dll") || module==GetModuleHandleA("msvcrt.dll") ||
                                 module==GetModuleHandleA("vcruntime140.dll")))
             ours=1;
+#endif
         if (ours) return fatal_exception(info);
     }
     /* BB_STRICT_HANDLES=1: a closed or invalid handle used anywhere is reported (diagnostics). */
     if (code==0xC0000008 /* STATUS_INVALID_HANDLE */) return fatal_exception(info);
     return EXCEPTION_CONTINUE_SEARCH;
 }
+#ifndef BB_UWP
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
+#endif
 /* Guest code reads its TCB with `mov rax, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
  * the displacement becomes the TEB TLS slot that holds the guest TCB (runtime_thread.c). */
 uint32_t runtime_thread_tcb_offset(void);
@@ -453,7 +504,10 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
  * released before the new process opens its own. */
 void runtime_restart(void) {
     fflush(NULL);
-#ifdef _WIN32
+#ifdef BB_UWP
+    puts("Runtime: settings written; relaunch the app from Xbox Home to apply startup patches");
+    TerminateProcess(GetCurrentProcess(), 0);
+#elif defined(_WIN32)
     /* run.py sets BB_RESTART_COMMAND: the launch command line, started again (new patches). */
     const char *command=getenv("BB_RESTART_COMMAND");
     puts("Runtime: restarting through run.py");
@@ -498,7 +552,9 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
      * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them. */
+#ifndef BB_UWP
     runtime_memory_reserve();
+#endif
     runtime_thread_tcb_offset();
 #endif
     int cpu_only = 0, strict_imports = 0;
@@ -547,6 +603,7 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;
     AddVectoredExceptionHandler(1, vectored_fault);
+#ifndef BB_UWP
     SetUnhandledExceptionFilter(unhandled_fault);
     if (getenv("BB_STRICT_HANDLES")) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};
@@ -555,6 +612,7 @@ int main(int argc, char **argv) {
         if (!SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy,&strict,sizeof(strict)))
             fprintf(stderr,"BB_STRICT_HANDLES: policy not set (%lu)\n",GetLastError());
     }
+#endif
     (void)timeout_seconds; /* no watchdog on Windows */
 #else
     page_size = (size_t)sysconf(_SC_PAGESIZE);

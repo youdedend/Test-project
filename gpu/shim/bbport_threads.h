@@ -20,10 +20,12 @@ namespace BbThreads {
 #ifdef _WIN32
 /// Hardware threads available to the process (its affinity mask).
 inline unsigned Available() {
+#ifndef BB_UWP
     DWORD_PTR process = 0, system = 0;
     if (GetProcessAffinityMask(GetCurrentProcess(), &process, &system) && process) {
         return std::max(1, std::popcount(static_cast<unsigned long long>(process)));
     }
+#endif
     return std::max(1u, std::thread::hardware_concurrency());
 }
 

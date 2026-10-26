@@ -34,6 +34,10 @@ void bbgpu_dump_guest_writes(void *ucontext);
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
+/* Controller/keyboard modal choice dialog (launcher and save-slot selection).
+ * poll returns -1 while open, -2 cancelled, or 0..count-1 when chosen. */
+int bbgpu_choice_begin(const char *title, const char *const *items, int count, int focus);
+int bbgpu_choice_poll(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
 /* 1 while the game should be silent: bbport.ini mute_unfocused is on and the window does not

@@ -82,7 +82,16 @@ GraphicsPipeline::GraphicsPipeline(
         .pVertexAttributeDescriptions = sdata.vertex_attributes.data(),
     };
 
-    const auto topology = LiverpoolToVK::PrimitiveType(key.prim_type);
+#ifdef BB_UWP
+    constexpr bool geometry_expansion = true;
+#else
+    constexpr bool geometry_expansion = false;
+#endif
+    const auto topology = geometry_expansion &&
+                                  (key.prim_type == AmdGpu::PrimitiveType::RectList ||
+                                   key.prim_type == AmdGpu::PrimitiveType::QuadList)
+                              ? vk::PrimitiveTopology::eTriangleList
+                              : LiverpoolToVK::PrimitiveType(key.prim_type);
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
         .topology = topology,
     };
@@ -90,7 +99,9 @@ GraphicsPipeline::GraphicsPipeline(
     const bool is_rect_list = key.prim_type == AmdGpu::PrimitiveType::RectList;
     const bool is_quad_list = key.prim_type == AmdGpu::PrimitiveType::QuadList;
     const vk::PipelineTessellationStateCreateInfo tessellation_state = {
-        .patchControlPoints = is_rect_list ? 3U : (is_quad_list ? 4U : key.patch_control_points),
+        .patchControlPoints = geometry_expansion
+                                  ? key.patch_control_points
+                                  : (is_rect_list ? 3U : (is_quad_list ? 4U : key.patch_control_points)),
     };
 
     vk::StructureChain raster_chain = {
@@ -183,6 +194,17 @@ GraphicsPipeline::GraphicsPipeline(
             .module = modules[stage],
             .pName = "main",
         });
+    } else if (geometry_expansion && (is_rect_list || is_quad_list)) {
+        const auto type = is_quad_list ? AuxShaderType::QuadListGS : AuxShaderType::RectListGS;
+        if (!preloading) {
+            const auto& fs_info = runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs;
+            sdata.tcs = Shader::Backend::SPIRV::EmitAuxilaryTessShader(type, fs_info);
+        }
+        shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eGeometry,
+            .module = CompileSPV(sdata.tcs, instance.GetDevice()),
+            .pName = "main",
+        });
     }
     stage = u32(Shader::SwStage::TessellationControl);
     if (infos[stage]) {
@@ -191,7 +213,7 @@ GraphicsPipeline::GraphicsPipeline(
             .module = modules[stage],
             .pName = "main",
         });
-    } else if (is_rect_list || is_quad_list) {
+    } else if (!geometry_expansion && (is_rect_list || is_quad_list)) {
         const auto type = is_quad_list ? AuxShaderType::QuadListTCS : AuxShaderType::RectListTCS;
         if (!preloading) {
             const auto& fs_info = runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs;
@@ -210,7 +232,7 @@ GraphicsPipeline::GraphicsPipeline(
             .module = modules[stage],
             .pName = "main",
         });
-    } else if (is_rect_list || is_quad_list) {
+    } else if (!geometry_expansion && (is_rect_list || is_quad_list)) {
         if (!preloading) {
             const auto& fs_info = runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs;
             sdata.tes = Shader::Backend::SPIRV::EmitAuxilaryTessShader(
@@ -503,7 +525,9 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
             bindings.push_back({
                 .binding = binding++,
                 .descriptorType = vk::DescriptorType::eStorageBuffer,
-                .descriptorCount = 1,
+                .descriptorCount = buffer.buffer_type == Shader::BufferType::DmaBuffers
+                                       ? Shader::NUM_DMA_BUFFERS
+                                       : 1u,
                 .stageFlags = stage_bit,
             });
         }

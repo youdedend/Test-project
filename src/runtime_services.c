@@ -12,7 +12,9 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#ifndef BB_UWP
 #include <SDL3/SDL.h>
+#endif
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -110,8 +112,12 @@ static time_t quit_armed;
 static pthread_mutex_t quit_lock=PTHREAD_MUTEX_INITIALIZER;
 static void quit_game(void) {
     note("Quit to Desktop");
+#ifdef BB_UWP
+    bb_uwp_request_quit();
+#else
     SDL_Event quit={.type=SDL_EVENT_QUIT};
     SDL_PushEvent(&quit);
+#endif
 }
 static int quit_ready(void) { return quit_armed && time(NULL)-quit_armed<120; }
 void runtime_quit_on_open(const char *guest) {

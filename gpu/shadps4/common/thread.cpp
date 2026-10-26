@@ -3,6 +3,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <ctime>
 #include <string>
 #include <thread>
@@ -74,6 +75,14 @@ void SetCurrentThreadRealtime(const std::chrono::nanoseconds period_ns) {
     }
 }
 
+#elif defined(_WIN32)
+
+// bbport: the vblank thread wakes 60 times a second for very little work;
+// at normal priority busy GPU threads can delay its ticks by up to a frame on Xbox.
+void SetCurrentThreadRealtime(const std::chrono::nanoseconds period_ns) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+}
+
 #else
 
 void SetCurrentThreadRealtime(const std::chrono::nanoseconds period_ns) {
@@ -114,13 +123,42 @@ bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanosec
                    const bool interruptible) {
     const auto begin_sleep = std::chrono::high_resolution_clock::now();
 
-    LARGE_INTEGER interval{
-        .QuadPart = -1 * (duration.count() / 100u),
+    struct Timer {
+        HANDLE handle = [] {
+            HANDLE timer = ::CreateWaitableTimerExW(nullptr, nullptr,
+                                                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                    TIMER_ALL_ACCESS);
+            return timer ? timer : ::CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+        }();
+        std::chrono::nanoseconds early{};
+        ~Timer() {
+            if (handle) {
+                ::CloseHandle(handle);
+            }
+        }
     };
-    HANDLE timer = ::CreateWaitableTimer(NULL, TRUE, NULL);
-    SetWaitableTimer(timer, &interval, 0, NULL, NULL, 0);
-    const auto ret = WaitForSingleObjectEx(timer, INFINITE, interruptible);
-    ::CloseHandle(timer);
+    thread_local Timer timer;
+    DWORD ret = WAIT_OBJECT_0;
+    if (duration > timer.early && timer.handle) {
+        const auto sleep = duration - timer.early;
+        LARGE_INTEGER interval{
+            .QuadPart = -1 * (sleep.count() / 100u),
+        };
+        SetWaitableTimer(timer.handle, &interval, 0, NULL, NULL, 0);
+        ret = WaitForSingleObjectEx(timer.handle, INFINITE, interruptible);
+        const auto late = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::high_resolution_clock::now() - begin_sleep) -
+                          sleep;
+        using std::chrono::microseconds;
+        const auto target = std::clamp<std::chrono::nanoseconds>(
+            late + microseconds(150), std::chrono::nanoseconds(0), microseconds(1500));
+        timer.early += (target - timer.early) / 8;
+    }
+    if (ret == WAIT_OBJECT_0) {
+        while (std::chrono::high_resolution_clock::now() - begin_sleep < duration) {
+            YieldProcessor();
+        }
+    }
 
     if (remaining) {
         const auto end_sleep = std::chrono::high_resolution_clock::now();
