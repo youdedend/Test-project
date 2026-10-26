@@ -60,6 +60,8 @@ void runtime_sample_threads(void);
 int runtime_entered_game(void);
 int bb_uwp_dialog_key(uint32_t key, int down, int repeat);
 uint64_t bbgpu_uwp_present_count(void);
+int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total, uint32_t* out_stage,
+                                     uint64_t* out_hash, uint64_t* out_partner_hash);
 }
 
 static std::atomic<bool> g_finished{false};
