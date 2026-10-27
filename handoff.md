@@ -55,7 +55,7 @@ Standing goals and constraints:
 | Version shown by that package | **`1.0.26300.129`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
 | Published pre-release | **`xbox-alpha-1.0.26300.0211`** — [releases/tag/xbox-alpha-1.0.26300.0211](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0211), asset `BloodborneXbox-1.0.26300.211.zip` (10,214,137 B), target `23e7f4d` (code identical to `03b74ac`, only this document differs). Previous pre-release was `xbox-alpha-1.0.26300.0034` |
 | Tags / merge | tag `xbox-alpha-1.0.26300.0211` on the work branch only (a pre-release tag, not on `main`); nothing merged, no PR opened for this work |
-| Console validation of this build | **none yet** (published builds: `1.0.26300.129` from run `40432005224`, and `1.0.26300.211` from the pre-release above — same code) |
+| Console validation of this build | **installed, not yet run** — `1.0.26300.211` registered on the console (Games and apps), first launch pending (published builds: `1.0.26300.129` from run `40432005224`, and `1.0.26300.211` from the pre-release above — same code) |
 | Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
