@@ -132,6 +132,12 @@ public:
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
+#ifdef BB_UWP
+    /// bbport: gives retired dense guest-DMA arenas back once the GPU is done with them. Called by
+    /// Rasterizer::OnSubmit (after DrainDrawPipe and the submit), hence public.
+    void ReleaseRetiredArenas();
+#endif
+
 private:
     struct ArenaBinds {
         const Buffer* arena;
@@ -150,7 +156,6 @@ private:
 #ifdef BB_UWP
     void InitializeDenseBuffers();
     const Buffer* GetDenseArena(u64 first_block, u64 last_block);
-    void ReleaseRetiredArenas();
     void EnsureDenseResident(const Buffer* arena, u64 first_block, u64 last_block);
     struct DenseView {
         const Buffer* arena{};
