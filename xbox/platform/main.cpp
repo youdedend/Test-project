@@ -1838,22 +1838,39 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
             uint64_t last_presents = 0;
             unsigned stalled_ticks = 0;
             bool stall_dumped = false;
+            uint64_t last_sampled_usage = 0;
             for (unsigned sample = 0; !g_finished.load(); ++sample) {
-                Sleep(5000);
+                // bbport: 5 s normally, 1 s once the app is near its limit. The two builds that
+                // ended in an allocation failure both lost the interesting part: the sample cap
+                // (`sample < 24`) had stopped the lines, so the last printed value was ~4,600 MiB
+                // while the FATAL line said 5,108 - it looked like the app died at 4,600. Near the
+                // limit every sample is printed, whoever asked.
+                const uint64_t limit_before = bb_uwp_app_memory_limit();
+                const uint64_t usage_before = bb_uwp_app_memory_usage();
+                const bool near_limit =
+                    limit_before != 0 && usage_before + (1024ULL << 20) >= limit_before;
+                Sleep(near_limit ? 1000 : 5000);
                 const uint64_t presents = bbgpu_uwp_present_count();
-                if (sample < 24 || stalled_ticks > 0) {
+                if (sample < 24 || stalled_ticks > 0 || near_limit) {
+                    const uint64_t usage = bb_uwp_app_memory_usage();
+                    const uint64_t limit = bb_uwp_app_memory_limit();
+                    const long long delta =
+                        static_cast<long long>(usage) - static_cast<long long>(last_sampled_usage);
+                    last_sampled_usage = usage;
                     // `guest pinned`: the guest pages the pager may not hand back. It grows with
                     // what the game touches and no eviction returns it, so it is the number that
                     // explains a usage line sitting at the limit while the texture cache is
-                    // evicting.
+                    // evicting. `since the last sample`: how fast it is climbing, which is what
+                    // says whether an allocation failure is a second away or a minute.
                     std::printf(
                         "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu, "
-                        "guest pinned=%llu MiB)\n",
-                        static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
-                        static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                        "guest pinned=%llu MiB, %+lld MiB since the last sample)\n",
+                        static_cast<unsigned long long>(usage >> 20),
+                        static_cast<unsigned long long>(limit >> 20),
                         unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
                         static_cast<unsigned long long>(presents),
-                        static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20));
+                        static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20),
+                        delta / 1024 / 1024);
                 }
                 if (runtime_entered_game()) {
                     if (!auto_sampled && ++entered_ticks >= 6) {

@@ -427,6 +427,65 @@ allocation now fails at the platform limit, which is a capacity problem, not a s
 
 ---
 
+## 2i. "It crashes at 4,600-4,700, not at 5,100" — where that reading comes from (2026-10-27)
+
+Logs of the `.504` run in `docs/hardware-test-15/` (`loader.log.txt` 810 lines). It ends the same
+way as `.424` and answers the question with numbers.
+
+**It does not crash at 4,600-4,700. The last lines *printed before* the crash are there; the crash
+line itself says 5,108 MiB.**
+
+| Line | Usage |
+|---|---|
+| last `UWP memory telemetry:` | `4628/5120 MiB (level=2, presents=801, guest pinned=1350 MiB)` |
+| last `Texture cache: memory pressure` | `4612 of 4096 MiB (critical 4352, guest pinned 1351)` |
+| the failure | `[uwp-vk] FATAL vmaCreateBuffer(16384 KiB, type=HostUncached) -> -2; Xbox AppMemory 5108/5120 MiB` |
+
+Three separate reasons make that 4,600 look like the place it dies:
+
+1. **The telemetry stopped talking.** `main.cpp` prints the memory line only for `sample < 24`
+   (2 minutes of a 5-second loop) after the first prints, i.e. **10 lines in an entire session**.
+   The rest of the run is unlogged, so the last number before the wall is a stale one from hundreds
+   of presents earlier. Fixed in `.0512`: the line keeps printing when the app is within 1 GiB of
+   its limit, at 1 s instead of 5 s, with the change since the last sample.
+2. **`of 4096` is the pressure mark, not the ceiling.** The texture cache compares the whole app's
+   usage against its own marks (`limit-1280 / -1024 / -768` = 3840 / 4096 / 4352) and prints the
+   pressure mark in the `of` slot, so `4611 of 4096` reads like it is over budget when the budget is
+   5120. Fixed in `.0512`: the line now prints `limit 5120` as well.
+3. **4,400-4,700 *is* the steady state the GC maintains** — evicting images and paging guest pages to
+   hold the app there. It is a target, not a floor: nothing in the code throttles a *new
+   allocation* at 4,700, so the app can leave the band in a handful of frames.
+
+What carried it from 4,628 to 5,108 was one burst, all of it visible in the last 30 lines: the dense
+GPU arenas went `live 496 MiB` → `live 912 MiB` (**+416 MiB** of new guest-backed arenas, 31 → 57
+DMA views) for a new area, while the headroom passes went `4948 → 4936 → 4958` (three 64 MiB
+page-outs) and then `4977 → 5028 → 5045 → 5077 → 5110` with **0 MiB** released each time. The pager
+was out of pageable pages — `guest pinned=1351 MiB`, up from 0 at boot — and the texture cache had
+nothing more it is allowed to free (its last three reports evicted 1, 0 and 0 images). The failing
+allocation was `HostUncached` (guest-side), which no texture eviction can satisfy.
+
+Where the 5,108 MiB sat at that moment, from the same line and report:
+
+| Part | MiB |
+|---|---|
+| guest pinned (unpageable: guest code pages and WC_GARLIC pages the game touched) | 1,351 |
+| guest unpinned private | 401 |
+| VMA `heap[0]` (all GPU allocations) | 2,157 of a 4,096 MiB driver budget |
+| the rest (guest code, stacks, loaded DLLs, swap views, staging, frame generation) | ~1,200 |
+
+So the answer to "why not 5,000 or 5,100": the app *does* reach 5,108 — but it gets there in the
+last seconds, in one area transition, after every mechanism that holds it at ~4,600 has run out of
+things it may free.
+
+### Diagnostics changed (no behaviour change)
+
+| What | Where |
+|---|---|
+| Telemetry keeps printing near the limit (within 1 GiB), every 1 s, and shows `%+lld MiB since the last sample` | `xbox/platform/main.cpp:1836-1878` |
+| The eviction report prints the app limit next to the mark: `(limit 5120, critical 4352, guest pinned …)` | `texture_cache.cpp:1447-1461` |
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**
