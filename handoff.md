@@ -53,9 +53,9 @@ Standing goals and constraints:
 | Last green CI | run `40432005224` — [actions/runs/40432005224](https://github.com/youdedend/Test-project/actions/runs/40432005224), both jobs green, all tests green |
 | Package built by it | `BloodborneXbox-1.0.26300.129` — 10,217,374 B, contains `BloodborneLauncher_1.0.26300.129_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
 | Version shown by that package | **`1.0.26300.129`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published releases | none from this work; latest pre-release is still `xbox-alpha-1.0.26300.0034` |
-| Tags / merge | none added, nothing merged, no PR opened for this work |
-| Console validation of this build | **none yet** |
+| Published pre-release | **`xbox-alpha-1.0.26300.0211`** — [releases/tag/xbox-alpha-1.0.26300.0211](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0211), asset `BloodborneXbox-1.0.26300.211.zip` (10,214,137 B), target `23e7f4d` (code identical to `03b74ac`, only this document differs). Previous pre-release was `xbox-alpha-1.0.26300.0034` |
+| Tags / merge | tag `xbox-alpha-1.0.26300.0211` on the work branch only (a pre-release tag, not on `main`); nothing merged, no PR opened for this work |
+| Console validation of this build | **none yet** (published builds: `1.0.26300.129` from run `40432005224`, and `1.0.26300.211` from the pre-release above — same code) |
 | Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -240,7 +240,11 @@ first line is `Bloodborne Xbox Series X|S UWP loader started`); confirm it in th
 "Manage app" / the `.appx` filename.
 
 **Workflow triggers:** `push` on `arena/**` and `main`, plus `workflow_dispatch`. A pre-release is
-published only when the head commit message contains `[release]` or a dispatch passes `release=true`.
+published only when the head commit message contains `[release]` or a dispatch passes `release=true`
+(its default). **Re-running a finished run never publishes**: a rerun replays the stored event
+payload, so a `push` run without `[release]` in the head commit skips the publish step every time.
+Version is generated at package time (`1.0.{YY%100*1000+doy}.{HHmm}`), so each run stamps a new one;
+the tag zero-pads the last field (`1.0.26300.211` -> `xbox-alpha-1.0.26300.0211`).
 
 **Last three runs of this work:**
 
