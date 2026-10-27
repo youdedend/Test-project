@@ -68,7 +68,10 @@ warnings and the log endpoints are unreachable from the sandbox).
 ## 2b. Test #13 logs (2026-10-27, after `1.0.26300.211` was published) — the OLD build ran
 
 The six log files supplied after the release are from the **pre-fix binary**, not from
-`1.0.26300.129` / `1.0.26300.211`. Proof, all from `loader.log.txt` / `errors.log.txt`:
+`1.0.26300.129` / `1.0.26300.211`. **Confirmed on the console**: the Games and apps list shows
+`BloodborneLauncher_1.0.26300.34_x64__5c4hjcx6a8gg4`, i.e. the `.34` package built from
+`4d1797d`, so the newer `.appx` never registered (the upgrade attempt either was never made or
+failed registration). Proof, all from `loader.log.txt` / `errors.log.txt`:
 
 | Evidence | Old build | This run | New build would print |
 |---|---|---|---|
