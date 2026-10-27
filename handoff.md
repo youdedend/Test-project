@@ -48,13 +48,13 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `d37adf7` — *diag(memory): report the unpageable (pinned) guest memory everywhere it matters* (release target) |
+| HEAD | `b7fff3c` — *diag(memory): keep printing usage near the limit, and print the limit itself* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40452632319` — [actions/runs/40452632319](https://github.com/youdedend/Test-project/actions/runs/40452632319), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.504` — contains `BloodborneLauncher_1.0.26300.504_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,217,913 B, sha256 `5addf28453965d7b76fe55df04fa74f288db7d39d0494313d3c02bd9cf7ee81f`) |
-| Version shown by that package | **`1.0.26300.504`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0504`** — [releases/tag/xbox-alpha-1.0.26300.0504](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0504), target `d37adf7` (run `40452632319`, both jobs green, publish step ran): **pinned guest memory printed next to every budget number** (§2h; no behaviour change). Previous: `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
-| Console validation of this build | **not installed yet** — the console ran `.424` (confirmed: the `slot_vector` stop is gone, §2h); `.0504` (pinned-memory diagnostics) is published and waiting to be added through Device Portal |
+| Last green CI | run `40455238798` — [actions/runs/40455238798](https://github.com/youdedend/Test-project/actions/runs/40455238798), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.534` — contains `BloodborneLauncher_1.0.26300.534_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,218,137 B, sha256 `8f45e0ded23ac80141a20e76f396275bfa506b39ff65729b833d0c0a9c53d265`) |
+| Version shown by that package | **`1.0.26300.534`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0534`** — [releases/tag/xbox-alpha-1.0.26300.0534](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0534), target `b7fff3c` (run `40455238798`, both jobs green, publish step ran): **memory telemetry keeps printing near the limit (1 s) with the delta, and the eviction report prints the 5,120 MiB limit** (§2i; no behaviour change). Previous: `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
+| Console validation of this build | **not installed yet** — the console ran `.504` (§2i: `guest pinned` works, the stop is the 5,108/5,120 MiB allocation wall); `.534` (near-limit telemetry) is published and waiting for Device Portal |
 | Open blocker | the crash is now a **capacity** problem, not a stale id: the app hits the platform's 5,120 MiB limit with ~1.3 GiB of it unpageable guest memory (§2h) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
