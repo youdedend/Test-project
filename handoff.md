@@ -857,6 +857,15 @@ before the stop, and whether it reproduces with the upscaler off.
   `arena/**` trigger, so pushes build automatically.
 - Do not reintroduce anything listed in §11.
 - Never claim the crash is fixed without a console run.
+- **Standing decision (2026-10-27, for the 5,120 MiB wall):** when an allocation genuinely fails
+  after the page-out retries, the app may **degrade instead of stopping** — full page-out, then
+  drop re-uploadable textures, then step the internal resolution / frame generation down one notch
+  and retry. The `buffer.cpp` assertion stays as the last resort, so nothing is weakened to get a
+  green run: a failure that survives every step still stops and still logs why. Not implemented yet
+  (§13).
+- **Next console test (user's choice, 2026-10-27):** wait for the `.559` log before building anything
+  else. Priority if it still hits the wall: (1) pager stall counters, (2) the degradation path
+  above, (3) the ~1 GiB pre-first-frame baseline audit.
 
 ---
 
