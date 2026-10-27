@@ -57,6 +57,7 @@ Standing goals and constraints:
 | Tags / merge | tag `xbox-alpha-1.0.26300.0211` on the work branch only (a pre-release tag, not on `main`); nothing merged, no PR opened for this work |
 | Console validation of this build | **installed, not yet run** — `1.0.26300.211` registered on the console (Games and apps), first launch pending (published builds: `1.0.26300.129` from run `40432005224`, and `1.0.26300.211` from the pre-release above — same code) |
 | Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
+| Latest CI (precompile isolation, §2c) | run `40439891299` on `0234b1a` — both jobs green, all tests green; artifact `BloodborneXbox-1.0.26300.246` (10,217,299 B) built, **not** published as a release |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
 errors were caught and fixed that way (§7). No local GPU build is possible in the agent sandbox (see
@@ -158,8 +159,9 @@ Not recovered on purpose: faults inside the driver call (`Pipeline` phase) hand 
 back before entering Mesa, and a `longjmp` out of a faulting recompiler frame skips destructors — so a
 fault leaks that shader's IR pools. Both are bounded and deliberate.
 
-**Unproven on hardware** — as with everything in this document, CI (clang-cl, run check below) says it
-builds; only a Series S/X run says it works.
+**Unproven on hardware** — as with everything in this document, CI (clang-cl) says it builds: run
+`40439891299` on `0234b1a`, both jobs green, UWP platform tests green, package
+`BloodborneXbox-1.0.26300.246` built as a run artifact (no release was published for it).
 
 ---
 
