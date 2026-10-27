@@ -628,8 +628,12 @@ static void *uwp_pager(void *unused) {
              * window pages (include_views = 1) that the GPU still read: every pass then freed
              * less private commit than it churned, and the guest threads it stalled were the
              * ones loading the next area. A 2 MiB pass keeps the copy thread cheap. */
-            if (used > limit - (UINT64_C(384) << 20)) draining = 1;
-            if (used <= limit - (UINT64_C(512) << 20)) draining = 0;
+            // bbport: start earlier than the 384 MiB band. The last two runs both died in an
+            // area load that added ~300-400 MiB in a second while the pager was still working at
+            // 2 MiB a pass; starting at 640 MiB of headroom gives it that time, and the disk
+            // budget bounds what it can take either way.
+            if (used > limit - (UINT64_C(640) << 20)) draining = 1;
+            if (used <= limit - (UINT64_C(768) << 20)) draining = 0;
             if (draining) out = uwp_swap_reclaim(UINT64_C(2) << 20, 0);
         }
         uint64_t now = GetTickCount64();
@@ -666,7 +670,7 @@ void runtime_memory_start_paging(void) {
     if (pthread_create(&thread, NULL, uwp_pager, NULL)) uwp_fail("pager thread", 0);
     pthread_detach(thread);
     uwp_swap_started = 1;
-    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=384 MiB; "
+    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=640 MiB; "
            "private pages %s; disk budget=%" PRIu64 " MiB\n",
            bb_uwp_app_memory_limit() >> 20,
            uwp_pin_private_pages() ? "pinned by BB_UWP_PIN_PRIVATE" : "pageable",

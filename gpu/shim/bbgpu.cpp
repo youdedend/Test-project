@@ -357,6 +357,15 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+/// bbport: last-resort reclaim for a failed allocation (handoff §10). The buffer path asks for it
+/// after the guest pages have been paged out; it returns what the texture cache could still free.
+extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
+    if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
+        return r->GetTextureCache().EmergencyReclaim(need);
+    }
+    return 0;
+}
+
 extern "C" void bbgpu_flush_caches(void) {
     if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
         r->GetPipelineCache().FlushCaches();

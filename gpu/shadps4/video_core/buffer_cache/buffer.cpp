@@ -11,6 +11,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 #include <vk_mem_alloc.h>
+#include <chrono>
 #include <cstdio>
 
 #ifdef BB_UWP
@@ -18,6 +19,45 @@ extern "C" uint64_t bb_uwp_app_memory_usage(void);
 extern "C" uint64_t bb_uwp_app_memory_limit(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
 extern "C" uint64_t runtime_memory_pinned_bytes(void);
+extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+
+namespace {
+/// bbport: how much of the app budget a failed allocation needs back, and the last resort when
+/// paging guest pages out was not enough: hand back everything the texture cache may still take.
+/// This is the approved ladder (handoff §10) - page out, then images, then let the unmodified
+/// assertion stop a run that survives both. Returns the bytes that were released; prints what
+/// each step cost, because the same steps run on the GPU thread and the console has shown a 10 s
+/// frame stall while they did (docs/hardware-test-18).
+u64 UwpEmergencyRelease(u64 size, const char* why) {
+    const u64 limit = bb_uwp_app_memory_limit();
+    if (limit == 0) {
+        return 0;
+    }
+    const u64 usage = bb_uwp_app_memory_usage();
+    const u64 wanted = usage + size + (96ULL << 20) > limit ? usage + size + (96ULL << 20) - limit : 0;
+    const auto start = std::chrono::steady_clock::now();
+    const u64 guest = wanted ? runtime_memory_page_out(static_cast<size_t>(wanted)) : 0;
+    const auto after_guest = std::chrono::steady_clock::now();
+    const u64 need_now = bb_uwp_app_memory_usage() + size + (96ULL << 20) > limit
+                             ? bb_uwp_app_memory_usage() + size + (96ULL << 20) - limit
+                             : 0;
+    const u64 images = bbgpu_uwp_emergency_reclaim(need_now ? need_now : size);
+    const auto done = std::chrono::steady_clock::now();
+    const auto ms = [](auto from, auto to) {
+        return static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count());
+    };
+    std::printf("UWP memory emergency (%s): need %llu MiB; paged out %llu MiB in %lld ms, "
+                "freed %llu MiB of images in %lld ms (usage now %llu/%llu MiB)\n",
+                why, static_cast<unsigned long long>(wanted >> 20),
+                static_cast<unsigned long long>(guest >> 20), ms(start, after_guest),
+                static_cast<unsigned long long>(images >> 20), ms(after_guest, done),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(limit >> 20));
+    std::fflush(stdout);
+    return guest + images;
+}
+} // namespace
 #endif
 
 namespace VideoCore {
@@ -113,21 +153,30 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         if (buffer_ci.size >= (256ULL << 10)) {
             const uint64_t limit = bb_uwp_app_memory_limit();
             if (limit > 0) {
-                for (unsigned pass = 0; pass < 6; ++pass) {
-                    const uint64_t usage = bb_uwp_app_memory_usage();
-                    if (usage + buffer_ci.size + (96ULL << 20) <= limit) {
-                        break;
+                const uint64_t usage = bb_uwp_app_memory_usage();
+                const uint64_t room = buffer_ci.size + (96ULL << 20);
+                if (usage + room > limit) {
+                    // Ask for what is missing in one go (capped at 256 MiB) instead of a fixed
+                    // 64 MiB a pass: a 300 MiB area load needed five passes, each a page-table
+                    // sweep on the GPU thread, and the console logged a 10 s frame stall while
+                    // they ran.
+                    const uint64_t want = std::min<u64>(usage + room - limit, 256ULL << 20);
+                    const auto start = std::chrono::steady_clock::now();
+                    const size_t paged = runtime_memory_page_out(static_cast<size_t>(want));
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - start)
+                                        .count();
+                    if (paged != 0) {
+                        std::printf("UWP buffer headroom: swap paged out %llu MiB for a %llu KiB "
+                                    "allocation in %lld ms (usage %llu/%llu MiB)\n",
+                                    static_cast<unsigned long long>(paged >> 20),
+                                    static_cast<unsigned long long>(buffer_ci.size >> 10),
+                                    static_cast<long long>(ms),
+                                    static_cast<unsigned long long>(
+                                        bb_uwp_app_memory_usage() >> 20),
+                                    static_cast<unsigned long long>(limit >> 20));
+                        std::fflush(stdout);
                     }
-                    const size_t paged = runtime_memory_page_out(64ULL << 20);
-                    if (paged == 0) {
-                        break;
-                    }
-                    std::printf("UWP buffer headroom pass %u: swap paged out %llu MiB "
-                                "(usage %llu/%llu MiB)\n",
-                                pass + 1, static_cast<unsigned long long>(paged >> 20),
-                                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
-                                static_cast<unsigned long long>(limit >> 20));
-                    std::fflush(stdout);
                 }
             }
         }
@@ -136,15 +185,12 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
 #ifdef BB_UWP
-        for (unsigned attempt = 0; result == VK_ERROR_OUT_OF_DEVICE_MEMORY && attempt < 6;
+        for (unsigned attempt = 0; result == VK_ERROR_OUT_OF_DEVICE_MEMORY && attempt < 3;
              ++attempt) {
-            const size_t released = runtime_memory_page_out(64ULL << 20);
+            const u64 released = UwpEmergencyRelease(buffer_ci.size, "allocation failed");
             if (!released) {
                 break;
             }
-            std::printf("UWP buffer allocation retry %u: swap released %llu MiB\n", attempt + 1,
-                        static_cast<unsigned long long>(released >> 20));
-            std::fflush(stdout);
             result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                      &allocation, out_alloc_info);
         }

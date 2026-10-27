@@ -212,6 +212,16 @@ public:
                                          bool is_depth, float extra_lod_bias = 0.0f);
 
     /// Retrieves the image with the specified id.
+    /// bbport: the last resort of the memory ladder (handoff §10, approved): everything the
+    /// collector may take, including images touched within the last second, up to `bytes`. Used
+    /// only after an allocation has already failed and the guest pages have been paged out.
+    /// Bound targets and scene proxies are still kept - freeing the image the draw in flight is
+    /// writing would be a corruption, not a saving. Returns how much it freed.
+    u64 EmergencyReclaim(u64 bytes) {
+        std::scoped_lock lock{mutex};
+        return ReclaimMemoryForUnused(0, 0, bytes, 0);
+    }
+
     /// bbport: out of GPU memory for an image of its own (scene proxies): unused textures go at
     /// once, up to `bytes` (ReclaimMemoryFor). Not with the cache's lock held.
     u64 ReclaimMemory(u64 bytes) {
