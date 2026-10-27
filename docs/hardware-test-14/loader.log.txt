@@ -1,0 +1,441 @@
+Bloodborne Xbox Series X|S UWP loader started
+Device model: 0x1d27fabb; app memory budget: 5120 MiB; gamepads: 0
+UWP lifecycle: visible=1
+AppContainer codeGeneration + sysv_abi smoke: PASS (42)
+USB dump found: E:\dumps\Bloodborne
+Picked Bloodborne folder: E:\dumps\Bloodborne (USB drive)
+Player dialog: Skip the intro?
+
+Bloodborne can start straight at the title screen instead of playing the FromSoftware/Sony logos and the title movie.
+
+You can change this later in the in-game menu (hold L3 + R3, "Visual & gameplay patches").
+Player choice: 1
+Settings Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\bbport.ini: skip_intro=1
+Launcher panel: intro skipped
+Prepare: param.sfo E:\dumps\Bloodborne\sce_sys\param.sfo app_ver=01.00 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\Bloodborne-patch\sce_sys\param.sfo app_ver=01.09 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\GodOfWar3\sce_sys\param.sfo app_ver=01.01 app_type=? title_id=CUSA01623 content_id=UP9000-CUSA01623_00-0000GODOFWAR3PS4
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: ignoring patch candidate E:\dumps\GodOfWar3 (different TITLE_ID (CUSA01623))
+DumpLayout: kind=split; base_ver=01.00; patch_ver=01.09; effective=01.09; base=E:\dumps\Bloodborne; patch=E:\dumps\Bloodborne-patch
+Launcher dump layout:
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 CUSA03173
+Patch dump: E:\dumps\Bloodborne-patch - app_ver=01.09 CUSA03173 (in use)
+Effective version: 01.09
+Launcher panel: split dump (effective=01.09)
+Player dialog: Bloodborne dump
+
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 CUSA03173
+Patch dump: E:\dumps\Bloodborne-patch - app_ver=01.09 CUSA03173 (in use)
+Effective version: 01.09
+
+The update is merged over the game dump inside the app's LocalState; your USB folder is never modified.
+
+Intro: skipped (logos and title movie). Change it in the in-game menu.
+UWP memory telemetry: 83/5120 MiB (level=0, presents=0)
+Player choice: 0
+Launch target: base=E:\dumps\Bloodborne; patch=E:\dumps\Bloodborne-patch; effective=01.09; patches=required
+Active Bloodborne dump: E:\dumps\Bloodborne (USB drive)
+DLC root configured: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\dlc
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+Prepare: param.sfo E:\dumps\Bloodborne\sce_sys\param.sfo app_ver=01.00 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\Bloodborne-patch\sce_sys\param.sfo app_ver=01.09 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Overlay: E:\dumps\Bloodborne + E:\dumps\Bloodborne-patch -> Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\Prepared\overlay (436 files from the update, 38 copied, 436 redirected, digest ee93feb5f771)
+Update overlay: 436 paths from E:\dumps\Bloodborne-patch over E:\dumps\Bloodborne
+Prepare: base_app_ver=01.00; patch_app_ver=01.09; effective=01.09; patches=required
+UWP memory telemetry: 395/5120 MiB (level=0, presents=0)
+Prepared boot image cached: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\Prepared (app_ver=01.09)
+Compiled startup patches: FPS=60, scene=1920x1080, UI=1920x1080, writes=198 (4214 bytes)
+UWP memory: reserving guest windows on demand; 16 KiB commit-on-touch pages
+UWP swap: temporary sparse disk backing ready; 64 MiB mapped-window limit
+UWP swap: pager active, app budget=5120 MiB, pressure headroom=384 MiB
+Handing off to Bloodborne sysv_abi loader + shadPS4/Dozen GPU runtime...
+Online: Xbox UWP offline profile (CUSA03173 Bloodborne™ 01.09)
+Settings: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\bbport.ini
+[uwp-vk] Upgraded UMA VkMemoryHeap[0] size from 1280 MiB -> 5120 MiB (Xbox AppMemoryUsageLimit)
+GPU: Microsoft Direct3D12 (SraKmd_arden) (integrated), 5120 MiB VRAM, driver Dozen 26.2.99 (Mesa 26.3.0-devel (git-a76cd3caa2)), Vulkan 1.2.363
+UWP host push bindings: ordinary descriptor sets, fence-safe command-buffer pools
+CoreWindow presentation bridge: 1920x1080, shared image 8704 KiB
+UWP buffer cache: ordinary buffers, 16 MiB pages, 176 logical DMA views
+GPU: driver.vkcache identity: file vendor=0x1414 device=0xd000 uuid=0d3f999b160e9a9f48f399fbadabdb45 | current vendor=0x1414 device=0xd000 uuid=1441ab8d3dd969150c06c9554547447c
+GPU: discarding stale driver.vkcache (172944 KiB, pipeline cache UUID changed (Mesa or GPU driver update))
+GPU: draw preparation workers: 0 (+1 scanner, 8 hardware threads)
+Object motion: off (enable in menu or BB_OBJECT_MOTION=1)
+Scene resolution: raster 1280x720, half-resolution targets 640x360, UI 1920x1080 (live)
+Xbox scene resolution: live 1280x720 ready (HUD 1920x1080)
+UWP presentation: native resolution; FSR1 and RCAS disabled
+Overlay: menu ready (Insert or L3+R3)
+CoreWindow first frame presented
+UWP memory telemetry: 1185/5120 MiB (level=0, presents=0)
+UWP memory telemetry: 1185/5120 MiB (level=0, presents=0)
+GPU: imported 1 portable shader/pipeline cache files into Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\user\cache\CUSA03173
+GPU: WarmUp preloaded 65 / 65 pipelines (VK_KHR_pipeline_binary hits=0, saved=0)
+GPU: UWP presenter ready (backend=2); SDK 0x02000071, 327 HLE symbols
+VideoOut: vblank 60 Hz, frame limit 60 FPS
+Patches: 198 writes, 1022 bytes applied, 2 pointers rebased
+Guest TCB loads redirected to the TEB TLS slot: 17127
+Mapped 93634560 bytes, 7 segments; applied 237298 relocations
+Starting linked module 0 at image offset 0x56e0000; native bindings=238
+Runtime: application heap API registered
+Module 0 initializer returned 0
+Starting linked module 1 at image offset 0x57c0000; native bindings=238
+Module 1 initializer returned 0
+Entering original x86-64 code at guest offset 0xa0 (image=0000000800020000, self=0000000805CAFC40, main_stack=0000000805D00000)
+Runtime: _init_env returned (verified libc implementation: RET)
+Runtime: direct allocation offset=0x0, size=121634816 bytes, type=0
+Runtime: mapped direct memory 0000001000000000, size=121634816, prot=0x3
+Runtime: semaphore id=1 (), attr=2, initial=0, max=1
+Runtime: semaphore id=2 (), attr=2, initial=0, max=1
+Runtime: semaphore id=3 (), attr=2, initial=0, max=1
+Runtime: semaphore id=4 (), attr=2, initial=0, max=1
+Runtime: semaphore id=5 (), attr=2, initial=0, max=1
+Runtime: semaphore id=6 (), attr=2, initial=0, max=1
+Runtime: semaphore id=7 (), attr=2, initial=0, max=1
+Runtime: semaphore id=8 (), attr=2, initial=0, max=1
+Runtime: semaphore id=9 (), attr=2, initial=0, max=1
+Runtime: semaphore id=10 (), attr=2, initial=0, max=1
+Runtime: semaphore id=11 (), attr=2, initial=0, max=1
+Runtime: semaphore id=12 (), attr=2, initial=0, max=1
+Runtime: semaphore id=13 (), attr=2, initial=0, max=1
+Runtime: semaphore id=14 (), attr=2, initial=0, max=1
+Runtime: semaphore id=15 (), attr=2, initial=0, max=1
+Runtime: semaphore id=16 (), attr=2, initial=0, max=1
+Runtime: semaphore id=17 (), attr=2, initial=0, max=1
+Runtime: AppContent host provider loaded; references=1
+Runtime: AppContent initialized; offline base-game profile, no mounted add-ons
+Runtime: AppContent parameter 0 = 3
+Runtime: AppContent parameter 1 = 13
+Runtime: AppContent parameter 2 = 0
+Runtime: AppContent parameter 3 = 0
+Runtime: AppContent parameter 4 = 0
+Runtime: semaphore id=18 (), attr=1, initial=1, max=1
+Runtime: guest thread 'Core.Logging.BackgroundStrategy' created (handle=0000000805CAFA00, stack=65536, prio=700)
+Runtime: UserService initialized (user 1 logged in)
+Runtime: direct allocation offset=0x7400000, size=549453824 bytes, type=0
+Runtime: mapped direct memory 0000001007400000, size=549453824, prot=0x3
+Runtime: direct allocation offset=0x28000000, size=289406976 bytes, type=0
+Runtime: mapped direct memory 0000001028000000, size=289406976, prot=0x3
+Runtime: direct allocation offset=0x39400000, size=159383552 bytes, type=0
+Runtime: mapped direct memory 0000001039400000, size=159383552, prot=0x33
+Runtime: direct allocation offset=0x42c00000, size=2398093312 bytes, type=3
+Runtime: mapped direct memory 0000001042C00000, size=2398093312, prot=0x33
+Runtime: direct allocation offset=0xd1b00000, size=929038336 bytes, type=3
+Runtime: mapped direct memory 00000010D1B00000, size=929038336, prot=0x33
+Runtime: direct allocation offset=0x109100000, size=10485760 bytes, type=0
+Runtime: mapped direct memory 0000001109100000, size=10485760, prot=0x3
+Runtime: direct allocation offset=0x109b00000, size=6291456 bytes, type=0
+Runtime: mapped direct memory 0000001109B00000, size=6291456, prot=0x3
+Runtime: mapped flexible memory 000000110A100000, size=50331648, prot=0x3
+Runtime: direct allocation offset=0x10a100000, size=14680064 bytes, type=0
+Runtime: mapped direct memory 000000110D100000, size=14680064, prot=0x3
+Runtime: mapped flexible memory 000000110DF00000, size=85983232, prot=0x3
+Runtime: direct allocation offset=0x10af00000, size=5242880 bytes, type=0
+Runtime: mapped direct memory 0000001113100000, size=5242880, prot=0x33
+Runtime: direct allocation offset=0x10b400000, size=8388608 bytes, type=3
+Runtime: mapped direct memory 0000001113600000, size=8388608, prot=0x33
+Runtime: direct allocation offset=0x10bc00000, size=9437184 bytes, type=0
+Runtime: mapped direct memory 0000001113E00000, size=9437184, prot=0x3
+Runtime: direct allocation offset=0x10c500000, size=310378496 bytes, type=0
+Runtime: mapped direct memory 0000001114700000, size=310378496, prot=0x3
+Runtime: mapped flexible memory 0000001126F00000, size=33554432, prot=0x3
+Runtime: mapped flexible memory 0000001128F00000, size=100663296, prot=0x3
+Runtime: mapped flexible memory 000000112EF00000, size=33554432, prot=0x3
+Runtime: mapped flexible memory 0000001130F00000, size=33554432, prot=0x3
+Runtime: semaphore id=19 (), attr=1, initial=1, max=1
+Runtime: guest thread 'FD4JobWorker:0' created (handle=0000000805CAF7C0, stack=131072, prio=700)
+Runtime: semaphore id=20 (), attr=2, initial=0, max=1
+Runtime: semaphore id=21 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeA0' created (handle=0000000805CAF580, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA1' created (handle=0000000805CAF340, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA2' created (handle=0000000805CAF100, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA3' created (handle=0000000805CAEEC0, stack=65536, prio=700)
+Runtime: semaphore id=22 (), attr=2, initial=0, max=1
+Runtime: semaphore id=23 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeB1' created (handle=0000000805CAEC80, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeB2' created (handle=0000000805CAEA40, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeB3' created (handle=0000000805CAE800, stack=65536, prio=700)
+Runtime: semaphore id=24 (), attr=2, initial=0, max=1
+Runtime: semaphore id=25 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeC4' created (handle=0000000805CAE5C0, stack=65536, prio=700)
+Runtime: semaphore id=26 (), attr=2, initial=0, max=1
+Runtime: semaphore id=27 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeD1' created (handle=0000000805CAE380, stack=65536, prio=700)
+Runtime: semaphore id=28 (), attr=2, initial=0, max=1
+Runtime: guest thread 'MOMainThread' created (handle=0000000805CAE140, stack=65536, prio=700)
+Runtime: Ajm context initialized (ATRAC9 via LibAtrac9)
+Runtime: audio backend XAudio2.9 (UWP)
+Audio: XAudio2 mastering voice ready (2 channels)
+Runtime: audio device 2 ch, gain 1.00
+Runtime: audio port 0 opened (type 0, 8 ch -> 2 ch, float, 256 frames)
+Runtime: audio port 8 opened (type 1, 8 ch -> 2 ch, float, 256 frames)
+Runtime: semaphore id=29 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: semaphore id=30 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD mixer thread' created (handle=0000000805CADF00, stack=65536, prio=257)
+Runtime: semaphore id=31 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD AudioOut thread' created (handle=0000000805CADCC0, stack=65536, prio=256)
+Runtime: semaphore id=32 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD stream thread' created (handle=0000000805CADA80, stack=65536, prio=260)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_mixer.fev -> fd 3 (5644 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multirpc.rpc -> fd 3 (253 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multimix.mix -> fd 3 (628 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multich.mch -> fd 3 (96 bytes)
+Runtime: guest thread 'GXRenderThread' created (handle=0000000805CAD840, stack=131072, prio=700)
+Runtime: direct allocation offset=0x11ed00000, size=131072 bytes, type=3
+Runtime: mapped direct memory 0000001132F00000, size=131072, prot=0x33
+Runtime: semaphore id=33 (), attr=1, initial=0, max=5
+Runtime: guest thread 'GXWorker:1' created (handle=0000000805CAD600, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:2' created (handle=0000000805CAD3C0, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:3' created (handle=0000000805CAD180, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:4' created (handle=0000000805CACF40, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:5' created (handle=0000000805CACD00, stack=131072, prio=700)
+Runtime: semaphore id=34 (), attr=1, initial=232, max=232
+Runtime: guest thread 'Core.Res.PostProcessor_0' created (handle=0000000805CACAC0, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.PostProcessor_1' created (handle=0000000805CAC880, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.PostProcessor_2' created (handle=0000000805CAC640, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.CacheableFileLoader' created (handle=0000000805CAC400, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.FileLoader' created (handle=0000000805CAC1C0, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.TaskManager' created (handle=0000000805CABF80, stack=65536, prio=700)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxshader.shaderbnd.dcx -> fd 4 (3496 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/other/systex.tpf.dcx -> fd 5 (19414 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/other/movtaesprj.movtae.dcx -> fd 6 (489 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/eventnameid.txt -> fd 4 (50711 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/variablenameid.txt -> fd 7 (2950 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/statenameid.txt -> fd 8 (23974 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxgui.shaderbnd.dcx -> fd 4 (2737 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxrenderershader.shaderbnd.dcx -> fd 4 (84064 bytes)
+UWP dense GPU arena: 0x1039000000, 16 MiB (retired 0 MiB, live 16 MiB), 1/176 DMA views
+UWP dense GPU arena: 0x104e000000, 32 MiB (retired 0 MiB, live 48 MiB), 3/176 DMA views
+Runtime: semaphore id=35 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=36 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=37 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=38 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=39 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=40 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=41 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=42 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=43 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=44 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=45 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=46 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=47 (hkSemaphore), attr=1, initial=0, max=12
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CABD40, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CABB00, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB8C0, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB680, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB440, stack=131072, prio=700)
+Runtime: semaphore id=48 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=49 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=50 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=51 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=52 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=53 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=54 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=55 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=56 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=57 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=58 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=59 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAB200, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAFC0, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAD80, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAB40, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAA900, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAA6C0, stack=65536, prio=700)
+Runtime: guest thread 'FaceGenMan' created (handle=0000000805CAA480, stack=65536, prio=700)
+Runtime: system module 0xad loaded (host implementation)
+Runtime: system module 0x83 loaded (host implementation)
+Runtime: PlayGo initialized; 3 chunks, all installed locally
+Runtime: guest thread 'DLUserPreferenceNotifyServiceIm' created (handle=0000000805CAA240, stack=65536, prio=700)
+Runtime: pad opened for user 1 (SDL gamepad or keyboard)
+UWP dense GPU arena: 0x104d000000, 16 MiB (retired 0 MiB, live 64 MiB), 4/176 DMA views
+UWP dense GPU arena: 0x10d1000000, 16 MiB (retired 0 MiB, live 80 MiB), 5/176 DMA views
+Runtime: open(/app0/dvdroot_ps4/menu/logo.tpf.dcx) -> not found
+Runtime: system module 0x9d loaded (host implementation)
+Runtime: system module 0x1c loaded (host implementation)
+Runtime: system module 0xb5 loaded (host implementation)
+Runtime: system module 0x19 loaded (host implementation)
+Runtime: system module 0xb2 loaded (host implementation)
+Runtime: guest thread 'NexusRevolution Event' created (handle=0000000805CAA000, stack=65536, prio=700)
+Runtime: UserService initialized (user 1 logged in)
+Runtime: guest thread 'NexusRevolution Socket' created (handle=0000000805CA9DC0, stack=65536, prio=700)
+Runtime: system module 0x1e loaded (host implementation)
+Runtime: guest thread 'NexusRevolution Main' created (handle=0000000805CA9B80, stack=65536, prio=700)
+Runtime: guest thread 'FrpgSaveLoadMan' created (handle=0000000805CA9940, stack=65536, prio=700)
+Runtime: semaphore id=60 (), attr=1, initial=1, max=1
+Runtime: guest thread 'SLSession' created (handle=0000000805CA9700, stack=65536, prio=700)
+Runtime: guest thread 'CSTrophy::AsyncUpdateThread' created (handle=0000000805CA94C0, stack=65536, prio=700)
+UWP memory telemetry: 1858/5120 MiB (level=0, presents=98)
+Runtime: SystemService: splash screen hidden
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing, read-only)
+Frame rate: 32.1 FPS, slowest frame 179.3 ms
+Frame generation pacing: 44.8 game frames/s, 0 generated, 0 shown, Present 1.39 ms/frame (last image 1.39 ms), interval 20.05 ms
+Runtime: open(/app0/dvdroot_ps4/parts/wp_a_6010.partsbnd.dcx) -> not found
+Runtime: open(/app0/dvdroot_ps4/parts/lg_a_9700.partsbnd.dcx) -> not found
+Runtime: open(/app0/dvdroot_ps4/parts/lg_a_9700_l.partsbnd.dcx) -> not found
+UWP memory telemetry: 2264/5120 MiB (level=0, presents=372)
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: semaphore id=61 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: semaphore id=62 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD nonblocking thread (0)' created (handle=0000000805CA9280, stack=65536, prio=265)
+Runtime: semaphore id=63 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD file thread' created (handle=0000000805CA9040, stack=65536, prio=265)
+Frame rate: 55.2 FPS, slowest frame 120.0 ms
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing, read-only)
+Frame generation pacing: 56.7 game frames/s, 0 generated, 0 shown, Present 1.33 ms/frame (last image 1.33 ms), interval 21.51 ms
+UWP memory telemetry: 2320/5120 MiB (level=0, presents=658)
+Frame rate: 58.6 FPS, slowest frame 77.1 ms
+Runtime: system module 0xa5 loaded (host implementation)
+Runtime: guest thread 'Mv_AudioPlayThread' created (handle=0000000805CA8BC0, stack=65536, prio=700)
+Runtime: audio port 1 opened (type 0, 8 ch -> 2 ch, s16, 1024 frames)
+Runtime: mapped direct memory 0000001132F20000, size=32768, prot=0x33
+Runtime: mapped direct memory 0000001132F28000, size=32768, prot=0x33
+Runtime: mapped direct memory 0000001132F30000, size=32768, prot=0x33
+Runtime: mapped direct memory 0000001132F38000, size=32768, prot=0x33
+UWP dense GPU arena: 0x1069000000, 16 MiB (retired 0 MiB, live 96 MiB), 6/176 DMA views
+UWP dense GPU arena: 0x10e1000000, 16 MiB (retired 0 MiB, live 112 MiB), 7/176 DMA views
+UWP dense GPU arena: 0x10d5000000, 16 MiB (retired 0 MiB, live 128 MiB), 8/176 DMA views
+Frame generation pacing: 53.5 game frames/s, 0 generated, 0 shown, Present 1.68 ms/frame (last image 1.68 ms), interval 22.15 ms
+UWP dense GPU arena: 0x10d2000000, 16 MiB (retired 0 MiB, live 144 MiB), 9/176 DMA views
+UWP dense GPU arena: 0x1043000000, 16 MiB (retired 0 MiB, live 160 MiB), 10/176 DMA views
+UWP dense GPU arena: 0x10e2000000, 16 MiB (retired 0 MiB, live 176 MiB), 11/176 DMA views
+UWP dense GPU arena: 0x10d3000000, 16 MiB (retired 0 MiB, live 192 MiB), 12/176 DMA views
+UWP dense GPU arena: 0x103c000000, 16 MiB (retired 0 MiB, live 208 MiB), 13/176 DMA views
+UWP dense GPU arena: 0x10df000000, 16 MiB (retired 0 MiB, live 224 MiB), 14/176 DMA views
+UWP dense GPU arena: 0x10e0000000, 16 MiB (retired 0 MiB, live 240 MiB), 15/176 DMA views
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=1 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=2 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=94 uid=94 by=other guest=0x10d1d50000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=2 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=3 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=95 uid=95 by=other guest=0x10d1d50000 size=131072 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=3 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=4 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=96 uid=96 by=other guest=0x10d1d50000 size=196608 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=4 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=5 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=97 uid=97 by=other guest=0x10d1d50000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=5 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=6 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=98 uid=98 by=other guest=0x10d1d50000 size=327680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+UWP dense GPU arena: 0x106a000000, 16 MiB (retired 0 MiB, live 256 MiB), 16/176 DMA views
+UWP dense GPU arena: 0x106b000000, 16 MiB (retired 0 MiB, live 272 MiB), 17/176 DMA views
+UWP dense GPU arena: 0x106c000000, 16 MiB (retired 0 MiB, live 288 MiB), 18/176 DMA views
+UWP dense GPU arena: 0x106d000000, 16 MiB (retired 0 MiB, live 304 MiB), 19/176 DMA views
+UWP dense GPU arena: 0x106c000000, 32 MiB (retired 32 MiB, live 304 MiB), 19/176 DMA views
+UWP dense GPU arena: 0x10d9000000, 16 MiB (retired 0 MiB, live 320 MiB), 20/176 DMA views
+UWP dense GPU arena: 0x107b000000, 16 MiB (retired 0 MiB, live 336 MiB), 21/176 DMA views
+UWP dense GPU arena: 0x107b000000, 32 MiB (retired 16 MiB, live 352 MiB), 22/176 DMA views
+Texture cache: free id=72 uid=72 by=other guest=0x10e1b60000 size=1044480 bound=0 target=0 proxy=0 vo=0 tiled=0 gpu_modified=0 deferred=1
+UWP dense GPU arena: 0x106b000000, 48 MiB (retired 48 MiB, live 352 MiB), 22/176 DMA views
+UWP dense GPU arena: 0x106a000000, 64 MiB (retired 64 MiB, live 352 MiB), 22/176 DMA views
+UWP dense GPU arena: 0x1069000000, 80 MiB (retired 80 MiB, live 352 MiB), 22/176 DMA views
+Texture cache: free id=70 uid=70 by=other guest=0x1069dd8000 size=8355840 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=71 uid=71 by=other guest=0x10695dfa00 size=2088960 bound=0 target=0 proxy=0 vo=0 tiled=0 gpu_modified=0 deferred=1
+UWP dense GPU arena: 0x106e000000, 16 MiB (retired 0 MiB, live 368 MiB), 23/176 DMA views
+UWP dense GPU arena: 0x106f000000, 16 MiB (retired 0 MiB, live 384 MiB), 24/176 DMA views
+UWP dense GPU arena: 0x1070000000, 16 MiB (retired 0 MiB, live 400 MiB), 25/176 DMA views
+UWP dense GPU arena: 0x1071000000, 16 MiB (retired 0 MiB, live 416 MiB), 26/176 DMA views
+UWP dense GPU arena: 0x106f000000, 32 MiB (retired 32 MiB, live 416 MiB), 26/176 DMA views
+UWP dense GPU arena: 0x1069000000, 96 MiB (retired 96 MiB, live 416 MiB), 26/176 DMA views
+UWP dense GPU arena: 0x1069000000, 128 MiB (retired 128 MiB, live 416 MiB), 26/176 DMA views
+UWP dense GPU arena: 0x1072000000, 16 MiB (retired 0 MiB, live 432 MiB), 27/176 DMA views
+UWP dense GPU arena: 0x1073000000, 16 MiB (retired 0 MiB, live 448 MiB), 28/176 DMA views
+UWP dense GPU arena: 0x1072000000, 32 MiB (retired 32 MiB, live 448 MiB), 28/176 DMA views
+UWP dense GPU arena: 0x1074000000, 16 MiB (retired 0 MiB, live 464 MiB), 29/176 DMA views
+UWP dense GPU arena: 0x1075000000, 16 MiB (retired 0 MiB, live 480 MiB), 30/176 DMA views
+UWP dense GPU arena: 0x1075000000, 32 MiB (retired 16 MiB, live 496 MiB), 31/176 DMA views
+UWP memory telemetry: 4333/5120 MiB (level=1, presents=870)
+UWP dense GPU arena: 0x1077000000, 16 MiB (retired 0 MiB, live 512 MiB), 32/176 DMA views
+UWP dense GPU arena: 0x1078000000, 16 MiB (retired 0 MiB, live 528 MiB), 33/176 DMA views
+UWP dense GPU arena: 0x1075000000, 48 MiB (retired 48 MiB, live 528 MiB), 33/176 DMA views
+UWP dense GPU arena: 0x1079000000, 16 MiB (retired 0 MiB, live 544 MiB), 34/176 DMA views
+UWP dense GPU arena: 0x107a000000, 16 MiB (retired 0 MiB, live 560 MiB), 35/176 DMA views
+UWP dense GPU arena: 0x1079000000, 32 MiB (retired 32 MiB, live 560 MiB), 35/176 DMA views
+UWP dense GPU arena: 0x1075000000, 64 MiB (retired 64 MiB, live 560 MiB), 35/176 DMA views
+UWP dense GPU arena: 0x1075000000, 96 MiB (retired 96 MiB, live 560 MiB), 35/176 DMA views
+Texture cache: free id=50 uid=50 by=eviction guest=0x10df4f7100 size=512 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=51 uid=51 by=eviction guest=0x10df4f7500 size=512 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=52 uid=52 by=eviction guest=0x10df4f7900 size=512 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=58 uid=58 by=eviction guest=0x1066ffe000 size=1048576 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=60 uid=60 by=eviction guest=0x10d4ac8400 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=61 uid=61 by=eviction guest=0x10d5192a00 size=131072 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=62 uid=62 by=eviction guest=0x10d5232a00 size=4608 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=68 uid=68 by=eviction guest=0x10d4dc9000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=66 uid=66 by=eviction guest=0x10d4ac5000 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: memory pressure, 4726 of 4096 MiB (critical 4352): 9 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+Frame rate: 27.3 FPS, slowest frame 96.0 ms
+Texture cache: erase id=94 (freed by=other)
+Texture cache: erase id=95 (freed by=other)
+Texture cache: erase id=96 (freed by=other)
+Texture cache: erase id=97 (freed by=other)
+Texture cache: erase id=98 (freed by=other)
+Texture cache: erase id=72 (freed by=other)
+Texture cache: erase id=70 (freed by=other)
+Texture cache: erase id=71 (freed by=other)
+Texture cache: erase id=50 (freed by=eviction)
+Texture cache: erase id=51 (freed by=eviction)
+Texture cache: erase id=52 (freed by=eviction)
+Texture cache: erase id=58 (freed by=eviction)
+Texture cache: erase id=60 (freed by=eviction)
+Texture cache: erase id=61 (freed by=eviction)
+Texture cache: erase id=62 (freed by=eviction)
+Texture cache: erase id=68 (freed by=eviction)
+Texture cache: erase id=66 (freed by=eviction)
+Runtime: system module 0x96 loaded (host implementation)
+Runtime: ImeDialog opened: shown on screen; keyboard Enter or Cross accepts, Esc or Circle cancels
+Runtime: ImeDialog text: Hunter
+UWP dense GPU arena: 0x106c000000, 16 MiB released
+UWP dense GPU arena: 0x106d000000, 16 MiB released
+UWP dense GPU arena: 0x107b000000, 16 MiB released
+UWP dense GPU arena: 0x106b000000, 16 MiB released
+UWP dense GPU arena: 0x106c000000, 32 MiB released
+UWP dense GPU arena: 0x106a000000, 16 MiB released
+UWP dense GPU arena: 0x106b000000, 48 MiB released
+UWP dense GPU arena: 0x1069000000, 16 MiB released
+UWP dense GPU arena: 0x106a000000, 64 MiB released
+UWP dense GPU arena: 0x106f000000, 16 MiB released
+UWP dense GPU arena: 0x1070000000, 16 MiB released
+UWP dense GPU arena: 0x1069000000, 80 MiB released
+UWP dense GPU arena: 0x106e000000, 16 MiB released
+UWP dense GPU arena: 0x106f000000, 32 MiB released
+UWP dense GPU arena: 0x1069000000, 96 MiB released
+UWP dense GPU arena: 0x1072000000, 16 MiB released
+UWP dense GPU arena: 0x1073000000, 16 MiB released
+UWP dense GPU arena: 0x1075000000, 16 MiB released
+UWP dense GPU arena: 0x1075000000, 32 MiB released
+UWP dense GPU arena: 0x1077000000, 16 MiB released
+UWP dense GPU arena: 0x1079000000, 16 MiB released
+UWP dense GPU arena: 0x107a000000, 16 MiB released
+UWP dense GPU arena: 0x1078000000, 16 MiB released
+UWP dense GPU arena: 0x1075000000, 48 MiB released
+UWP dense GPU arena: 0x1079000000, 32 MiB released
+UWP dense GPU arena: 0x1075000000, 64 MiB released
+Frame generation pacing: 21.7 game frames/s, 0 generated, 0 shown, Present 4.27 ms/frame (last image 4.27 ms), interval 17.72 ms
+UWP memory telemetry: 3237/5120 MiB (level=1, presents=1031)
+UWP swap: out=396 in=5 disk=395 views=5 MiB; checks=381 corrupt=0 window evictions=0
+UWP swap: unpinned private=187 pinned=266 MiB
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)

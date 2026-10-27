@@ -48,13 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `c63f0b7` — *feat(launcher): ask once whether to skip the intro…* (release target) |
+| HEAD | `9b165b4` — *gpu(texture_cache): report direct slot indexes, and re-check memos* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40445336546` — [actions/runs/40440888038](https://github.com/youdedend/Test-project/actions/runs/40440888038), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.345` — contains `BloodborneLauncher_1.0.26300.345_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
-| Version shown by that package | **`1.0.26300.345`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0345`** — [releases/tag/xbox-alpha-1.0.26300.0345](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0345), target `c63f0b7` (run `40445336546`, both jobs green, publish step ran): **skip-intro question + `[dump]` preserved when the menu saves** (§2f). Previous: `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) || Console validation of this build | **not installed yet** — the console still has `1.0.26300.211`; `1.0.26300.345` (skip-intro question + depth reclaim) is published and waiting to be added through Device Portal |
-| Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
+| Last green CI | run `40446937105` — [actions/runs/40446937105](https://github.com/youdedend/Test-project/actions/runs/40446937105), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.405` — contains `BloodborneLauncher_1.0.26300.405_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
+| Version shown by that package | **`1.0.26300.405`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0405`** — [releases/tag/xbox-alpha-1.0.26300.0405](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0405), target `9b165b4` (run `40446937105`, both jobs green, publish step ran): **every direct `slot_images` index reports the stale id, and the three cross-frame memos re-check liveness** (§2g). Previous: `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
+| Console validation of this build | **not installed yet** — the console last ran `1.0.26300.211`; `.0405` (skip-intro question, depth reclaim, stale-id report + memo fix) is published and waiting to be added through Device Portal |
+| Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* — the freed id is now either avoided (memos) or named (report) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -259,7 +260,7 @@ gone on the next start.
 ## 2g. `slot_vector.h:225` after name entry — the stale-id site, and the memo fix (2026-10-27)
 
 The run that confirmed skip-intro ended in the old character-creation stop, and this time the log
-says exactly what happened:
+says exactly what happened (the two files are kept in `docs/hardware-test-14/`):
 
 ```
 Texture cache: memory pressure, 4726 of 4096 MiB (critical 4352): 9 images evicted ...
