@@ -337,6 +337,96 @@ or run in this environment, and nothing here is a hardware result.
 
 ---
 
+## 2h. The `.424` run: the slot_vector stop is gone, the 5,120 MiB app limit is the wall (2026-10-27)
+
+Logs kept in `docs/hardware-test-14/` (`loader.log.txt` 814 lines, `errors.log.txt` 77 lines). What
+changed on the console:
+
+- **No `slot_vector.h` stop and no `DEAD IMAGE` line** (0 of each in both files). The freed-slot fix
+  (§2g) held; the run went on through the character creation and into gameplay.
+- The new stop is a real out-of-memory, and it is a different wall:
+
+```
+UWP buffer headroom pass 1..6: swap paged out 0 MiB (usage 5087/5120 MiB)
+GPU: video memory full: buffer memory allocated past the driver's budget ...
+[uwp-vk] FATAL vmaCreateBuffer(16384 KiB, type=DeviceLocal) -> -2; Xbox AppMemory 5116/5120 MiB;
+    VMA heap[0] block=1958 MiB alloc=1952 MiB usage=1958 MiB budget=4096 MiB
+GPU [Debug] <Critical> buffer.cpp:184 Create: Assertion Failed! Failed allocating buffer with
+    error ErrorOutOfDeviceMemory
+```
+
+### There is only one budget, and it is not ours to raise
+
+| Number in the log | Where it comes from |
+|---|---|
+| `app memory budget: 5120 MiB` | `Windows.System.MemoryManager.AppMemoryUsageLimit()` — the platform's cap for a Game Mode app on Series S\|X, printed at `main.cpp:1512` |
+| `Upgraded UMA VkMemoryHeap[0] size from 1280 MiB -> 5120 MiB (Xbox AppMemoryUsageLimit)` | on this console "VRAM" **is** the app budget: the GPU is reported integrated (`Microsoft Direct3D12 (SraKmd_arden) (integrated), 5120 MiB VRAM`), so guest RAM and GPU allocations come out of the same 5 GiB |
+| `memory pressure, 4722 of 4096 MiB (critical 4352)` | our GC marks, derived from that limit: `texture_cache.cpp:1192-1194` → trigger `limit-1280`, pressure `limit-1024`, critical `limit-768` |
+| `FATAL ... budget=4096 MiB` | `VK_EXT_memory_budget`'s current heap budget as the driver sees it, which shrinks as the app uses the limit |
+
+So `5120` is **already** the number in the code, and it is a ceiling the OS owns, not a constant we
+choose: `bb_uwp_app_memory_limit()` (`main.cpp:87-91`) returns the OS value and clamps any override
+with `std::min(override, actual)`. Raising "the code" to 5,120 MiB therefore changes nothing, and
+going above it is not possible — the allocation simply fails (as here), and an app that pushes past
+`AppMemoryUsageLimit` can be suspended or terminated by the platform.
+
+The number we *do* choose is the headroom. Setting the marks to the limit (no reserve) would let
+usage run to 5,120 MiB before the first eviction and then fail the very next allocation with nothing
+to free — the tail of this log is exactly that state, at 4 MiB of slack. The previous run
+(`loader.prev.txt`, build `.0345`) had *higher* marks (pressure 4,352 / critical 4,672) and hit the
+wall sooner; lowering them in `.424` is why this run lasted. **Raising them moves the crash closer,
+not further.**
+
+### What actually filled the 5 GiB
+
+VMA holds only 1,958 MiB of it, so ~3 GiB is guest-side, and the pager is the informant:
+
+| Report | `pinned` guest memory |
+|---|---|
+| `presents=497` | 253 MiB |
+| `presents=738` | 657 MiB |
+| `presents=1030` | 1,168 MiB |
+| `presents=1323` | 1,331 MiB |
+| end | 1,337 MiB |
+
+`unpinned private` stayed at 402–407 MiB the whole session, and `runtime_memory_page_out()` returned
+**0 MiB in all six passes** at the end: the ~1.1 GiB of growth is *pinned* — pages the guest's own
+CPU code executed from or touched as WC_GARLIC (`guest_memory.inc:206`), which the pager may never
+hand back. That growth is the same size as the headroom we hold, which is why the run ends right at
+the limit while the texture cache is still evicting what it is allowed to (it reported evictions, 4
+depth reclaims and `116 old GPU-written tiled images kept (11 MiB)`).
+
+Also seen once, just before the end: `UNHANDLED NATIVE FAULT: code=0xc0000005 ... addr=0x0
+rip=0x7ffd74acf5a0 module=unknown`. The run continued for several frames after it and the reported
+stop is the buffer allocation, so it is not the crash — but it is new (absent from every earlier log)
+and is worth one line in the next report.
+
+### Diagnostics added (cheap, ship in release)
+
+| What | Where |
+|---|---|
+| `runtime_memory_pinned_bytes()`: one page-table walk, the same one `uwp_swap_report` does, returning the unpageable part of guest memory | `xbox/platform/guest_swap.inc:478-496`, declared `src/runtime.h:114`, `main.cpp:58` |
+| `UWP memory telemetry: … MiB (level=…, presents=…, guest pinned=… MiB)` — every 5 s | `xbox/platform/main.cpp:1844-1857` |
+| `Texture cache: memory pressure, … (critical …, guest pinned …)` — with the eviction report | `texture_cache.cpp:1441-1460`, extern at `:32` |
+| `[uwp-vk] FATAL vmaCreateBuffer(…) … Xbox AppMemory N/5120 MiB (guest pinned=N MiB); …` — the crash line says how much of the budget was unpageable guest memory | `gpu/shadps4/video_core/buffer_cache/buffer.cpp:20, 169-188` |
+
+### Candidate fixes for the next build (not in this one — measure first)
+
+1. **Unpin on area change.** Pinned is set for any page a guest-code fault touches
+   (`guest_memory.inc:206`, not only `PROT_EXEC`). The pager can hand back pages that were only
+   *read* once the area is left (`uwp_swap_reclaim` already walks them); a pin-age/LRU would recover
+   most of that 1.1 GiB.
+2. **Press harder at the critical mark.** Today the aggressive passes still respect the age gate and
+   the bound/target pin rules; at `critical` a re-uploadable image is cheaper than a failed
+   allocation.
+3. **Check the dense arenas**: `live 832 MiB, 52/176 DMA views` at the end — are any retired arenas
+   still mapped?
+
+None of the three is proven on hardware, and this section does not claim the crash is fixed: the
+allocation now fails at the platform limit, which is a capacity problem, not a stale id.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

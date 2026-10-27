@@ -475,6 +475,25 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     return uwp_swap_reclaim(bytes, 1);
 }
 
+/* bbport: the part of guest memory the pager may never page out (pinned: a page the guest's own
+ * CPU code executed from or touched as WC_GARLIC). No eviction of ours can return it, so a run
+ * that ends at the 5,120 MiB app limit needs this number next to the usage: it says whether the
+ * wall is guest memory the game pinned or GPU allocations. Same page walk as uwp_swap_report,
+ * once per report. */
+uint64_t runtime_memory_pinned_bytes(void) {
+    read_lock();
+    AcquireSRWLockExclusive(&uwp_commit_lock);
+    uint64_t pinned = 0;
+    for (size_t i = 0; i < uwp_count; ++i) {
+        const UwpPage *page = &uwp_pages[i];
+        if (!page->mapped || !page->pageable) continue;
+        if (uwp_physical[page->physical / PAGE].pinned) pinned += PAGE;
+    }
+    ReleaseSRWLockExclusive(&uwp_commit_lock);
+    read_unlock();
+    return pinned;
+}
+
 static void uwp_swap_report(void) {
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);

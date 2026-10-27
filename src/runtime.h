@@ -109,6 +109,9 @@ int runtime_rebirth_free_level(int level);
 #ifdef BB_UWP
 int runtime_memory_handle_commit_fault_at(uintptr_t address, int kind, int guest_code);
 uint64_t runtime_memory_page_out(uint64_t need);
+/* Guest memory the pager may not page out (pages guest CPU code executed from or touched as
+ * WC_GARLIC): the part of the app budget no eviction of ours can return. */
+uint64_t runtime_memory_pinned_bytes(void);
 void runtime_memory_start_paging(void);
 /* The guest memory contract self-test (xbox/platform/guest_memory_test.inc): 0 when every
  * check passed, else the number of the first failing one. Run with "memory" in run.txt. */

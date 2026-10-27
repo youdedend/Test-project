@@ -55,6 +55,7 @@ HANDLE bb_uwp_find(const char* pattern, WIN32_FIND_DATAA* out);
 BOOL bb_uwp_find_next(HANDLE handle, WIN32_FIND_DATAA* out);
 void runtime_memory_start_paging(void);
 void runtime_memory_report(void);
+uint64_t runtime_memory_pinned_bytes(void);
 void runtime_file_report(void);
 void runtime_audio_report(void);
 void runtime_pad_report(void);
@@ -1841,12 +1842,18 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                 Sleep(5000);
                 const uint64_t presents = bbgpu_uwp_present_count();
                 if (sample < 24 || stalled_ticks > 0) {
+                    // `guest pinned`: the guest pages the pager may not hand back. It grows with
+                    // what the game touches and no eviction returns it, so it is the number that
+                    // explains a usage line sitting at the limit while the texture cache is
+                    // evicting.
                     std::printf(
-                        "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu)\n",
+                        "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu, "
+                        "guest pinned=%llu MiB)\n",
                         static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                         static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
                         unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
-                        static_cast<unsigned long long>(presents));
+                        static_cast<unsigned long long>(presents),
+                        static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20));
                 }
                 if (runtime_entered_game()) {
                     if (!auto_sampled && ++entered_ticks >= 6) {

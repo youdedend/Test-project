@@ -17,6 +17,7 @@
 extern "C" uint64_t bb_uwp_app_memory_usage(void);
 extern "C" uint64_t bb_uwp_app_memory_limit(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
+extern "C" uint64_t runtime_memory_pinned_bytes(void);
 #endif
 
 namespace VideoCore {
@@ -165,14 +166,18 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         if (result != VK_SUCCESS) {
             VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
             vmaGetHeapBudgets(allocator, budgets);
+            // The pinned part of guest memory is in none of the numbers above but in the total:
+            // it is what the pager could not hand back, so it says whether the wall was memory
+            // the game pinned or the GPU's own allocations.
             std::printf("[uwp-vk] FATAL vmaCreateBuffer(%llu KiB, type=%.*s) -> %d; "
-                        "Xbox AppMemory %llu/%llu MiB; VMA heap[0] block=%llu MiB alloc=%llu MiB "
-                        "usage=%llu MiB budget=%llu MiB\n",
+                        "Xbox AppMemory %llu/%llu MiB (guest pinned=%llu MiB); "
+                        "VMA heap[0] block=%llu MiB alloc=%llu MiB usage=%llu MiB budget=%llu MiB\n",
                         static_cast<unsigned long long>(buffer_ci.size >> 10),
                         static_cast<int>(BufferTypeName(mem_type).size()),
                         BufferTypeName(mem_type).data(), static_cast<int>(result),
                         static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                         static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                        static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20),
                         static_cast<unsigned long long>(budgets[0].statistics.blockBytes >> 20),
                         static_cast<unsigned long long>(budgets[0].statistics.allocationBytes >> 20),
                         static_cast<unsigned long long>(budgets[0].usage >> 20),

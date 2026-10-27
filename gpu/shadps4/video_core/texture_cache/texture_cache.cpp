@@ -29,6 +29,7 @@
 #ifdef BB_UWP
 extern "C" uint64_t bb_uwp_app_memory_usage();
 extern "C" uint64_t bb_uwp_app_memory_limit();
+extern "C" uint64_t runtime_memory_pinned_bytes(void);
 #endif
 
 namespace VideoCore {
@@ -1441,13 +1442,18 @@ void TextureCache::GarbageCollectImages() {
     if (pressured || gc_downloads != 0) {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
-            std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
+            // The budget here is the whole app (guest RAM and GPU share it on the console), so the
+            // pinned guest part - which no eviction returns - is printed with it: an eviction pass
+            // that frees nothing is explained by these two numbers together.
+            std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu, "
+                        "guest pinned %llu): "
                         "%llu images evicted, %llu written back since the last report; "
                         "%llu old GPU-written tiled images kept (%llu MiB), %llu dropped, "
                         "%llu pinned, %llu depth reclaimed\n",
                         (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
+                        (unsigned long long)(runtime_memory_pinned_bytes() >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads,
                         (unsigned long long)gc_kept, (unsigned long long)(gc_kept_bytes >> 20),
                         (unsigned long long)gc_dropped, (unsigned long long)gc_pinned,
