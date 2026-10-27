@@ -9,6 +9,7 @@
 #include "bbport_toggles.h"
 
 #include <condition_variable>
+#include <cstdio>
 #include <mutex>
 #include <source_location>
 #include <string_view>
@@ -219,7 +220,21 @@ public:
     /// writing would be a corruption, not a saving. Returns how much it freed.
     u64 EmergencyReclaim(u64 bytes) {
         std::scoped_lock lock{mutex};
-        return ReclaimMemoryForUnused(0, 0, bytes, 0);
+        reclaim_stats = {};
+        const u64 freed = ReclaimMemoryForUnused(0, 0, bytes, 0);
+        // One line, only when an allocation has already failed: why the images that were looked at
+        // could not be taken. `.649` reported "freed 0 MiB of images" with no way to tell which rule
+        // was responsible.
+        std::printf("Texture cache: emergency reclaim freed %llu MiB of the %llu MiB asked for; "
+                    "seen=%llu too recent=%llu gpu-written=%llu bound/target=%llu no backing=%llu\n",
+                    (unsigned long long)(freed >> 20), (unsigned long long)(bytes >> 20),
+                    (unsigned long long)reclaim_stats.seen,
+                    (unsigned long long)reclaim_stats.too_recent,
+                    (unsigned long long)reclaim_stats.gpu_written,
+                    (unsigned long long)reclaim_stats.held,
+                    (unsigned long long)reclaim_stats.no_backing);
+        std::fflush(stdout);
+        return freed;
     }
 
     /// bbport: out of GPU memory for an image of its own (scene proxies): unused textures go at
@@ -574,6 +589,12 @@ private:
     void RememberFreed(ImageId id, u64 uid, const char* reason);
     /// bbport: ids resolved by the draw being recorded (HoldCollectedImage).
     std::vector<ImageId> collected_images;
+    /// bbport: why the last ReclaimMemoryForUnused walk refused an image (EmergencyReclaim prints
+    /// it). Plain counters, incremented where the walk already branches on each rule.
+    struct ReclaimStats {
+        u64 seen = 0, too_recent = 0, gpu_written = 0, held = 0, no_backing = 0;
+    };
+    ReclaimStats reclaim_stats;
     /// bbport: ReclaimMemoryFor with an explicit age gate - images unused for `unused_seconds`
     /// only. MakeRoomForImage (InsertImage) lowers it round by round: 16 s, then 4 s, then 2 s.
     u64 ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32 unused_seconds);

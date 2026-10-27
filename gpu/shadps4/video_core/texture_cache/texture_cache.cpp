@@ -1639,15 +1639,27 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
             return true;
         }
         const Image& image = IndexImage(image_id);
+        ++reclaim_stats.seen;
         // No backing (an undefined format): it holds no memory.
         // bbport: IsImageCollected: the draw being recorded already resolved this id (a colour or
         // depth target, a texture binding) but has not set its binding flags yet, so the checks
         // below cannot see it. Freed here, pass 2 re-indexes a dead slot.
-        if (!image.backing || image.lru_touched_tick >= unused_tick ||
-            True(image.flags & ImageFlagBits::GpuModified) ||
-            image.scene_proxy || image.usage.vo_surface || image.binding.is_bound ||
+        if (!image.backing) {
+            ++reclaim_stats.no_backing;
+            return false;
+        }
+        if (image.lru_touched_tick >= unused_tick) {
+            ++reclaim_stats.too_recent;
+            return false;
+        }
+        if (True(image.flags & ImageFlagBits::GpuModified)) {
+            ++reclaim_stats.gpu_written;
+            return false;
+        }
+        if (image.scene_proxy || image.usage.vo_surface || image.binding.is_bound ||
             image.binding.is_target || image.allocation_failed || IsImageCollected(image_id) ||
             image.Overlaps(addr, size)) {
+            ++reclaim_stats.held;
             return false;
         }
         victims.push_back(image_id);

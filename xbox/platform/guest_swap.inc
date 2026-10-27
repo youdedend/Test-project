@@ -28,10 +28,17 @@ static uint64_t uwp_swap_passes, uwp_swap_dry;
  * stays resident", never as a reason to stop. */
 static uint64_t uwp_swap_disk_budget = UINT64_C(768) << 20;
 static uint64_t uwp_swap_disk_full, uwp_swap_write_failures;
+/* bbport: pages taken by an urgent sweep (one that ignored the second-chance bit). The `.649` log
+ * shows why they are needed: `pageable private` was 1,757 MiB when a 141 MiB request returned 0 in
+ * 3 ms - every eligible page had `recent` set by the area load, and the clock sweep only clears that
+ * bit as it passes. A normal sweep is cheap and leaves hot pages alone; once an allocation has
+ * already failed, the page is worth more than the fault-in it will cost later. */
+static uint64_t uwp_swap_urgent_pages, uwp_swap_urgent_sweeps;
 static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
-static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views);
+static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views,
+                                        int ignore_recent);
 
 /* Live swap views: every 4 KiB window the pager has mapped with MapViewOfFile3FromApp, as a
  * half-open [begin, end) host interval. Mapped views are guest addresses (the runtime maps the
@@ -419,7 +426,8 @@ static int uwp_swap_protect(UwpPage *page, unsigned index, int prot) {
     return 1;
 }
 
-static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views) {
+static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views,
+                                        int ignore_recent) {
     if (!uwp_swap_open()) return 0;
     if (bytes) ++uwp_swap_passes;
     uint64_t released = 0;
@@ -441,7 +449,10 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         if (physical->pinned || physical->references != 1 || physical->section) continue;
         if (physical->recent) {
             physical->recent = 0;
-            continue;
+            if (!ignore_recent) {
+                continue;
+            }
+            ++uwp_swap_urgent_pages;
         }
         if (page->kind == 3 && !uwp_swap_live_page(page)) {
             // The window was released behind this sweep's back (a protection change or a view
@@ -508,17 +519,36 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
     return released;
 }
 
-static uint64_t uwp_swap_reclaim(uint64_t bytes, int include_views) {
+static uint64_t uwp_swap_reclaim(uint64_t bytes, int include_views, int ignore_recent) {
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);
-    uint64_t result = uwp_swap_page_out_locked(bytes, NULL, include_views);
+    uint64_t result = uwp_swap_page_out_locked(bytes, NULL, include_views, ignore_recent);
+    if (ignore_recent && result) ++uwp_swap_urgent_sweeps;
     ReleaseSRWLockExclusive(&uwp_commit_lock);
     read_unlock();
     return result;
 }
 
 uint64_t runtime_memory_page_out(uint64_t bytes) {
-    return uwp_swap_reclaim(bytes, 1);
+    // bbport: three attempts, the last two allowed to take a page the clock sweep left alone. The
+    // first sweep clears the second-chance bit on everything it passes, so a second sweep of the
+    // same pages usually succeeds; when even that is not enough, an allocation has already failed
+    // and the page is worth more than the fault-in it costs later (.649: 141 MiB needed, 0 MiB
+    // freed, 1,757 MiB reported pageable).
+    uint64_t total = 0;
+    for (int sweep = 0; sweep < 3 && total < bytes; ++sweep) {
+        const uint64_t got = uwp_swap_reclaim(bytes - total, 1, sweep > 0);
+        if (!got) {
+            if (sweep > 0) break;
+            continue;
+        }
+        total += got;
+    }
+    if (total) {
+        printf("UWP swap: paged out %" PRIu64 " MiB on request (%" PRIu64 " MiB of it urgent)\n",
+               total >> 20, (uwp_swap_urgent_pages * PAGE) >> 20);
+    }
+    return total;
 }
 
 /* bbport: the part of guest memory the pager may never page out (pinned: a page the guest's own
@@ -607,8 +637,9 @@ static void uwp_swap_report(void) {
     // What the disk half is doing, and whether it is full: a page-out that fails leaves the page
     // resident, so this is the difference between "nothing to page" and "nowhere to put it".
     printf("UWP swap: disk pages=%" PRIu64 " MiB of a %" PRIu64 " MiB budget; write failures=%"
-           PRIu64 "%s\n",
+           PRIu64 "; urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
            (disk * PAGE) >> 20, uwp_swap_disk_budget >> 20, uwp_swap_write_failures,
+           uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
 }
 
@@ -634,7 +665,7 @@ static void *uwp_pager(void *unused) {
             // budget bounds what it can take either way.
             if (used > limit - (UINT64_C(640) << 20)) draining = 1;
             if (used <= limit - (UINT64_C(768) << 20)) draining = 0;
-            if (draining) out = uwp_swap_reclaim(UINT64_C(2) << 20, 0);
+            if (draining) out = uwp_swap_reclaim(UINT64_C(2) << 20, 0, 0);
         }
         uint64_t now = GetTickCount64();
         if (now - reported >= 5000) {
