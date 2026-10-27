@@ -3,6 +3,7 @@
  * and a 128 MiB mapped-window frame pool. */
 #include <assert.h>
 #include <fileapifromapp.h>
+#include <stdlib.h>
 #include <winioctl.h>
 
 extern uint64_t bb_uwp_app_memory_usage(void);
@@ -16,6 +17,10 @@ static unsigned char uwp_swap_copy[16384];
 static uint64_t uwp_swap_out, uwp_swap_in, uwp_swap_disk_pages, uwp_swap_views;
 static uint64_t uwp_swap_hash_checks, uwp_swap_hash_errors, uwp_swap_view_evictions;
 static uint64_t uwp_swap_view_limit = UINT64_C(64) * 1024 * 1024 / PAGE;
+/* bbport: passes that were asked to page something out and gave nothing back. With every private
+ * page pinned (the old rule, see uwp_pin_private_pages) this is what the emergency passes did at
+ * the end of a session - six of them, 0 MiB each - and nothing in the log said so. */
+static uint64_t uwp_swap_passes, uwp_swap_dry;
 static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
@@ -394,6 +399,7 @@ static int uwp_swap_protect(UwpPage *page, unsigned index, int prot) {
 
 static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views) {
     if (!uwp_swap_open()) return 0;
+    if (bytes) ++uwp_swap_passes;
     uint64_t released = 0;
     const size_t max_scan = uwp_count * 2;
     for (size_t scanned = 0; scanned < max_scan && released < bytes; ++scanned) {
@@ -459,6 +465,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         released += PAGE;
         uwp_swap_out += PAGE;
     }
+    if (bytes && !released) ++uwp_swap_dry;
     return released;
 }
 
@@ -497,12 +504,40 @@ uint64_t runtime_memory_pinned_bytes(void) {
 static void uwp_swap_report(void) {
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);
-    uint64_t resident = 0, pinned = 0;
+    // bbport: why a page the pager cannot take is untouchable, in four buckets. `pinned` is the
+    // policy (uwp_pin_private_pages), the other three are structure: a promoted section, a page
+    // several guest mappings share (references != 1 - never paged out, its other names would see a
+    // hole), and one that is executable or not readable everywhere. Without this split a run says
+    // "0 MiB paged out" and gives no hint which of the four to go after.
+    uint64_t resident = 0, pinned = 0, section = 0, shared = 0, unreadable = 0;
     for (size_t i = 0; i < uwp_count; ++i) {
         const UwpPage *page = &uwp_pages[i];
         if (!page->mapped || !page->pageable) continue;
-        if (uwp_physical[page->physical / PAGE].pinned) pinned += PAGE;
-        else if (page->kind == 1 && page->committed) resident += PAGE;
+        const UwpPhysical *physical = &uwp_physical[page->physical / PAGE];
+        if (physical->pinned) {
+            pinned += PAGE;
+            continue;
+        }
+        if (page->kind != 1 || !page->committed) continue;
+        if (physical->section) {
+            section += PAGE;
+            continue;
+        }
+        if (physical->references != 1) {
+            shared += PAGE;
+            continue;
+        }
+        int readable = 1;
+        for (unsigned k = 0; k < 4; ++k) {
+            if (!(page->protection[k] & PROT_READ) || (page->protection[k] & PROT_EXEC)) {
+                readable = 0;
+            }
+        }
+        if (!readable) {
+            unreadable += PAGE;
+            continue;
+        }
+        resident += PAGE;
     }
     uint64_t out = uwp_swap_out, in = uwp_swap_in;
     uint64_t disk = uwp_swap_disk_pages, views = uwp_swap_views;
@@ -511,13 +546,25 @@ static void uwp_swap_report(void) {
     ReleaseSRWLockExclusive(&uwp_commit_lock);
     read_unlock();
     const char *profile = getenv("BB_IO_STATS");
-    if (!out && !(profile && *profile == '1')) return;
+    // bbport: also print when the pinned part moved by 64 MiB or more. It used to print only
+    // after the pager had paged something out, so a run in which nothing was pageable - every
+    // private page pinned - said nothing at all while the unpageable part took the budget.
+    const uint64_t pinned_mb = pinned >> 20;
+    static uint64_t last_pinned_mb;
+    const uint64_t moved = pinned_mb > last_pinned_mb ? pinned_mb - last_pinned_mb
+                                                      : last_pinned_mb - pinned_mb;
+    if (!out && !uwp_swap_dry && moved < 64 && !(profile && *profile == '1')) return;
+    last_pinned_mb = pinned_mb;
     printf("UWP swap: out=%" PRIu64 " in=%" PRIu64 " disk=%" PRIu64 " views=%" PRIu64
            " MiB; checks=%" PRIu64 " corrupt=%" PRIu64 " window evictions=%" PRIu64 "\n",
            out >> 20, in >> 20, (disk * PAGE) >> 20, (views * PAGE) >> 20,
            checks, errors, evictions);
-    printf("UWP swap: unpinned private=%" PRIu64 " pinned=%" PRIu64 " MiB\n",
-           resident >> 20, pinned >> 20);
+    printf("UWP swap: pageable private=%" PRIu64 " pinned=%" PRIu64
+           " MiB; page-out passes=%" PRIu64 " with nothing to give=%" PRIu64 "\n",
+           resident >> 20, pinned_mb, uwp_swap_passes, uwp_swap_dry);
+    printf("UWP swap: not paged - pinned policy=%" PRIu64 " section=%" PRIu64
+           " shared=%" PRIu64 " exec/unreadable=%" PRIu64 " MiB\n",
+           pinned_mb, section >> 20, shared >> 20, unreadable >> 20);
 }
 
 static void *uwp_pager(void *unused) {
@@ -567,6 +614,8 @@ void runtime_memory_start_paging(void) {
     if (pthread_create(&thread, NULL, uwp_pager, NULL)) uwp_fail("pager thread", 0);
     pthread_detach(thread);
     uwp_swap_started = 1;
-    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=384 MiB\n",
-           bb_uwp_app_memory_limit() >> 20);
+    printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=384 MiB; "
+           "private pages %s\n",
+           bb_uwp_app_memory_limit() >> 20,
+           uwp_pin_private_pages() ? "pinned by BB_UWP_PIN_PRIVATE" : "pageable");
 }

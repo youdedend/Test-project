@@ -486,6 +486,65 @@ things it may free.
 
 ---
 
+## 2j. The `.534` ramp: the pager had nothing to page, and the pin rule is why (2026-10-27)
+
+Logs in `docs/hardware-test-17/` (`loader.log.txt` 820 lines). The new telemetry did its job - the
+ramp is finally visible, and it names the cause:
+
+```
+presents=564 4401 MiB  pinned 1079  (+555)
+presents=652 4566 MiB  pinned 1265  (+108)
+presents=770 4634 MiB  pinned 1341  (+11)
+presents=793 4687 MiB  pinned 1354  (+53)
+presents=793 4607 MiB  pinned 1355  (-80)   <- the GC's last success
+            4995 MiB  pinned 1355  (+388)   <- one area load
+headroom passes: 4948 -> 4936 -> 4958 (64 MiB each) -> 4977 -> 5028 -> 5045 -> 5077 -> 5110 (0 MiB)
+FATAL vmaCreateBuffer(16384 KiB, HostUncached) -> -2; AppMemory 5104/5120 MiB (guest pinned=1355)
+```
+
+`guest pinned` is the whole story: **0 at boot, 1,355 MiB when the app died**, and the pager's
+`pageable private` never grew past ~400 MiB. The pager (2 MiB a pass, only inside the last 384 MiB)
+had almost nothing it was allowed to take, so the emergency passes gave 0 MiB five times in a row.
+
+### Why `pinned` was that big
+
+`runtime_memory_handle_commit_fault_at` pinned every page a guest thread first touched:
+
+```c
+if (guest_code || (wanted & PROT_EXEC)) physical->pinned = 1;
+```
+
+`guest_code` is `image && fault_pc - image < 0x20000000` (`src/probe.c:370`) - true for **every fault
+taken while the game is executing**, which is every page the game first touches, not just the
+WC_GARLIC/alias windows the comment above it describes. The pager skips pinned physicals
+(`guest_swap.inc:415`), so the entire working set of the session became unpageable and the pager had
+~400 MiB to work with out of 5 GiB.
+
+### The fix
+
+| What | Where |
+|---|---|
+| Pin only what the comment meant: shared/alias windows (kinds 3 and 4) and executable pages. A private page stays pageable - that is the page the pager's `kind == 1` path swaps, hashes and re-verifies | `guest_memory.inc:229-238` |
+| `BB_UWP_PIN_PRIVATE=1` puts the old rule back for an A/B run (no rebuild), logged at start-up: `UWP swap: pager active, …; private pages pageable\|pinned by BB_UWP_PIN_PRIVATE` | `guest_memory.inc:32-54`, `guest_swap.inc:582-586` |
+| The reason a page cannot be paged out is now counted and printed in four buckets - pinned policy / promoted section / shared (`references != 1`) / exec-or-unreadable - so the next run says which lever is left | `guest_swap.inc:498-536`, `:557-561` |
+| The pager report now also prints when `pinned` moves by 64 MiB, and counts passes that were asked to page out and gave nothing: `.534` would have shown `page-out passes=… with nothing to give=…` instead of printing nothing at all | `guest_swap.inc:13-17, 397-400, 543-561` |
+
+Expected on the console: `pageable private` several hundred MiB higher and growing with the session,
+`guest pinned` staying at code/section size instead of climbing past a gigabyte, and the emergency
+passes returning real memory instead of `0 MiB`. `pinned=0` at boot and `1355` at the end should be
+replaced by a `not paged - pinned policy=… section=… shared=… exec/unreadable=…` split that says what
+is left.
+
+**Not verified on hardware.** Two risks, both stated rather than hidden: private pages now go
+through the swap path under pressure, so guest threads can stall on a fault-in where they used to
+find the page resident (that is what the pager is for, and the second-chance `recent` bit already
+gives each page one grace period); and the guest-memory self-test (`run.txt` = `memory`,
+`guest_swap_test.inc`) should be run once to confirm the change did not disturb its expectations -
+inspection says it does not, since the pages it faults are kind 1 and took `uwp_commit` before and
+after, but "inspected" is not "ran".
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

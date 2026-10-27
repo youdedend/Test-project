@@ -29,6 +29,31 @@ static void uwp_fail(const char *what, uintptr_t address);
 static UwpPage *uwp_page(uintptr_t address);
 static int uwp_promote(UwpPhysical *physical, uint64_t offset);
 
+/* Should an ordinary private page stay pageable when a guest thread touches it?
+ *
+ * The commit-fault handler used to pin every page a guest thread first touched, because
+ * `guest_code` is true whenever the faulting instruction pointer is anywhere inside the loaded
+ * image (src/probe.c:370) - which is all of the game's code and all of the data it touches while
+ * running. The rule it was written for is in its comment: pin the pageable WC_GARLIC/alias windows
+ * the GPU reads directly. Pinning private pages as well removed the pager's entire workload.
+ *
+ * Measured on the console (docs/hardware-test-15, -16): `guest pinned` grew 0 -> 1,355 MiB over one
+ * session, `UWP swap: unpinned private` stayed flat at ~401 MiB, page-outs in the emergency passes
+ * returned 0 MiB, and the app died failing a 16 MiB `HostUncached` (guest-side) allocation at
+ * 5,104/5,120 MiB - guest memory it could not hand back.
+ *
+ * So: kinds 3 and 4 (shared/alias windows, the GPU reads them directly) and executable pages are
+ * pinned; a private page is not. Should this ever regress, BB_UWP_PIN_PRIVATE=1 restores the old
+ * rule for an A/B run without rebuilding. */
+static int uwp_pin_private_pages(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *env = getenv("BB_UWP_PIN_PRIVATE");
+        cached = env && *env && *env != '0';
+    }
+    return cached;
+}
+
 static DWORD win_prot(int prot) {
     if (prot & PROT_EXEC) return PAGE_EXECUTE_READ;
     if (prot & PROT_WRITE) return PAGE_READWRITE;
@@ -201,8 +226,13 @@ int runtime_memory_handle_commit_fault_at(uintptr_t address, int access, int gue
         unsigned index = (unsigned)((address - page->address) / 4096);
         int wanted = page->protection[index];
         /* Pin pageable WC_GARLIC pages touched directly by guest CPU code so active CPU/GPU
-         * shared pages stay resident and never stall guest worker threads on swap views. */
-        if (guest_code || (wanted & PROT_EXEC)) {
+         * shared pages stay resident and never stall guest worker threads on swap views; and pin
+         * executable pages, which nothing should have to fault back in. A private page is left
+         * pageable (uwp_pin_private_pages above): it is what the pager's kind == 1 path swaps and
+         * hash-verifies, and pinning every page guest code touched is what filled the app budget
+         * with memory that could not be returned. */
+        if ((wanted & PROT_EXEC) ||
+            (guest_code && (page->kind == 3 || page->kind == 4 || uwp_pin_private_pages()))) {
             physical->pinned = 1;
         }
         int permitted = (access == 1) ? (wanted & PROT_WRITE)
