@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `8219ff7` — *fix(memory): the approved ladder - page out, then free images, then stop* (release target) |
+| HEAD | `3fe9da1` — *fix(swap): pass the ignore-recent flag at the two page-in retry sites* (release target; on top of `ab0657a`, the urgent-sweep commit) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40462562045` — [actions/runs/40462562045](https://github.com/youdedend/Test-project/actions/runs/40462562045), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.649` — contains `BloodborneLauncher_1.0.26300.649_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,221,334 B, sha256 `acd029c591ad429127f703acfcf1d3ea5a2cf928258f5319358043a12a56e096`) |
-| Version shown by that package | **`1.0.26300.649`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0649`** — [releases/tag/xbox-alpha-1.0.26300.0649](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0649), target `8219ff7` (run `40462562045`, both jobs green, publish step ran): **the memory ladder - page out, free images, then stop - with every step timed** (§2l), on top of `.0623`'s fail-soft page-out and 768 MiB disk budget (§2k). Previous: `.0559` (private pages pageable - **confirmed on the console**, §2j), `.0534` (near-limit telemetry, §2i), `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
-| Console validation of this build | **not installed yet** — every console run so far has been `.559` (§2j/§2k: pin fix confirmed, then `ERROR_DISK_FULL` twice, `docs/hardware-test-19`); `.623` and `.649` are published and waiting for Device Portal. Install `.649`: it contains both |
-| Open blocker | **capacity, confirmed**: the scene at `presents=829` needs more than 5,120 MiB even with 1 GiB swapped to disk and 0 MiB pinned (§2k). The next step is the approved degradation path (§10), not more freeing |
+| Last green CI | run `40465344513` — [actions/runs/40465344513](https://github.com/youdedend/Test-project/actions/runs/40465344513), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.717.zip` — 10,218,418 B, sha256 `077faf4a4402acc7345cc5fdb45b93b8af249d618458d2f861b04fe70ad4c00e` (the `.zip` carries `BloodborneLauncher_1.0.26300.717_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx`) |
+| Version shown by that package | **`1.0.26300.717`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0717`** — [releases/tag/xbox-alpha-1.0.26300.0717](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0717), target `3fe9da1` (run `40465344513`): **urgent page-out** — an allocation that has already failed may ignore the second-chance bit, plus the image-reclaim rule breakdown and a 3-sweep `runtime_memory_page_out` (§2l). It is `.649` (the ladder, hardware-confirmed: no disk-full, no stall) plus the fix for what `.649` ran into. Previous: `.0649` (§2l), `.0623` (fail-soft page-out + 768 MiB disk budget, §2k), `.0559` (private pages pageable — **confirmed on the console**, §2j), `.0534` (§2i), `.0504` (§2h), `.0424` (`FindImage` freed-slot fix — **confirmed on the console**, §2g), `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — `.649` is the newest build that has run on hardware (§2l); `.717` adds the urgent sweep and is published, waiting for Device Portal. Install `.717`: it is `.649` plus the fix, so one run covers both |
+| Open blocker | **the app-heap limit, still reached**: `.649` died at `usage=5101/5120 MiB` on a 64 MiB `DeviceLocal` buffer while VMA `heap[0]` was only `2297 MiB of a 4096 MiB budget` — the failing allocation is guest/app memory, not the GPU heap (§2l). `.717` gives the pager the right to take a fresh page at that moment; if it still dies, the new `emergency reclaim … seen=/too recent=/gpu-written=/bound/target=/no backing=` line says which image rule to relax |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -587,7 +587,7 @@ handed back now is (1 GiB to disk, with the hashes verifying), so the next step 
 
 ---
 
-## 2l. `.645`: the memory ladder, and the stall that goes with it (2026-10-27)
+## 2l. `.649`/`.717`: the memory ladder, and the pager's second-chance bit (2026-10-27)
 
 A second `.559` run (`docs/hardware-test-19/`) ended identically - `ERROR_DISK_FULL` after 1,252 MiB
 of swap, `checks=420 corrupt=0`, `pageable private` still 619 MiB when it stopped - so this is the
@@ -631,13 +631,14 @@ UWP memory emergency (allocation failed): need 141 MiB; paged out 0 MiB in 3 ms,
   the next pass. During an area load everything eligible had been touched since the last sweep, so
   the background pager got exactly 2 MiB per pass (93 passes = 185 MiB).
 
-### Fixes in `.665`
+### Fixes in `.717`
 
 | What | Where |
 |---|---|
-| `runtime_memory_page_out` makes up to three sweeps; the second and third may take a page whose second-chance bit is set (an allocation has already failed - a fault-in later is cheaper than a stop). Printed: `paged out N MiB on request (N MiB of it urgent)` | `guest_swap.inc:532-556` |
-| The sweep takes `ignore_recent`, counted as `urgent sweeps=N (N MiB)` in the report | `guest_swap.inc:420-446, 511-527, 596-604` |
-| `TextureCache::EmergencyReclaim` prints why it could not take the images: seen / too recent / gpu-written / bound-or-target / no backing | `texture_cache.h:220-238`, `texture_cache.cpp:1636-1665` |
+| `runtime_memory_page_out` makes up to three sweeps; the second and third may take a page whose second-chance bit is set (an allocation has already failed - a fault-in later is cheaper than a stop). Printed: `paged out N MiB on request (N MiB of it urgent)` | `guest_swap.inc:536-552` |
+| The sweep takes `ignore_recent`, counted as `urgent sweeps=N (N MiB)` in the report | `guest_swap.inc:429-446, 522-534, 640-648` |
+| `TextureCache::EmergencyReclaim` prints why it could not take the images: seen / too recent / gpu-written / bound-or-target / no backing | `texture_cache.h:220-238`, `texture_cache.cpp:1633-1670` |
+| The two page-in/commit retry callers pass `0` for `ignore_recent` — only a failed allocation may take a fresh page. **`.665` never got here:** the first push (`ab0657a`) failed to compile because those two sites still passed three arguments (`too few arguments to function call, expected 4, have 3`, `runtime_memory.c.obj`, run `40464733034`); `3fe9da1` fixes both | `guest_swap.inc:367-371`, `guest_memory.inc:196-198` |
 
 ---
 
