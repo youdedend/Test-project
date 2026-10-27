@@ -195,7 +195,9 @@ static int uwp_commit(UwpPage *page) {
     for (unsigned attempt = 0;
          !VirtualAllocFromApp((void *)page->address, PAGE, MEM_COMMIT, PAGE_READWRITE);
          ++attempt) {
-        if (attempt == 7 || !uwp_swap_page_out_locked(UINT64_C(16) << 20, page, 1)) {
+        // bbport: same as the page-in retry in guest_swap.inc - only an allocation that has already
+        // failed may ignore the second-chance bit (`0` here keeps it).
+        if (attempt == 7 || !uwp_swap_page_out_locked(UINT64_C(16) << 20, page, 1, 0)) {
             uwp_fail("commit-on-touch", page->address);
         }
     }

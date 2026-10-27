@@ -364,7 +364,11 @@ static int uwp_swap_page_in(UwpPage *page) {
             if (view) {
                 break;
             }
-            if (attempt == 7 || !uwp_swap_page_out_locked(UINT64_C(16) * 1024 * 1024, page, 1)) {
+            // bbport: a page-in retry keeps the second-chance bit - evicting genuinely hot pages to
+            // make room for one view costs more faults than it saves. Only an allocation that has
+            // already failed (runtime_memory_page_out) is allowed to ignore it.
+            if (attempt == 7 ||
+                !uwp_swap_page_out_locked(UINT64_C(16) * 1024 * 1024, page, 1, 0)) {
                 uwp_fail("swap page-in", page->address + i * 4096);
             }
         }

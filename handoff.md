@@ -610,6 +610,35 @@ while these steps run **on the GPU thread**; that is why every step is now timed
 next run shows the ladder working but the stall growing, the follow-up is to move the page-out work
 to the pager thread and give the allocation a deadline - measured first, not assumed.
 
+### `.649` run: the disk is fixed, the pager's second-chance bit is the next wall
+
+Logs in `docs/hardware-test-20/`. What it settles:
+
+- **No `ERROR_DISK_FULL`**, `disk pages=185 MiB of a 768 MiB budget; write failures=0`, and
+  **no 10 s stall** (`grep -c STALL` = 0) - the 640 MiB lead time moved the pager ahead of the spike
+  (pre-allocation passes cost 7 / 19 / 109 ms). `guest pinned` stayed 0 MiB; the run reached
+  `presents=861` vs 815.
+- The ladder reported itself instead of dying quietly:
+
+```
+UWP swap: pageable private=1757 pinned=0 MiB; page-out passes=93 with nothing to give=0
+UWP memory emergency (allocation failed): need 141 MiB; paged out 0 MiB in 3 ms,
+    freed 0 MiB of images in 0 ms (usage now 5101/5120 MiB)
+```
+
+  **1,757 MiB was pageable and a 141 MiB request got 0 MiB in 3 ms.** That is the clock sweep's
+  second-chance bit: it sets `recent` on every page it passes, skips it, and only clears the bit on
+  the next pass. During an area load everything eligible had been touched since the last sweep, so
+  the background pager got exactly 2 MiB per pass (93 passes = 185 MiB).
+
+### Fixes in `.665`
+
+| What | Where |
+|---|---|
+| `runtime_memory_page_out` makes up to three sweeps; the second and third may take a page whose second-chance bit is set (an allocation has already failed - a fault-in later is cheaper than a stop). Printed: `paged out N MiB on request (N MiB of it urgent)` | `guest_swap.inc:532-556` |
+| The sweep takes `ignore_recent`, counted as `urgent sweeps=N (N MiB)` in the report | `guest_swap.inc:420-446, 511-527, 596-604` |
+| `TextureCache::EmergencyReclaim` prints why it could not take the images: seen / too recent / gpu-written / bound-or-target / no backing | `texture_cache.h:220-238`, `texture_cache.cpp:1636-1665` |
+
 ---
 
 ## 3. Code map (the files that matter)
