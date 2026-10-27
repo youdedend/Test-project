@@ -115,6 +115,54 @@ version in "Manage app", and repeat. If the version shows `.211` **and** `loader
 
 ---
 
+## 2c. Precompile crash at item `1025 / 10256` (2026-10-27) — crash isolation added
+
+The log batch supplied before this round (`loader.log.txt` 102 lines + `errors.log.txt`) never reached
+gameplay: telemetry stops at `1077/5120 MiB (presents=0)`. The run discards a stale `driver.vkcache`
+(172,154 KiB, "pipeline cache UUID changed"), extracts 8,207 CS/PS/VS programs and 2,048 linked pairs,
+imports the portable cache, warms 65/65 pipelines, then flushes `driver.vkcache` at the
+`i % 256 == 255` boundary (5403 → 14195 → 23429 → 31339 KiB) and dies on the item after 1024. Last
+GPU line: `control_flow_graph.cpp:407 RemoveUnreachableBlocks: Removing unreachable block begin=0x27c`.
+No `pinned` marker and `Scene resolution: raster 1280x720`, so this is the precompile run, before any
+texture pressure — it is **not** the texture-cache crash.
+
+Why nothing was logged: the recompiler's `abort()`/fastfail path in the static UCRT bypasses the
+loader's VEH, so only `precompile_inflight.txt` survived, and it recorded the item but not what the
+item was doing — a poisoned shader therefore cost one relaunch per shader, blind.
+
+Changes, all in `gpu/shim/bb_precompile.cpp` (202 insertions, 8 deletions):
+
+| What | Where |
+|---|---|
+| `enum class CompilePhase { Idle, Params, Translate, Emit, Validate, Pipeline }`, `PhaseName` | `bb_precompile.cpp:80-108` |
+| `g_compile_phase`, `g_active_breadcrumb` (forward-declared `InflightBreadcrumb`) | `:99-102` |
+| `ScopedActiveDiag` dtor resets the phase to `Idle` | `:120` |
+| Breadcrumb record is now 5 fields (`hash partner kind idx phase`), kept in RAM and rewritten by `SetPhase` | `:453-521` |
+| `SetCompilePhase()` — one atomic store + a small file rewrite per phase; **clears `runtime_fault_recover` on `Pipeline`** so Mesa's own SEH is not hijacked | `:532-549` |
+| `ConsumeInflightCrashBreadcrumb` prints kind + phase (e.g. `died mid-compile on item 1025 (kind=1 phase=2 translate …)`) | `:405-425` |
+| Phase markers in all three standalone branches (CS/PS/VS) and both linked-pair branches | `:1692-1971` |
+| Phase markers in the aux-GS warm | `:2035-2040` |
+| `sigsetjmp`/`runtime_fault_recover` isolation around `CompileSingleExtractedInner`, `CompileLinkedPairInner` and each aux-GS variant → `OnCompileFault()` prints, counts, quarantines and continues | `:1989-2010`, `:2064-2125` |
+| `OnPrecompileTerminate()` installed with `std::set_terminate` for the duration of the loops: an unhandled exception still names item/phase/hash | `:2055-2066`, `:2433-2443` |
+| Summary line `N shader(s) faulted the compiler and were quarantined` | `:2539-2545` |
+
+Behaviour now, in order of what the crash actually is:
+
+1. **Access violation inside the recompiler** → recovered at the `sigsetjmp` point, shader quarantined,
+   run continues in the same launch.
+2. **Anything that still kills the process** (`abort`, stack overflow, driver thread) → terminate
+   handler / crash report names the item and phase, and the next launch quarantines that hash from
+   the breadcrumb and resumes — one relaunch for that shader instead of one per shader.
+
+Not recovered on purpose: faults inside the driver call (`Pipeline` phase) hand the recovery point
+back before entering Mesa, and a `longjmp` out of a faulting recompiler frame skips destructors — so a
+fault leaks that shader's IR pools. Both are bounded and deliberate.
+
+**Unproven on hardware** — as with everything in this document, CI (clang-cl, run check below) says it
+builds; only a Series S/X run says it works.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

@@ -4,6 +4,7 @@
 
 #include "bb_precompile.h"
 #include "bbport_overlay.h"
+#include "bbport_toggles.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -75,6 +77,36 @@ std::atomic<u32> g_diag_stage{0};
 std::atomic<u64> g_diag_hash{0};
 std::atomic<u64> g_diag_partner_hash{0};
 
+// bbport: which phase of a compile the process is in. Written into the crash breadcrumb, so the
+// run after a crash says "died mid-compile on item 1025 (stage=1 phase=2 translate)" instead of
+// leaving the last log line to guess from - a shader that kills the recompiler used to cost a
+// restart per shader with no record of where it died.
+enum class CompilePhase : u32 {
+    Idle = 0,
+    Params = 1,    ///< reading the shader's registers/constants
+    Translate = 2, ///< frontend: decode, CFG, structurization, IR passes
+    Emit = 3,      ///< SPIR-V emission
+    Validate = 4,  ///< SPIR-V validation
+    Pipeline = 5,  ///< driver pipeline / serialization (Mesa, DXC)
+};
+
+std::atomic<u32> g_compile_phase{static_cast<u32>(CompilePhase::Idle)};
+class InflightBreadcrumb;
+/// The breadcrumb of the precompile loop in progress (null outside PrecompileGameShaderArchives).
+InflightBreadcrumb* g_active_breadcrumb = nullptr;
+
+const char* PhaseName(u32 phase) noexcept {
+    switch (static_cast<CompilePhase>(phase)) {
+    case CompilePhase::Idle: return "idle";
+    case CompilePhase::Params: return "params";
+    case CompilePhase::Translate: return "translate";
+    case CompilePhase::Emit: return "emit";
+    case CompilePhase::Validate: return "validate";
+    case CompilePhase::Pipeline: return "pipeline";
+    }
+    return "?";
+}
+
 struct ScopedActiveDiag {
     ScopedActiveDiag(u32 idx, u32 total, u32 stage, u64 hash, u64 partner = 0) noexcept {
         g_diag_index.store(idx, std::memory_order_relaxed);
@@ -85,6 +117,7 @@ struct ScopedActiveDiag {
         g_diag_active.store(true, std::memory_order_release);
     }
     ~ScopedActiveDiag() noexcept {
+        g_compile_phase.store(static_cast<u32>(CompilePhase::Idle), std::memory_order_relaxed);
         g_diag_active.store(false, std::memory_order_release);
     }
 };
@@ -369,14 +402,15 @@ void ConsumeInflightCrashBreadcrumb() {
                 std::string text(static_cast<size_t>(sz), '\0');
                 if (f.ReadRaw<char>(text.data(), text.size()) == text.size()) {
                     unsigned long long h = 0, partner = 0;
-                    unsigned stage = 0, idx = 0;
-                    if (std::sscanf(text.c_str(), "%llx %llx %u %u", &h, &partner, &stage, &idx) >=
-                            1 &&
+                    unsigned stage = 0, idx = 0, phase = 0;
+                    if (std::sscanf(text.c_str(), "%llx %llx %u %u %u", &h, &partner, &stage, &idx,
+                                    &phase) >= 1 &&
                         h != 0) {
                         std::printf(
                             "GPU: previous shader precompile died mid-compile on item %u "
-                            "(stage=%u hash=%016llx partner=%016llx) — quarantining and resuming\n",
-                            idx, stage, h, partner);
+                            "(kind=%u phase=%u %s hash=%016llx partner=%016llx) — quarantining "
+                            "and resuming\n",
+                            idx, stage, phase, PhaseName(phase), h, partner);
                         std::fflush(stdout);
                         if (stage == 3u && partner != 0) {
                             // Quarantine both members only if standalone didn't already clear them;
@@ -417,10 +451,29 @@ public:
     ~InflightBreadcrumb() { Clear(); }
 
     void Record(u32 idx, u32 stage, u64 hash, u64 partner) noexcept {
+        idx_ = idx;
+        stage_ = stage;
+        hash_ = hash;
+        partner_ = partner;
+        phase_ = static_cast<u32>(CompilePhase::Idle);
+        Write();
+    }
+
+    /// Rewrites the record with the compile phase, keeping the item and its kind: called at every
+    /// phase boundary of the compile, so a run that dies mid-compile says which phase it died in.
+    void SetPhase(u32 phase) noexcept {
+        if (idx_ == 0) {
+            return;
+        }
+        phase_ = phase;
+        Write();
+    }
+
+    void Write() noexcept {
         char buf[64]{};
-        const int n = std::snprintf(buf, sizeof(buf), "%016llx %016llx %02u %08u\n",
-                                    static_cast<unsigned long long>(hash),
-                                    static_cast<unsigned long long>(partner), stage, idx);
+        const int n = std::snprintf(buf, sizeof(buf), "%016llx %016llx %02u %08u %02u\n",
+                                    static_cast<unsigned long long>(hash_),
+                                    static_cast<unsigned long long>(partner_), stage_, idx_, phase_);
         if (n <= 0) {
             return;
         }
@@ -465,12 +518,33 @@ public:
 
 private:
     std::filesystem::path path_;
+    u32 idx_ = 0;
+    u32 stage_ = 0;
+    u32 phase_ = 0;
+    u64 hash_ = 0;
+    u64 partner_ = 0;
 #ifdef BB_UWP
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 #else
     FILE* file_ = nullptr;
 #endif
 };
+
+/// Marks the phase of the compile in progress (cheap: one atomic store, plus a 3-line file rewrite
+/// only while a precompile run is active).
+void SetCompilePhase(CompilePhase phase) noexcept {
+    const u32 value = static_cast<u32>(phase);
+    g_compile_phase.store(value, std::memory_order_relaxed);
+    if (g_active_breadcrumb != nullptr) {
+        g_active_breadcrumb->SetPhase(value);
+    }
+    if (phase == CompilePhase::Pipeline) {
+        // Hand the recovery point back before calling into the driver: Mesa handles some of its own
+        // exceptions and the recompiler's recovery must not intercept them. A fault in the driver
+        // still names the same shader through the breadcrumb, but ends the run as before.
+        runtime_fault_recover = nullptr;
+    }
+}
 
 std::unordered_set<u64> LoadQuarantineHashes() {
     std::unordered_set<u64> out;
@@ -1623,6 +1697,7 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
                                                 const ExtractedShader& sh) {
     ScopedSoftAssert soft_assert;
     try {
+        SetCompilePhase(CompilePhase::Params);
         std::array<u32, 16> user_regs{};
         if (!ctx.arena.Populate(sh, user_regs)) {
             return false;
@@ -1656,12 +1731,16 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             };
             Shader::Info info{Shader::HwStage::Compute, Shader::SwStage::Compute, params};
             Shader::Backend::Bindings binding{};
+            SetCompilePhase(CompilePhase::Translate);
             auto ir = Shader::TranslateProgram(sh.code, pools, info, rt, profile);
+            SetCompilePhase(CompilePhase::Emit);
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            SetCompilePhase(CompilePhase::Validate);
             if (!ValidateSpirvModule(spv, sh.hash)) {
                 return false;
             }
+            SetCompilePhase(CompilePhase::Pipeline);
             return ctx.cache.PrecompileArchiveCompute(info, spv);
         }
 
@@ -1678,12 +1757,15 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             };
             Shader::Info info{Shader::HwStage::Fragment, Shader::SwStage::Fragment, params};
             Shader::Backend::Bindings binding{};
+            SetCompilePhase(CompilePhase::Translate);
             auto ir = Shader::TranslateProgram(sh.code, pools, info, rt, profile);
             if (!info.fmasks.empty()) {
                 return false;
             }
+            SetCompilePhase(CompilePhase::Emit);
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            SetCompilePhase(CompilePhase::Validate);
             if (!ValidateSpirvModule(spv, sh.hash)) {
                 return false;
             }
@@ -1700,6 +1782,7 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             Vulkan::GraphicsPipeline::SerializationSupport sdata{};
             sdata.multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
             const auto& vs_spv = ctx.GetPassthroughVs(max_param_loc);
+            SetCompilePhase(CompilePhase::Pipeline);
             return ctx.cache.PrecompileArchiveGraphics(&ctx.dummy_vs_info, ctx.dummy_vs_rt, vs_spv,
                                                        std::nullopt, &info, rt, spv, key, sdata);
         }
@@ -1734,13 +1817,16 @@ SHAD_NO_INLINE bool CompileSingleExtractedInner(PrecompileContext& ctx,
             };
             Shader::Info info{Shader::HwStage::Vertex, Shader::SwStage::Vertex, params};
             Shader::Backend::Bindings binding{};
+            SetCompilePhase(CompilePhase::Translate);
             auto ir = Shader::TranslateProgram(sh.code, pools, info, rt, profile);
             if (!info.fmasks.empty()) {
                 return false;
             }
             const auto fetch = Shader::Gcn::ParseFetchShader(info);
+            SetCompilePhase(CompilePhase::Emit);
             auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, rt, ir, binding);
             pools.ReleaseContents();
+            SetCompilePhase(CompilePhase::Validate);
             if (!ValidateSpirvModule(spv, sh.hash)) {
                 return false;
             }
@@ -1777,6 +1863,7 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
                                            const ExtractedShader& ps_sh) {
     ScopedSoftAssert soft_assert;
     try {
+        SetCompilePhase(CompilePhase::Params);
         const Shader::Profile& profile = ctx.cache.GetProfile();
         Shader::Backend::Bindings binding{};
 
@@ -1799,12 +1886,15 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
         std::vector<u32> ps_spv;
         {
             Shader::Pools ps_pools;
+            SetCompilePhase(CompilePhase::Translate);
             auto ps_ir = Shader::TranslateProgram(ps_sh.code, ps_pools, ps_info, ps_rt, profile);
             if (!ps_info.fmasks.empty()) {
                 return false;
             }
+            SetCompilePhase(CompilePhase::Emit);
             ps_spv = Shader::Backend::SPIRV::EmitSPIRV(profile, ps_rt, ps_ir, binding);
             ps_pools.ReleaseContents();
+            SetCompilePhase(CompilePhase::Validate);
             if (!ValidateSpirvModule(ps_spv, ps_sh.hash)) {
                 return false;
             }
@@ -1847,13 +1937,16 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
         std::vector<u32> vs_spv;
         {
             Shader::Pools vs_pools;
+            SetCompilePhase(CompilePhase::Translate);
             auto vs_ir = Shader::TranslateProgram(vs_sh.code, vs_pools, vs_info, vs_rt, profile);
             if (!vs_info.fmasks.empty()) {
                 return false;
             }
             fetch = Shader::Gcn::ParseFetchShader(vs_info);
+            SetCompilePhase(CompilePhase::Emit);
             vs_spv = Shader::Backend::SPIRV::EmitSPIRV(profile, vs_rt, vs_ir, binding);
             vs_pools.ReleaseContents();
+            SetCompilePhase(CompilePhase::Validate);
             if (!ValidateSpirvModule(vs_spv, vs_sh.hash)) {
                 return false;
             }
@@ -1878,12 +1971,15 @@ SHAD_NO_INLINE bool CompileLinkedPairInner(PrecompileContext& ctx,
             return false;
         }
 
+        SetCompilePhase(CompilePhase::Pipeline);
         return ctx.cache.PrecompileArchiveGraphics(&vs_info, vs_rt, vs_spv, fetch, &ps_info, ps_rt,
                                                    ps_spv, key, sdata);
     } catch (...) {
         return false;
     }
 }
+
+std::atomic<u32> g_precompile_faults{0};
 
 u32 WarmAuxiliaryGeometryShaders(PrecompileContext& ctx) {
     u32 ok = 0;
@@ -1893,6 +1989,19 @@ u32 WarmAuxiliaryGeometryShaders(PrecompileContext& ctx) {
                                       ? Shader::Backend::SPIRV::AuxShaderType::QuadListGS
                                       : Shader::Backend::SPIRV::AuxShaderType::RectListGS;
             for (const u32 num_attrs : {0u, 1u, 2u}) {
+                // These are compiled by the same recompiler, so they get the same isolation: a fault
+                // here skips the variant instead of ending the run.
+                sigjmp_buf recover;
+                sigjmp_buf* volatile previous = runtime_fault_recover;
+                if (sigsetjmp(recover, 0)) {
+                    runtime_fault_recover = previous;
+                    std::printf("GPU: aux GS warm (%ux attr) faulted the compiler; skipping it\n",
+                                num_attrs);
+                    std::fflush(stdout);
+                    g_precompile_faults.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                runtime_fault_recover = &recover;
                 Shader::RuntimeInfo fs_rt = ctx.dummy_fs_rt;
                 fs_rt.hw.fs.num_inputs = num_attrs;
                 for (u32 i = 0; i < num_attrs; ++i) {
@@ -1923,13 +2032,16 @@ u32 WarmAuxiliaryGeometryShaders(PrecompileContext& ctx) {
 
                 Vulkan::GraphicsPipeline::SerializationSupport sdata{};
                 sdata.multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+                SetCompilePhase(CompilePhase::Emit);
                 sdata.tcs = Shader::Backend::SPIRV::EmitAuxilaryTessShader(aux_type, fs_rt.hw.fs);
                 const auto& vs_spv = ctx.GetPassthroughVs(num_attrs);
+                SetCompilePhase(CompilePhase::Pipeline);
                 if (ctx.cache.PrecompileArchiveGraphics(&ctx.dummy_vs_info, ctx.dummy_vs_rt, vs_spv,
                                                         std::nullopt, &ctx.dummy_fs_info, fs_rt,
                                                         ctx.passthrough_fs_spv, key, sdata)) {
                     ++ok;
                 }
+                runtime_fault_recover = previous;
             }
         } catch (...) {
         }
@@ -1937,9 +2049,61 @@ u32 WarmAuxiliaryGeometryShaders(PrecompileContext& ctx) {
     return ok;
 }
 
+/// Unhandled exception / abort inside the recompiler or the driver. It cannot be resumed, but it can
+/// say what it was working on: the next run quarantines that shader from the breadcrumb, so one
+/// relaunch instead of a blind one is enough to get past it.
+void OnPrecompileTerminate() {
+    const u32 phase = g_compile_phase.load(std::memory_order_relaxed);
+    const auto diag = GetActiveShaderDiagnostic();
+    std::printf("GPU: shader precompile terminated on item %u/%u (phase=%u %s, hash=%016llx "
+                "partner=%016llx); the next launch quarantines it and resumes\n",
+                diag.index, diag.total, phase, PhaseName(phase),
+                static_cast<unsigned long long>(diag.hash),
+                static_cast<unsigned long long>(diag.partner_hash));
+    std::fflush(stdout);
+    std::abort();
+}
+
+/// Reports a shader that faulted the process and returns it to the caller, which skips it. The hash
+/// is quarantined as well, so the crash cannot come back on the next run either.
+void OnCompileFault(const char* what, u64 hash, u64 partner) noexcept {
+    const u32 phase = g_compile_phase.load(std::memory_order_relaxed);
+    std::printf("GPU: shader precompile faulted inside the compiler on item %u (%s, phase=%u %s, "
+                "hash=%016llx partner=%016llx); skipping it and continuing — quarantined\n",
+                g_diag_index.load(std::memory_order_relaxed), what, phase, PhaseName(phase),
+                static_cast<unsigned long long>(hash),
+                static_cast<unsigned long long>(partner));
+    std::fflush(stdout);
+    g_precompile_faults.fetch_add(1, std::memory_order_relaxed);
+    if (hash != 0) {
+        // Same keys ConsumeInflightCrashBreadcrumb derives, so a fault we survive and a crash that
+        // kills the process quarantine the same way.
+        AppendQuarantineHash(partner != 0
+                                 ? static_cast<u64>(hash) ^
+                                       (static_cast<u64>(partner) * 0x9E3779B97F4A7C15ull)
+                                 : static_cast<u64>(hash));
+    }
+}
+
+/// An access violation inside the recompiler used to end the process, which is why a precompile run
+/// had to be restarted once per poisoned shader. The loader's exception handler resumes this thread
+/// at the recovery point (src/probe.c, the same mechanism vk_draw_prep and vk_pipeline_cache use for
+/// speculative guest reads), so the shader is skipped and the run carries on. Not recovered: a
+/// stack overflow, or a fault on a driver thread — those still end the process, but the breadcrumb's
+/// phase now says where.
 bool CompileSingleExtractedSafe(PrecompileContext* ctx, const ExtractedShader* sh) {
     const size_t walker_mark = Shader::GetUwpSrtWalkerWatermark();
+    sigjmp_buf recover;
+    sigjmp_buf* volatile previous = runtime_fault_recover;
+    if (sigsetjmp(recover, 0)) {
+        runtime_fault_recover = previous;
+        OnCompileFault("standalone", sh->hash, 0);
+        Shader::RewindUwpSrtWalkerTo(walker_mark);
+        return false;
+    }
+    runtime_fault_recover = &recover;
     const bool ok = CompileSingleExtractedInner(*ctx, *sh);
+    runtime_fault_recover = previous;
     Shader::RewindUwpSrtWalkerTo(walker_mark);
     return ok;
 }
@@ -1947,7 +2111,17 @@ bool CompileSingleExtractedSafe(PrecompileContext* ctx, const ExtractedShader* s
 bool CompileLinkedPairSafe(PrecompileContext* ctx, const ExtractedShader* vs_sh,
                            const ExtractedShader* ps_sh) {
     const size_t walker_mark = Shader::GetUwpSrtWalkerWatermark();
+    sigjmp_buf recover;
+    sigjmp_buf* volatile previous = runtime_fault_recover;
+    if (sigsetjmp(recover, 0)) {
+        runtime_fault_recover = previous;
+        OnCompileFault("linked VS+PS", vs_sh->hash, ps_sh->hash);
+        Shader::RewindUwpSrtWalkerTo(walker_mark);
+        return false;
+    }
+    runtime_fault_recover = &recover;
     const bool ok = CompileLinkedPairInner(*ctx, *vs_sh, *ps_sh);
+    runtime_fault_recover = previous;
     Shader::RewindUwpSrtWalkerTo(walker_mark);
     return ok;
 }
@@ -2252,6 +2426,17 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
     const u32 grand_total = standalone_total + pairs_total + 1u;
 
     InflightBreadcrumb inflight;
+    // The phase of the compile in progress is written into the breadcrumb, so a crash names it, and
+    // an unhandled exception names the item on its way out.
+    g_active_breadcrumb = &inflight;
+    struct BreadcrumbScope {
+        std::terminate_handler saved_terminate;
+        explicit BreadcrumbScope(std::terminate_handler saved) : saved_terminate(saved) {}
+        ~BreadcrumbScope() {
+            g_active_breadcrumb = nullptr;
+            std::set_terminate(saved_terminate);
+        }
+    } breadcrumb_scope{std::set_terminate(OnPrecompileTerminate)};
     {
         ScopedActiveDiag diag{0, grand_total, 4u, 0, 0};
         summary.aux_gs_ok = WarmAuxiliaryGeometryShaders(ctx);
@@ -2351,6 +2536,14 @@ ScanSummary PrecompileGameShaderArchives(Vulkan::Rasterizer& rasterizer,
     ExportLocalCacheToPortable();
 
     const size_t vkcache_bytes = pipe_cache.GetDriverCacheBytes();
+    const u32 faults = g_precompile_faults.load(std::memory_order_relaxed);
+    if (faults != 0) {
+        // Named so the log carries it: these shaders are skipped for good (quarantined), and will
+        // compile lazily the first time the game draws them.
+        std::printf("GPU: shader precompile: %u shader(s) faulted the compiler and were quarantined\n",
+                    faults);
+        std::fflush(stdout);
+    }
     std::printf("GPU: ahead-of-time DXIL precompile finished: "
                 "%u/%u standalone CS/PS/VS cached (%u skipped), %u/%zu linked VS+PS pairs cached, "
                 "%u aux GS cached, driver.vkcache = %.2f MiB\n",
