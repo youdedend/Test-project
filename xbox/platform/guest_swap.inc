@@ -27,6 +27,22 @@ static uint64_t uwp_swap_passes, uwp_swap_dry;
  * keeps a budget (BB_UWP_SWAP_DISK_MB, 768 MiB by default) and treats a failed write as "this page
  * stays resident", never as a reason to stop. */
 static uint64_t uwp_swap_disk_budget = UINT64_C(768) << 20;
+/* bbport: the budget is a self-imposed ceiling, not a property of the device, and `.736` ran into
+ * the difference: `disk pages=768 MiB of a 768 MiB budget` while the page table still held 1,209 MiB
+ * of pages that passed every other test, and the pager answered `paged out 0 MiB on request` ten
+ * times in a row at 5,116/5,120 MiB until the game froze. So the budget grows on demand - only
+ * while an allocation is actually at stake (`runtime_memory_page_out`), in 256 MiB steps, up to a
+ * ceiling. Past the ceiling, or the moment the device answers ERROR_DISK_FULL, the old behaviour
+ * stands: the page stays resident and the ladder moves on. An explicit BB_UWP_SWAP_DISK_MB is a
+ * hard limit and does not grow.
+ *
+ * The ceiling is 1 GiB, not "everything the device has": `.559` had its writes refused at 1,252 MiB
+ * used, so the room above 768 MiB that we know exists is small, LocalState is shared with saves, and
+ * filling it would be worse than the stall. One 256 MiB step is the increment this run is for; the
+ * print says whether it was taken and the next log decides the next step. */
+static uint64_t uwp_swap_disk_ceiling = UINT64_C(768) << 20;
+static const uint64_t uwp_swap_disk_step = UINT64_C(256) << 20;
+static int uwp_swap_disk_growable, uwp_swap_disk_raised;
 static uint64_t uwp_swap_disk_full, uwp_swap_write_failures;
 /* bbport: pages taken by an urgent sweep (one that ignored the second-chance bit). The `.649` log
  * shows why they are needed: `pageable private` was 1,757 MiB when a 141 MiB request returned 0 in
@@ -521,8 +537,24 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         if (uwp_swap_disk_full || uwp_swap_disk_pages * PAGE >= uwp_swap_disk_budget) {
             // Out of room on the device (or at the budget): stop paging private pages. They stay
             // resident, the sweep reports "nothing to give", and the app goes on until the
-            // allocation path has to degrade instead.
-            continue;
+            // allocation path has to degrade instead. The exception is a sweep that was started
+            // because an allocation is already waiting (uwp_swap_disk_growable): there the ceiling
+            // is worth another step, because the alternative is a stop.
+            if (uwp_swap_disk_full || !uwp_swap_disk_growable ||
+                uwp_swap_disk_budget >= uwp_swap_disk_ceiling) {
+                ++uwp_scan_atbudget;
+                continue;
+            }
+            uwp_swap_disk_budget += uwp_swap_disk_step;
+            if (uwp_swap_disk_budget > uwp_swap_disk_ceiling) {
+                uwp_swap_disk_budget = uwp_swap_disk_ceiling;
+            }
+            ++uwp_swap_disk_raised;
+            if (uwp_swap_disk_raised <= 8) {
+                printf("UWP swap: disk budget raised to %" PRIu64 " MiB (ceiling %" PRIu64
+                       " MiB) for a waiting allocation\n",
+                       uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20);
+            }
         }
         int readable = 1;
         for (unsigned i = 0; i < 4; ++i) {
@@ -630,8 +662,19 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     // same pages usually succeeds; when even that is not enough, an allocation has already failed
     // and the page is worth more than the fault-in it costs later (.649: 141 MiB needed, 0 MiB
     // freed, 1,757 MiB reported pageable).
+    // bbport: an allocation storm produced dozens of requests in a row in `.736`, each scanning up
+    // to twice the page table under the exclusive commit lock (1.25 M pages, 7 ms) and each
+    // returning nothing - the game froze for 10 s at 5,116/5,120 MiB doing exactly that. If the
+    // last request found nothing and no page has been released since, there is nothing new to
+    // find: answer at once instead of rescanning.
+    static uint64_t empty_tick;
+    static int empty_blocked;
+    const uint64_t now = GetTickCount64();
+    if (empty_blocked && now - empty_tick < UINT64_C(500)) return 0;
     uint64_t total = 0;
     uwp_swap_scan_reset();
+    // An allocation is already waiting: this is the one place allowed to raise the disk budget.
+    uwp_swap_disk_growable = 1;
     for (int sweep = 0; sweep < 3 && total < bytes; ++sweep) {
         const uint64_t got = uwp_swap_reclaim(bytes - total, 1, sweep > 0);
         if (!got) {
@@ -640,6 +683,7 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
         }
         total += got;
     }
+    uwp_swap_disk_growable = 0;
     if (total) {
         printf("UWP swap: paged out %" PRIu64 " MiB on request (%" PRIu64 " MiB of it urgent)\n",
                total >> 20, (uwp_swap_urgent_pages * PAGE) >> 20);
@@ -649,6 +693,11 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
      * the 5 s report still claimed 1,534 MiB of `pageable private`, so the page table is counted
      * here, in the state the sweep actually saw: one line, only when the ladder is out of moves,
      * and only the first few times so a stuck loop cannot flood the log. */
+    empty_tick = now;
+    // Only a request that the *disk* refused may be short-circuited: nothing in the page table can
+    // change that within half a second, and rescanning it under the commit lock is what froze the
+    // game in `.736`. A request that found nothing for any other reason must always rescan.
+    empty_blocked = uwp_swap_disk_full || uwp_scan_atbudget > 0;
     static unsigned uwp_swap_empty_requests;
     if (uwp_swap_empty_requests < 8) {
         ++uwp_swap_empty_requests;
@@ -734,9 +783,11 @@ static void uwp_swap_report(void) {
            pinned_mb, section >> 20, shared >> 20, unreadable >> 20);
     // What the disk half is doing, and whether it is full: a page-out that fails leaves the page
     // resident, so this is the difference between "nothing to page" and "nowhere to put it".
-    printf("UWP swap: disk pages=%" PRIu64 " MiB of a %" PRIu64 " MiB budget; write failures=%"
-           PRIu64 "; urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
-           (disk * PAGE) >> 20, uwp_swap_disk_budget >> 20, uwp_swap_write_failures,
+    printf("UWP swap: disk pages=%" PRIu64 " MiB of a %" PRIu64 " MiB budget (ceiling %" PRIu64
+           " MiB, raised %" PRIu64 "); write failures=%" PRIu64 "; urgent sweeps=%" PRIu64
+           " (%" PRIu64 " MiB)%s\n",
+           (disk * PAGE) >> 20, uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20,
+           uwp_swap_disk_raised, uwp_swap_write_failures,
            uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
 }
@@ -780,9 +831,15 @@ void runtime_memory_start_paging(void) {
     // bbport: room the pager may take in LocalState. 768 MiB by default: enough to cover the gap
     // the last runs died in, small enough to leave the device's storage for saves.
     {
+        // Default: start at 768 MiB and let a waiting allocation raise it, 256 MiB at a time, to
+        // 1 GiB. An explicit BB_UWP_SWAP_DISK_MB is taken as a hard limit and never grows.
+        uwp_swap_disk_ceiling = UINT64_C(1024) << 20;
         const char *budget = getenv("BB_UWP_SWAP_DISK_MB");
         const unsigned long long mb = budget ? strtoull(budget, NULL, 10) : 0;
-        if (mb >= 64 && mb <= 8192) uwp_swap_disk_budget = mb << 20;
+        if (mb >= 64 && mb <= 8192) {
+            uwp_swap_disk_budget = mb << 20;
+            uwp_swap_disk_ceiling = uwp_swap_disk_budget;
+        }
     }
     const char *enabled = getenv("BB_UWP_SWAP");
     if (enabled && *enabled == '0') {
@@ -800,8 +857,8 @@ void runtime_memory_start_paging(void) {
     pthread_detach(thread);
     uwp_swap_started = 1;
     printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=640 MiB; "
-           "private pages %s; disk budget=%" PRIu64 " MiB\n",
+           "private pages %s; disk budget=%" PRIu64 " MiB (ceiling %" PRIu64 " MiB)\n",
            bb_uwp_app_memory_limit() >> 20,
            uwp_pin_private_pages() ? "pinned by BB_UWP_PIN_PRIVATE" : "pageable",
-           uwp_swap_disk_budget >> 20);
+           uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20);
 }
