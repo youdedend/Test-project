@@ -55,6 +55,7 @@ HANDLE bb_uwp_find(const char* pattern, WIN32_FIND_DATAA* out);
 BOOL bb_uwp_find_next(HANDLE handle, WIN32_FIND_DATAA* out);
 void runtime_memory_start_paging(void);
 void runtime_memory_report(void);
+void runtime_memory_pager_state(void);
 uint64_t runtime_memory_pinned_bytes(void);
 void runtime_file_report(void);
 void runtime_audio_report(void);
@@ -1888,6 +1889,10 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                                 std::printf(
                                     "UWP STALL DETECTED (presents stuck at %llu for %u s):\n",
                                     static_cast<unsigned long long>(presents), stalled_ticks * 5);
+                                // bbport: first the pager, because a page sweep holds the commit
+                                // lock exclusively and both `.717` and `.823` froze with this dump
+                                // and nothing in it to say whether the freeze was ours.
+                                runtime_memory_pager_state();
                                 runtime_memory_report();
                                 runtime_file_report();
                                 runtime_audio_report();

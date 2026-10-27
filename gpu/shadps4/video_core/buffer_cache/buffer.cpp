@@ -177,6 +177,47 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                                     static_cast<unsigned long long>(limit >> 20));
                         std::fflush(stdout);
                     }
+                    // bbport: when the pager cannot cover the request (`paged < want`: `.823` hit
+                    // the disk budget with 916 MiB still pageable, `.736` the same), run the next
+                    // rung of the ladder now rather than after the allocation has failed: images
+                    // nothing refers to go while the allocation still has a chance. Only in that
+                    // case - if the pager covered it there is nothing to do and a walk of the
+                    // texture cache would just cost a frame. Same rules as the emergency path
+                    // (bound / target / scene proxy / video-out / collected stay), so nothing the
+                    // draw in flight is using is taken, and it runs on this thread because the
+                    // scheduler is ours here. Bounded to 128 MiB and once a second: `.736` spent
+                    // 214 ms freeing 117 MiB, which is a visible hitch if it is repeated.
+                    const uint64_t after_page = bb_uwp_app_memory_usage();
+                    const uint64_t need = after_page + room > limit ? after_page + room - limit : 0;
+                    if (need >= (16ULL << 20) && paged < want) {
+                        static auto last_image_reclaim = std::chrono::steady_clock::now() -
+                                                        std::chrono::hours(1);
+                        const auto now = std::chrono::steady_clock::now();
+                        if (now - last_image_reclaim >= std::chrono::seconds(1)) {
+                            last_image_reclaim = now;
+                            const uint64_t ask = std::min<u64>(need + (32ULL << 20), 128ULL << 20);
+                            const auto image_start = std::chrono::steady_clock::now();
+                            const uint64_t freed = bbgpu_uwp_emergency_reclaim(ask);
+                            const auto image_ms = std::chrono::duration_cast<
+                                                      std::chrono::milliseconds>(
+                                                      std::chrono::steady_clock::now() -
+                                                      image_start)
+                                                      .count();
+                            if (freed != 0) {
+                                std::printf("UWP buffer headroom: freed %llu MiB of images (of "
+                                            "%llu MiB asked) for a %llu KiB allocation in %lld "
+                                            "ms (usage %llu/%llu MiB)\n",
+                                            static_cast<unsigned long long>(freed >> 20),
+                                            static_cast<unsigned long long>(ask >> 20),
+                                            static_cast<unsigned long long>(buffer_ci.size >> 10),
+                                            static_cast<long long>(image_ms),
+                                            static_cast<unsigned long long>(
+                                                bb_uwp_app_memory_usage() >> 20),
+                                            static_cast<unsigned long long>(limit >> 20));
+                                std::fflush(stdout);
+                            }
+                        }
+                    }
                 }
             }
         }

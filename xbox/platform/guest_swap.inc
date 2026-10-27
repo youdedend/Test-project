@@ -36,10 +36,12 @@ static uint64_t uwp_swap_disk_budget = UINT64_C(768) << 20;
  * stands: the page stays resident and the ladder moves on. An explicit BB_UWP_SWAP_DISK_MB is a
  * hard limit and does not grow.
  *
- * The ceiling is 1 GiB, not "everything the device has": `.559` had its writes refused at 1,252 MiB
- * used, so the room above 768 MiB that we know exists is small, LocalState is shared with saves, and
- * filling it would be worse than the stall. One 256 MiB step is the increment this run is for; the
- * print says whether it was taken and the next log decides the next step. */
+ * The ceiling is 1.5 GiB. `.823` took the first step (768 -> 1024 MiB) during an area load and the
+ * device accepted every page: `disk pages=1024 MiB of a 1024 MiB budget`, `write failures=0`,
+ * `full=0`, and it bought 62 MiB in 220 ms for a 64 MiB allocation. `.559` had writes refused at
+ * 1,252 MiB, so one more step is likely to fit and a third will find the edge. Past the edge the
+ * write fails, `full` is set, growth stops and the page stays resident - fail-soft, no stop. If the
+ * pager cannot write a page at all in a sweep (a non-disk-full error), it does not grow either. */
 static uint64_t uwp_swap_disk_ceiling = UINT64_C(768) << 20;
 static const uint64_t uwp_swap_disk_step = UINT64_C(256) << 20;
 static int uwp_swap_disk_growable, uwp_swap_disk_raised;
@@ -66,6 +68,14 @@ static void uwp_swap_scan_reset(void) {
     uwp_scan_section = uwp_scan_atbudget = uwp_scan_unreadable = uwp_scan_recent_cleared = 0;
     uwp_scan_viewguard = uwp_scan_write_failed = 0;
 }
+/* bbport: what the pager was doing when the console froze. `.717` and `.823` both end in
+ * `UWP STALL DETECTED (presents stuck for 10 s)` with nothing else in the log to blame, and a page
+ * sweep holds the commit lock exclusively for 7-220 ms at a time. Two stores per sweep answer it:
+ * `runtime_memory_pager_state` is printed into the stall dump. */
+static uint64_t uwp_swap_lock_tick, uwp_swap_lock_count;
+static const char *uwp_swap_lock_what = "-";
+static uint64_t uwp_swap_request_bytes, uwp_swap_request_tick;
+static uint64_t uwp_swap_last_request_bytes, uwp_swap_last_request_done;
 static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
@@ -541,7 +551,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             // because an allocation is already waiting (uwp_swap_disk_growable): there the ceiling
             // is worth another step, because the alternative is a stop.
             if (uwp_swap_disk_full || !uwp_swap_disk_growable ||
-                uwp_swap_disk_budget >= uwp_swap_disk_ceiling) {
+                uwp_swap_disk_budget >= uwp_swap_disk_ceiling || uwp_scan_write_failed) {
                 ++uwp_scan_atbudget;
                 continue;
             }
@@ -649,11 +659,39 @@ static void uwp_swap_buckets(uint64_t *resident, uint64_t *pinned, uint64_t *sec
 static uint64_t uwp_swap_reclaim(uint64_t bytes, int include_views, int ignore_recent) {
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);
+    // bbport: published for the stall dump - how long this sweep has held the commit lock.
+    uwp_swap_lock_tick = GetTickCount64();
+    uwp_swap_lock_what = include_views ? "sweep+views" : "sweep";
+    ++uwp_swap_lock_count;
     uint64_t result = uwp_swap_page_out_locked(bytes, NULL, include_views, ignore_recent);
     if (ignore_recent && result) ++uwp_swap_urgent_sweeps;
+    uwp_swap_lock_what = "-";
     ReleaseSRWLockExclusive(&uwp_commit_lock);
     read_unlock();
     return result;
+}
+
+/* bbport: one line for the stall dump (main.cpp prints it right after `STALL DETECTED`). If a sweep
+ * is holding the commit lock, its age says whether the freeze is ours; if nothing is held, the
+ * freeze is elsewhere and this says so, which is worth as much. */
+void runtime_memory_pager_state(void) {
+    const uint64_t now = GetTickCount64();
+    const char *what = uwp_swap_lock_what;
+    const uint64_t held = (what && what[0] != '-') ? now - uwp_swap_lock_tick : 0;
+    // A request that is still running is the interesting case; otherwise the last one and how long
+    // ago it finished, which says whether the freeze started with a page-out or after it.
+    const int running = uwp_swap_request_bytes != 0;
+    const uint64_t asked = running ? uwp_swap_request_bytes : uwp_swap_last_request_bytes;
+    const uint64_t since = running ? now - uwp_swap_request_tick
+                                   : (uwp_swap_last_request_done ? now - uwp_swap_last_request_done
+                                                                 : UINT64_C(0));
+    printf("UWP swap: state at the stall: lock=%s held=%" PRIu64 " ms sweeps=%" PRIu64
+           " request=%" PRIu64 " MiB %s %" PRIu64 " ms ago; out=%" PRIu64 " in=%" PRIu64
+           " MiB disk=%" PRIu64 " MiB budget=%" PRIu64 " MiB\n",
+           what, held, uwp_swap_lock_count, asked >> 20, running ? "still running for" : "finished",
+           since, uwp_swap_out >> 20, uwp_swap_in >> 20, (uwp_swap_disk_pages * PAGE) >> 20,
+           uwp_swap_disk_budget >> 20);
+    fflush(stdout);
 }
 
 uint64_t runtime_memory_page_out(uint64_t bytes) {
@@ -667,10 +705,18 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     // returning nothing - the game froze for 10 s at 5,116/5,120 MiB doing exactly that. If the
     // last request found nothing and no page has been released since, there is nothing new to
     // find: answer at once instead of rescanning.
+    uwp_swap_request_bytes = bytes;
+    uwp_swap_request_tick = GetTickCount64();
     static uint64_t empty_tick;
     static int empty_blocked;
     const uint64_t now = GetTickCount64();
-    if (empty_blocked && now - empty_tick < UINT64_C(500)) return 0;
+    if (empty_blocked && now - empty_tick < UINT64_C(500)) {
+        // Short-circuited: not in flight, so the stall dump must not report it as still running.
+        uwp_swap_last_request_bytes = bytes;
+        uwp_swap_last_request_done = now;
+        uwp_swap_request_bytes = 0;
+        return 0;
+    }
     uint64_t total = 0;
     uwp_swap_scan_reset();
     // An allocation is already waiting: this is the one place allowed to raise the disk budget.
@@ -684,6 +730,9 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
         total += got;
     }
     uwp_swap_disk_growable = 0;
+    uwp_swap_last_request_bytes = bytes;
+    uwp_swap_last_request_done = GetTickCount64();
+    uwp_swap_request_bytes = 0;
     if (total) {
         printf("UWP swap: paged out %" PRIu64 " MiB on request (%" PRIu64 " MiB of it urgent)\n",
                total >> 20, (uwp_swap_urgent_pages * PAGE) >> 20);
@@ -832,8 +881,8 @@ void runtime_memory_start_paging(void) {
     // the last runs died in, small enough to leave the device's storage for saves.
     {
         // Default: start at 768 MiB and let a waiting allocation raise it, 256 MiB at a time, to
-        // 1 GiB. An explicit BB_UWP_SWAP_DISK_MB is taken as a hard limit and never grows.
-        uwp_swap_disk_ceiling = UINT64_C(1024) << 20;
+        // 1.5 GiB. An explicit BB_UWP_SWAP_DISK_MB is taken as a hard limit and never grows.
+        uwp_swap_disk_ceiling = UINT64_C(1536) << 20;
         const char *budget = getenv("BB_UWP_SWAP_DISK_MB");
         const unsigned long long mb = budget ? strtoull(budget, NULL, 10) : 0;
         if (mb >= 64 && mb <= 8192) {
