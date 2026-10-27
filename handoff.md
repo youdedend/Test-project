@@ -256,6 +256,62 @@ gone on the next start.
 
 ---
 
+## 2g. `slot_vector.h:225` after name entry — the stale-id site, and the memo fix (2026-10-27)
+
+The run that confirmed skip-intro ended in the old character-creation stop, and this time the log
+says exactly what happened:
+
+```
+Texture cache: memory pressure, 4726 of 4096 MiB (critical 4352): 9 images evicted ...
+Texture cache: free id=58 uid=58 by=eviction guest=0x1066ffe000 size=1048576 ... deferred=1
+Texture cache: erase id=58 (freed by=eviction)          <- the deferred EraseImage, slot 58 dies
+Runtime: ImeDialog text: Hunter
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)
+GPU [Debug] <Critical> slot_vector.h:225 ValidateIndex: Assertion Failed!
+SlotVector invalid or freed slot index=58 capacity=2978
+```
+
+`capacity=2978` is one 2 MiB chunk of `slot_images` (sizeof(Image) ≈ 704 B), so it is an **ImageId**
+and not a view, and `58` is the image the collector had just erased.
+
+**Why the existing DEAD IMAGE instrumentation stayed silent:** `ReportDeadImage` only runs from
+`GetImage`/`GetImageView`. `grep -c "DEAD IMAGE"` is 0 in `loader.log.txt`, `errors.log.txt` and
+both `.prev` files, so the stale id was never passed to those two. It was indexed **directly**:
+`TextureCache` has ~40 `slot_images[...]` uses of its own (`MarkFound`, `IsUpToDate`, `UpdateImage`,
+`FindTexture`, `FindRenderTarget`, `FindDepthTarget`, `DownloadImageMemory`, the collector, …), and
+none of them reported anything. `slot_vector.h` is not touched — the assertion stays exactly as it
+is.
+
+What changed:
+
+| What | Where |
+|---|---|
+| `IndexImage` / `IndexImageView`: the direct index wrapped so a freed slot prints the same report (id, caller's `file:line`, last frees) before the unmodified assertion. One `is_allocated` test per index, under `BB_UWP` | `texture_cache.h:245-276` |
+| Every in-class direct `slot_images[...]` now goes through it (`MarkFound`, `IsUpToDate`, `UpdateImage`, `ForEachImageInRegion`, `GetAssociatedDepth`-adjacent sites) | `texture_cache.h:111, 157, 174, 186, 384, 406` |
+| Same for all 37 sites in the cache's translation unit, plus the one unguarded `slot_image_views[...]` (the view memo's `ids[last]`) | `texture_cache.cpp:143, 257, 309, 312, 332, 376, 547, 562, 563, 596, 609, 629, 657, 669, 686, 734, 748, 772, 780, 806, 836, 840, 843, 960, 975, 1001, 1027, 1042, 1058, 1072, 1090, 1127, 1298, 1519, 1545, 1565, 1626, 1656, 1721` |
+| **The fix candidate itself:** the three memoized lookups that keep an `ImageId` between frames and then index it directly now also require the slot to still be allocated, and re-resolve when it is not. `MarkFound` is what they call, and it is a direct index — a memo hit on a slot freed since stopped the GPU with no hint of the path | `vk_rasterizer.cpp:190` (`last_targets`), `:214` (`target_memo`), `:2376` (`image_desc_cache`/`desc_entry`) |
+
+Why the memos are the suspect: they are the only places that reach a direct `slot_images[...]`
+**without** going through `GetImage` first. Every other site that uses a stored id either re-checks
+with `is_allocated`/uid (`GetAssociatedDepth`, `TryGetImage`, `TryGetImageTouched`, the upscaler,
+camera motion, scene resolution) or is reached after a guarded `GetImage` in the same iteration, so
+it would have printed `DEAD IMAGE` — and nothing did.
+
+Note what this is and is not: the generation stamp the memos already check (`RegistryGeneration()`)
+changes on every register *and* unregister, so a **finished** free can never leave a memo looking
+valid. What the stamp cannot see is the window inside one lookup, and above all it does not by
+itself make the id safe to index — the aliveness test does, and it is one bitset read on a branch
+that is already taken only on a memo hit.
+
+Verification: `xbox/tests/texture_cache_policy_test.cpp` rebuilt and run with g++ (host) — all
+checks pass; `tests/test_patches.py` unchanged and green. `texture_cache.cpp`/`.h` and
+`vk_rasterizer.cpp` are Vulkan/MSVC-only here (no local Vulkan or boost headers), so CI is the
+compile check. **Not verified on hardware.** If it is not this, the next run prints
+`Texture cache: DEAD IMAGE id=… indexed by index slot_images at <file>:<line>` immediately before the
+same assertion, which names the site outright.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

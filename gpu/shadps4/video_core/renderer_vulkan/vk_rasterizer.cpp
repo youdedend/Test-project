@@ -187,8 +187,12 @@ VideoCore::ImageId Rasterizer::FindTargetMemoized(VideoCore::TextureCache::Image
     (append(parts), ...);
     const u64 generation = texture_cache.RegistryGeneration();
     const bool memo_enabled = !BbToggle::Disabled(BbToggle::TextureBindingMemo);
+    // bbport: the generation alone is not enough. An id this memo kept is only usable while its
+    // slot is still allocated: MarkFound indexes slot_images directly (texture_cache.h), so a
+    // memo hit on a slot freed since stops the GPU in slot_vector.h with no hint of this path.
     if (memo_enabled && last.generation == generation && last.key_size == key_size &&
-        std::memcmp(last.key.data(), key.data(), key_size) == 0) {
+        std::memcmp(last.key.data(), key.data(), key_size) == 0 &&
+        texture_cache.IsImageAlive(last.image_id)) {
         texture_cache.MarkFound(last.image_id);
         return last.image_id;
     }
@@ -207,7 +211,8 @@ VideoCore::ImageId Rasterizer::FindTargetMemoized(VideoCore::TextureCache::Image
     }
     auto& memo = target_memo[hash % target_memo.size()];
     if (memo.generation == generation && memo.key_size == key_size &&
-        std::memcmp(memo.key.data(), key.data(), key_size) == 0 && memo_enabled) {
+        std::memcmp(memo.key.data(), key.data(), key_size) == 0 && memo_enabled &&
+        texture_cache.IsImageAlive(memo.image_id)) {
         desc = memo.desc;
         texture_cache.MarkFound(memo.image_id);
         remember(memo.image_id);
@@ -2368,6 +2373,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // while no image was registered or unregistered.
             if (mip_fallback_mode == Shader::MipStorageFallbackMode::None &&
                 desc_entry.found_generation == texture_cache.RegistryGeneration() &&
+                texture_cache.IsImageAlive(desc_entry.found_id) &&
                 !BbToggle::Disabled(BbToggle::TextureBindingMemo)) {
                 desc_entry.pinned = bind_epoch;
                 auto& [image_id, _] =

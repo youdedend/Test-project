@@ -140,7 +140,7 @@ void TextureCache::ProcessDownloadImages() {
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     if (False(image.flags & ImageFlagBits::GpuModified)) {
         return;
     }
@@ -254,7 +254,7 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
 
 ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
                                           ImageId cache_image_id) {
-    auto& cache_image = slot_images[cache_image_id];
+    auto& cache_image = IndexImage(cache_image_id);
 
     if (!cache_image.info.props.is_depth && !requested_info.props.is_depth) {
         return {};
@@ -306,10 +306,10 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
 
         // insert() may have grown slot_images and moved every image: `cache_image` would then
         // point at freed storage, so look it up again.
-        auto& old_image = slot_images[cache_image_id];
+        auto& old_image = IndexImage(cache_image_id);
 
         // Inherit image usage
-        auto& new_image = slot_images[new_image_id];
+        auto& new_image = IndexImage(new_image_id);
         new_image.usage = old_image.usage;
         new_image.flags &= ~ImageFlagBits::Dirty;
         // When creating a depth buffer through overlap resolution don't clear it on first use.
@@ -329,7 +329,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
                                                            BindingType binding,
                                                            ImageId cache_image_id,
                                                            ImageId merged_image_id) {
-    auto& cache_image = slot_images[cache_image_id];
+    auto& cache_image = IndexImage(cache_image_id);
     const bool safe_to_delete =
         scheduler.CurrentTick() - cache_image.tick_accessed_last > NumFramesBeforeRemoval;
 
@@ -373,7 +373,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         if (image_info.pixel_format != cache_image.info.pixel_format ||
             image_info.guest_size <= cache_image.info.guest_size || pow2_padding_only) {
             auto result_id = merged_image_id ? merged_image_id : cache_image_id;
-            const auto& result_image = slot_images[result_id];
+            const auto& result_image = IndexImage(result_id);
             const bool is_compatible =
                 IsVulkanFormatCompatible(result_image.info.pixel_format, image_info.pixel_format);
             return {is_compatible ? result_id : ImageId{}, -1, -1};
@@ -544,7 +544,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
                 // We need to have a larger, already allocated image to copy this one into
                 if (merged_image_id) {
-                    auto& merged_image = slot_images[merged_image_id];
+                    auto& merged_image = IndexImage(merged_image_id);
                     runtime.CopyMip(&cache_image, &merged_image, mip, slice);
                     FreeImage(cache_image_id);
                 }
@@ -559,8 +559,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     const auto new_image_id = InsertImage(info);
     RegisterImage(new_image_id);
 
-    auto& src_image = slot_images[image_id];
-    auto& new_image = slot_images[new_image_id];
+    auto& src_image = IndexImage(image_id);
+    auto& new_image = IndexImage(new_image_id);
 
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
@@ -593,7 +593,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         if (cached.view_mip >= 0 || cached.view_slice >= 0 || !cached.image_id) {
             return false;
         }
-        const Image& image = slot_images[cached.image_id];
+        const Image& image = IndexImage(cached.image_id);
         return True(image.flags & ImageFlagBits::Registered) &&
                image.info.guest_address == info.guest_address &&
                image.info.guest_size == info.guest_size && image.info.size == info.size &&
@@ -606,7 +606,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         cached.exact_fmt == exact_fmt && cached.binding == desc.type &&
         cached.levels == info.resources.levels && cached.layers == info.resources.layers &&
         !BbToggle::Disabled(BbToggle::FindImageCache)) {
-        Image& image = slot_images[cached.image_id];
+        Image& image = IndexImage(cached.image_id);
         image.tick_accessed_last = scheduler.CurrentTick();
         TouchImage(image);
         if (cached.view_mip > 0) {
@@ -626,7 +626,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
 
     // Check for a perfect match first
     for (const auto& cache_id : image_ids) {
-        auto& cache_image = slot_images[cache_id];
+        auto& cache_image = IndexImage(cache_id);
         if (cache_image.info.guest_address != info.guest_address) {
             continue;
         }
@@ -654,7 +654,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
             view_mip = -1;
             view_slice = -1;
 
-            const auto& merged_info = image_id ? slot_images[image_id].info : info;
+            const auto& merged_info = image_id ? IndexImage(image_id).info : info;
             auto [overlap_image_id, overlap_view_mip, overlap_view_slice] =
                 ResolveOverlap(merged_info, desc.type, cache_id, image_id);
             if (overlap_image_id) {
@@ -666,7 +666,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     }
 
     if (image_id) {
-        Image& image_resolved = slot_images[image_id];
+        Image& image_resolved = IndexImage(image_id);
         if (exact_fmt && info.pixel_format != image_resolved.info.pixel_format) {
             // Cannot reuse this image as we need the exact requested format.
             image_id = {};
@@ -683,7 +683,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         RegisterImage(image_id);
     }
 
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     image.tick_accessed_last = scheduler.CurrentTick();
     TouchImage(image);
 
@@ -731,7 +731,7 @@ ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure
     }
     if (!image_ids.empty()) {
         for (s32 i = 0; i < image_ids.size(); ++i) {
-            Image& image = slot_images[image_ids[i]];
+            Image& image = IndexImage(image_ids[i]);
             if (image.info.guest_size == size) {
                 return image_ids[i];
             }
@@ -745,7 +745,7 @@ ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure
 
 ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, ViewMemo* memo,
                                      bool refresh) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     if (desc.type == BindingType::Storage) {
         image.flags |= ImageFlagBits::GpuModified;
         if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8) &&
@@ -769,15 +769,15 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
         const u32 last = image.backing->last_view;
         memo->image_id = image_id;
         memo->backing = image.backing;
-        memo->view_id = last < ids.size() && &slot_image_views[ids[last]] == &view ? ids[last]
-                                                                                    : ids.back();
+        memo->view_id = last < ids.size() && &IndexImageView(ids[last]) == &view ? ids[last]
+                                                                               : ids.back();
         return view;
     }
     return image.FindView(desc.view_info);
 }
 
 ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& desc) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     image.flags |= ImageFlagBits::GpuModified;
     if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
         std::unique_lock lk{download_images_mutex};
@@ -803,7 +803,7 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
 }
 
 ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     image.flags |= ImageFlagBits::GpuModified;
     image.usage.depth_target = 1u;
     UpdateImage(image_id);
@@ -833,14 +833,14 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
             stencil_id = InsertImage(info);
             RegisterImage(stencil_id);
         }
-        Image& stencil_image = slot_images[stencil_id];
+        Image& stencil_image = IndexImage(stencil_id);
         TouchImage(stencil_image);
         // insert() above may have grown slot_images and moved every image, leaving `image`
         // pointing at freed storage: look the depth image up again.
-        stencil_image.AssociateDepth(image_id, slot_images[image_id].image_uid);
+        stencil_image.AssociateDepth(image_id, IndexImage(image_id).image_uid);
     }
 
-    return slot_images[image_id].FindView(desc.view_info, false);
+    return IndexImage(image_id).FindView(desc.view_info, false);
 }
 
 void TextureCache::RefreshImage(Image& image) {
@@ -957,7 +957,7 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
 
 void TextureCache::RegisterImage(ImageId image_id) {
     BbStats::images_registered.fetch_add(1, std::memory_order_relaxed);
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
@@ -972,7 +972,7 @@ void TextureCache::RegisterImage(ImageId image_id) {
 }
 
 void TextureCache::UnregisterImage(ImageId image_id) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     ASSERT_MSG(True(image.flags & ImageFlagBits::Registered),
                "Trying to unregister an already unregistered image");
     image.flags &= ~ImageFlagBits::Registered;
@@ -998,7 +998,7 @@ void TextureCache::UnregisterImage(ImageId image_id) {
 }
 
 void TextureCache::TrackImage(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     if (!(image.flags & ImageFlagBits::Registered)) {
         return;
     }
@@ -1024,7 +1024,7 @@ void TextureCache::TrackImage(ImageId image_id) {
 }
 
 void TextureCache::TrackImageHead(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     if (!(image.flags & ImageFlagBits::Registered)) {
         return;
     }
@@ -1039,7 +1039,7 @@ void TextureCache::TrackImageHead(ImageId image_id) {
 }
 
 void TextureCache::TrackImageTail(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     if (!(image.flags & ImageFlagBits::Registered)) {
         return;
     }
@@ -1055,7 +1055,7 @@ void TextureCache::TrackImageTail(ImageId image_id) {
 }
 
 void TextureCache::UntrackImage(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     if (!image.IsTracked()) {
         return;
     }
@@ -1069,7 +1069,7 @@ void TextureCache::UntrackImage(ImageId image_id) {
 }
 
 void TextureCache::UntrackImageHead(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     const auto image_begin = image.info.guest_address;
     if (!image.IsTracked() || image_begin < image.track_addr) {
         return;
@@ -1087,7 +1087,7 @@ void TextureCache::UntrackImageHead(ImageId image_id) {
 }
 
 void TextureCache::UntrackImageTail(ImageId image_id) {
-    auto& image = slot_images[image_id];
+    auto& image = IndexImage(image_id);
     const auto image_end = image.info.guest_address + image.info.guest_size;
     if (!image.IsTracked() || image.track_addr_end < image_end) {
         return;
@@ -1124,7 +1124,7 @@ void TextureCache::ReportMemory() {
     {
         std::scoped_lock lock{mutex};
         lru_cache.ForEachItemBelow(minute_tick, [&](ImageId image_id) {
-            const auto& image = slot_images[image_id];
+            const auto& image = IndexImage(image_id);
             ++idle;
             idle_bytes += image.info.guest_size;
             if (image.info.IsTiled() && image.SafeToDownload()) {
@@ -1295,7 +1295,7 @@ void TextureCache::GarbageCollectImages() {
         if (num_deletions == 0 || ++visited > 256) {
             return true;
         }
-        auto& image = slot_images[image_id];
+        auto& image = IndexImage(image_id);
         // bbport: a candidate this pass will not free (GoW3's EvictImage returning false: tiled or
         // protected). Touch its LRU entry before leaving, or the next pass starts on the same
         // unevictable images and the bounded scan (visited, num_deletions) runs out before it
@@ -1516,7 +1516,7 @@ void TextureCache::TouchImage(const Image& image) {
 
 ImageId TextureCache::InsertImage(const ImageInfo& info) {
     const ImageId image_id = slot_images.insert(instance, runtime, slot_image_views, info);
-    if (!slot_images[image_id].allocation_failed) [[likely]] {
+    if (!IndexImage(image_id).allocation_failed) [[likely]] {
         return image_id;
     }
     // bbport: the GPU has no memory left for it, past the driver's budget too (4 GB cards, on
@@ -1542,7 +1542,7 @@ ImageId TextureCache::InsertImage(const ImageInfo& info) {
         const u64 want = std::max<u64>(round_want_bytes[round], u64(info.guest_size) * 2);
         freed += ReclaimMemoryForUnused(info.guest_address, info.guest_size, want,
                                         round_unused_seconds[round]);
-        if (slot_images[image_id].RetryAllocation()) {
+        if (IndexImage(image_id).RetryAllocation()) {
             report_made_room(freed, "");
             return image_id;
         }
@@ -1562,7 +1562,7 @@ ImageId TextureCache::InsertImage(const ImageInfo& info) {
     scheduler.Finish();
     scheduler.PopPendingOperations();
     freed += ReclaimMemoryForUnused(info.guest_address, info.guest_size, u64(1024) << 20, 2);
-    if (slot_images[image_id].RetryAllocation()) {
+    if (IndexImage(image_id).RetryAllocation()) {
         report_made_room(freed, " after finishing the GPU");
         return image_id;
     }
@@ -1623,7 +1623,7 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
         if (freed >= bytes) {
             return true;
         }
-        const Image& image = slot_images[image_id];
+        const Image& image = IndexImage(image_id);
         // No backing (an undefined format): it holds no memory.
         // bbport: IsImageCollected: the draw being recorded already resolved this id (a colour or
         // depth target, a texture binding) but has not set its binding flags yet, so the checks
@@ -1653,7 +1653,7 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
 }
 
 void TextureCache::DeleteImage(ImageId image_id, bool now, const char* reason) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     ASSERT_MSG(!image.IsTracked(), "Image was not untracked");
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered), "Image was not unregistered");
     // bbport: one line per freed image, on UWP only. This is the single point every free passes
@@ -1718,7 +1718,7 @@ void TextureCache::DeleteImage(ImageId image_id, bool now, const char* reason) {
 }
 
 void TextureCache::EraseImage(ImageId image_id, const char* reason) {
-    Image& image = slot_images[image_id];
+    Image& image = IndexImage(image_id);
     // The slot really goes away here; DeleteImage logged the decision (and the reason), this marks
     // the point after which the id is dead, which is what a later stray read trips over.
 #ifdef BB_UWP

@@ -108,7 +108,7 @@ public:
     /// bbport: FindImage's access tick for an image found by a memoized lookup. The LRU touch
     /// FindImage also does happens in UpdateImage (FindTexture), which every binding reaches.
     void MarkFound(ImageId image_id) {
-        slot_images[image_id].tick_accessed_last = scheduler.CurrentTick();
+        IndexImage(image_id).tick_accessed_last = scheduler.CurrentTick();
     }
 
     TileManager& GetTileManager() noexcept {
@@ -154,7 +154,7 @@ public:
 
     /// bbport: whether UpdateImage has nothing to do for this image (its fast path).
     [[nodiscard]] bool IsUpToDate(ImageId image_id) const {
-        const Image& image = slot_images[image_id];
+        const Image& image = IndexImage(image_id);
         const u32 flags = std::atomic_ref<u32>(const_cast<u32&>(reinterpret_cast<const u32&>(image.flags)))
                               .load(std::memory_order_acquire);
         constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
@@ -171,7 +171,7 @@ public:
         // guest threads) was ~3% of the GPU thread. Flags are read atomically: an invalidation
         // racing with this check races the same way with the locked path.
         if (!BbToggle::Disabled(BbToggle::UpdateImageFastPath)) {
-            const Image& image = slot_images[image_id];
+            const Image& image = IndexImage(image_id);
             const u32 flags = std::atomic_ref<u32>(const_cast<u32&>(reinterpret_cast<const u32&>(image.flags)))
                                   .load(std::memory_order_acquire);
             constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
@@ -183,7 +183,7 @@ public:
             }
         }
         std::scoped_lock lock{mutex};
-        Image& image = slot_images[image_id];
+        Image& image = IndexImage(image_id);
         TrackImage(image_id);
         TouchImage(image);
         RefreshImage(image);
@@ -241,6 +241,43 @@ public:
     /// instead of indexing with it.
     [[nodiscard]] bool IsImageAlive(ImageId id) const noexcept {
         return slot_images.is_allocated(id);
+    }
+    /// bbport: the direct `slot_images[...]` index, for the sites inside this class that resolved
+    /// an id themselves (or that keep one over a frame boundary). GetImage/GetImageView report a
+    /// freed slot, but they are not what these sites go through, so an id that dies between its
+    /// resolution and its use used to reach slot_vector.h:225 with a bare "invalid or freed slot
+    /// index" and no hint of the site that held it. Same report here (id, caller's file:line,
+    /// last frees); the assertion itself is untouched. One is_allocated test per index.
+    [[nodiscard]] Image& IndexImage(ImageId id, [[maybe_unused]] const std::source_location& loc =
+                                                  std::source_location::current()) {
+#ifdef BB_UWP
+        if (!slot_images.is_allocated(id)) {
+            ReportDeadImage(id, "index slot_images", loc);
+        }
+#endif
+        return slot_images[id];
+    }
+    [[nodiscard]] const Image& IndexImage(
+        ImageId id, [[maybe_unused]] const std::source_location& loc =
+                        std::source_location::current()) const {
+#ifdef BB_UWP
+        if (!slot_images.is_allocated(id)) {
+            ReportDeadImage(id, "index slot_images", loc);
+        }
+#endif
+        return slot_images[id];
+    }
+    /// bbport: the same for image views; a view id outliving its image is the other way these
+    /// assertions are reached.
+    [[nodiscard]] ImageView& IndexImageView(
+        ImageId id, [[maybe_unused]] const std::source_location& loc =
+                        std::source_location::current()) {
+#ifdef BB_UWP
+        if (!slot_image_views.is_allocated(id)) {
+            ReportDeadImage(id, "index slot_image_views", loc);
+        }
+#endif
+        return slot_image_views[id];
     }
     /// bbport: `loc` is the caller's, captured by default: when `id` names a freed slot the report
     /// printed before the (unmodified) slot_vector.h assertion says which call site held the stale
@@ -381,7 +418,7 @@ public:
                 }
             }
             for (const ImageId image_id : *it) {
-                Image& image = slot_images[image_id];
+                Image& image = IndexImage(image_id);
                 if (image.flags & ImageFlagBits::Picked) {
                     continue;
                 }
@@ -403,7 +440,7 @@ public:
             }
         });
         for (const ImageId image_id : images) {
-            slot_images[image_id].flags &= ~ImageFlagBits::Picked;
+            IndexImage(image_id).flags &= ~ImageFlagBits::Picked;
         }
     }
 
