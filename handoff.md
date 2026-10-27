@@ -195,6 +195,34 @@ prerequisite for fixing the real frontend bug.
 
 ---
 
+## 2e. The high-GiB crash — community fix applied (2026-10-27)
+
+Full report: [`docs/MEMORY_CRASH_RESEARCH.md`](docs/MEMORY_CRASH_RESEARCH.md). Short version:
+
+- **A sibling port hit this with our exact log lines.** `Mrsuss60/bloodborne_pc_windows_port` #75
+  ("game crash due to vram leak") shows `Texture cache: memory pressure, 3889 of 3729 MiB (critical
+  3936) … 118 images evicted` → `vk::Result=ErrorOutOfDeviceMemory` → `STOP: GPU library assertion
+  failed` → exit 23, reported on 4 GB and 8 GB cards after 15–30 minutes. #69 is the same growth per
+  zone load (200–500 MB per transition). Both were closed by its **PR #89**, which names the cause:
+  GPU-written **tiled depth/stencil targets have `SafeToDownload() == true`, cannot be written back,
+  and were touched and kept alive forever — "locking gigabytes of VRAM"**, and under pressure the
+  collector moved tiled images to the back of the queue instead of evicting them.
+- **Our tree had the identical keep rule and no notion of depth**, which is why Test #13 evicted
+  "1 image" while parked at 4504 of 4352 MiB.
+- **Change** (`texture_cache.cpp`, in the collector after the pin gate): under pressure, a
+  non-pinned `is_depth` image is freed at once (`FreeImage(id, "depth-reclaim")`), counted in the
+  pressure report as `N depth reclaimed`; `BB_GC_DEPTH_RECLAIM=0` disables it for an A/B run. Unlike
+  the sibling PR it is **pressure-gated**, so normal sessions keep their depth buffers unchanged.
+- **Not taken:** making colour render targets evictable under pressure — that is `BB_GC_DROP_OLD`
+  (opt-in here for a measured reason: a dropped colour target produced a black screen with sound on
+  the Hunter's Dream on 6 GB cards).
+- Still open: `deadinside28/bloodborne_pc` #200 shows usage stuck at 10138 MiB *with* eviction running
+  and nothing kept by the tiled rule, i.e. a second holder (buffers/heaps or pins). The next
+  `loader.log` separates them: pressure line now carries evicted / written back / kept / dropped /
+  pinned / depth reclaimed.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

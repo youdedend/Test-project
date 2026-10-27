@@ -500,6 +500,8 @@ private:
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
     u64 gc_evictions = 0, gc_downloads = 0, gc_dropped = 0; ///< bbport: pressure report
+    /// bbport: depth/stencil targets reclaimed under pressure without a write-back.
+    u64 gc_depth = 0;
     /// bbport: candidates the pin rules kept (bound / render target / scene proxy / video-out).
     u64 gc_pinned = 0;
     u64 gc_kept = 0, gc_kept_bytes = 0; ///< bbport: old images the latest pass could not evict

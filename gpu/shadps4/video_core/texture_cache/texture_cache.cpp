@@ -1327,6 +1327,32 @@ void TextureCache::GarbageCollectImages() {
                 return keep(/*tiled_written_back=*/false);
             }
         }
+        // bbport: depth/stencil targets and shadow maps are GPU-only - the guest never reads them
+        // back, so they hold nothing that has to be written out, and being tiled they could not be
+        // written out anyway. The keep rules below exist for anything GPU-written and tiled, which
+        // is every depth target, so before this they were touched and kept alive for the whole
+        // session: VRAM climbed with every area visited until it sat on the pressure mark with
+        // almost nothing evicted, and the next area ended the GPU.
+        //
+        // Same finding, same log line and same outcome in the Windows port of this project:
+        // Mrsuss60/bloodborne_pc_windows_port #75 ("Texture cache: memory pressure ... MiB" then
+        // vk::Result=ErrorOutOfDeviceMemory, exit 23) and #69 (VRAM/RAM climbing per zone load),
+        // closed by its PR #89 "gpu/texture_cache: Reclaim transient depth targets", which frees
+        // depth images outright. Here it happens only under pressure, so a session that is not
+        // short of memory keeps its depth buffers exactly as before, and pinned images (a depth
+        // target the current draw or the upscaler still holds) are untouched: the pin gate above
+        // has already returned for those. BB_GC_DEPTH_RECLAIM=0 turns it off for an A/B run.
+        static const bool depth_reclaim = [] {
+            const char* env = std::getenv("BB_GC_DEPTH_RECLAIM");
+            return env == nullptr || env[0] != '0';
+        }();
+        if (depth_reclaim && image.info.props.is_depth && (pressured || aggresive)) {
+            --num_deletions;
+            ++gc_depth;
+            evicted_any = true;
+            FreeImage(image_id, "depth-reclaim");
+            return false;
+        }
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
         // bbport: images that cannot go now (GPU-written: their contents exist only here, and
@@ -1410,15 +1436,16 @@ void TextureCache::GarbageCollectImages() {
             std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
                         "%llu images evicted, %llu written back since the last report; "
                         "%llu old GPU-written tiled images kept (%llu MiB), %llu dropped, "
-                        "%llu pinned\n",
+                        "%llu pinned, %llu depth reclaimed\n",
                         (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads,
                         (unsigned long long)gc_kept, (unsigned long long)(gc_kept_bytes >> 20),
-                        (unsigned long long)gc_dropped, (unsigned long long)gc_pinned);
+                        (unsigned long long)gc_dropped, (unsigned long long)gc_pinned,
+                        (unsigned long long)gc_depth);
             gc_report_time = now;
-            gc_evictions = gc_downloads = gc_dropped = gc_pinned = 0;
+            gc_evictions = gc_downloads = gc_dropped = gc_pinned = gc_depth = 0;
         }
     }
     }
