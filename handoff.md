@@ -48,13 +48,13 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `45b09a2` — *fix(swap): a page-out that cannot be written must not stop the app* (release target) |
+| HEAD | `8219ff7` — *fix(memory): the approved ladder - page out, then free images, then stop* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40460008298` — [actions/runs/40460008298](https://github.com/youdedend/Test-project/actions/runs/40460008298), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.623` — contains `BloodborneLauncher_1.0.26300.623_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,216,140 B, sha256 `2adc6b0ee3d40baa90140ac13cec3c45e01f4e05a1945c88e01849aa389e9349`) |
-| Version shown by that package | **`1.0.26300.623`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0623`** — [releases/tag/xbox-alpha-1.0.26300.0623](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0623), target `45b09a2` (run `40460008298`, both jobs green, publish step ran): **a page-out that cannot be written leaves the page resident instead of stopping the app, and the pager keeps a 768 MiB disk budget** (§2k). Previous: `.0559` (private pages pageable - **confirmed on the console**, §2j), `.0534` (near-limit telemetry, §2i), `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
-| Console validation of this build | **not installed yet** — the console ran `.559` (§2j/§2k: pin fix confirmed, then `ERROR_DISK_FULL` in the swap file); `.623` (disk budget + fail-soft page-out) is published and waiting for Device Portal |
+| Last green CI | run `40462562045` — [actions/runs/40462562045](https://github.com/youdedend/Test-project/actions/runs/40462562045), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.649` — contains `BloodborneLauncher_1.0.26300.649_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,221,334 B, sha256 `acd029c591ad429127f703acfcf1d3ea5a2cf928258f5319358043a12a56e096`) |
+| Version shown by that package | **`1.0.26300.649`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0649`** — [releases/tag/xbox-alpha-1.0.26300.0649](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0649), target `8219ff7` (run `40462562045`, both jobs green, publish step ran): **the memory ladder - page out, free images, then stop - with every step timed** (§2l), on top of `.0623`'s fail-soft page-out and 768 MiB disk budget (§2k). Previous: `.0559` (private pages pageable - **confirmed on the console**, §2j), `.0534` (near-limit telemetry, §2i), `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
+| Console validation of this build | **not installed yet** — every console run so far has been `.559` (§2j/§2k: pin fix confirmed, then `ERROR_DISK_FULL` twice, `docs/hardware-test-19`); `.623` and `.649` are published and waiting for Device Portal. Install `.649`: it contains both |
 | Open blocker | **capacity, confirmed**: the scene at `presents=829` needs more than 5,120 MiB even with 1 GiB swapped to disk and 0 MiB pinned (§2k). The next step is the approved degradation path (§10), not more freeing |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
@@ -584,6 +584,31 @@ counter/time budget belongs (§13, next).
 What this run settles: the scene at `presents=829` wants more than 5,120 MiB. Memory that could be
 handed back now is (1 GiB to disk, with the hashes verifying), so the next step is not "free more" but
 "survive less" - the approved degradation path (§10).
+
+---
+
+## 2l. `.645`: the memory ladder, and the stall that goes with it (2026-10-27)
+
+A second `.559` run (`docs/hardware-test-19/`) ended identically - `ERROR_DISK_FULL` after 1,252 MiB
+of swap, `checks=420 corrupt=0`, `pageable private` still 619 MiB when it stopped - so this is the
+build, not a one-off volume state. That run is **not** `.623`: its pager line has no `disk budget=`
+field.
+
+The retry path had exactly one move (page out more). The approved ladder is now implemented:
+
+| Step | What it does | Where |
+|---|---|---|
+| 1. Page out | computes what the failed allocation needs back and asks for exactly that, capped at 256 MiB, in one call | `buffer.cpp:112-145` |
+| 2. Free images | `bbgpu_uwp_emergency_reclaim` → `TextureCache::EmergencyReclaim`: everything the collector may take, age gate zero, bound targets and scene proxies still kept (freeing what the in-flight draw writes would corrupt, not save) | `texture_cache.h:216-224`, `bbgpu.cpp:360-366` |
+| 3. Stop | the unmodified `ASSERT_MSG` - a run that survives both still stops, and says why | `buffer.cpp:186-199` |
+| Timing | each step printed with its cost in ms: `UWP memory emergency (allocation failed): need N MiB; paged out N MiB in N ms, freed N MiB of images in N ms` | `buffer.cpp:31-70` |
+| Pre-allocation | the headroom pass asks for the missing amount once instead of 64 MiB per pass, and logs its cost | `buffer.cpp:118-143` |
+| Pager lead time | starts draining at 640 MiB of headroom (was 384): both failures were an area load adding 300-400 MiB in about a second while the pager worked at 2 MiB a pass | `guest_swap.inc:628-637` |
+
+The 10 s stall both runs logged (`UWP STALL DETECTED (presents stuck at 815 for 10 s)`) happens
+while these steps run **on the GPU thread**; that is why every step is now timed in the log. If the
+next run shows the ladder working but the stall growing, the follow-up is to move the page-out work
+to the pager thread and give the allocation a deadline - measured first, not assumed.
 
 ---
 
