@@ -221,18 +221,25 @@ public:
     u64 EmergencyReclaim(u64 bytes) {
         std::scoped_lock lock{mutex};
         reclaim_stats = {};
-        const u64 freed = ReclaimMemoryForUnused(0, 0, bytes, 0);
+        // bbport: no age gate. `.717` reported `seen=0` here, and the reason is structural: the walk
+        // stops at the first item newer than the gate, and with `unused_seconds = 0` the gate is the
+        // tick recorded at the start of this second - during an area load every image is created or
+        // touched after it, so the walk never entered the loop and freed nothing. The per-image
+        // rules below (bound / target / scene proxy / video-out / collected / overlapping the new
+        // image) are what actually have to hold, and they still do.
+        const u64 freed = ReclaimMemoryForUnused(0, 0, bytes, 0, true);
         // One line, only when an allocation has already failed: why the images that were looked at
         // could not be taken. `.649` reported "freed 0 MiB of images" with no way to tell which rule
         // was responsible.
         std::printf("Texture cache: emergency reclaim freed %llu MiB of the %llu MiB asked for; "
-                    "seen=%llu too recent=%llu gpu-written=%llu bound/target=%llu no backing=%llu\n",
+                    "seen=%llu too recent=%llu gpu-written=%llu bound/target=%llu no backing=%llu "
+                    "(gc_tick=%llu)\n",
                     (unsigned long long)(freed >> 20), (unsigned long long)(bytes >> 20),
                     (unsigned long long)reclaim_stats.seen,
                     (unsigned long long)reclaim_stats.too_recent,
                     (unsigned long long)reclaim_stats.gpu_written,
                     (unsigned long long)reclaim_stats.held,
-                    (unsigned long long)reclaim_stats.no_backing);
+                    (unsigned long long)reclaim_stats.no_backing, (unsigned long long)gc_tick);
         std::fflush(stdout);
         return freed;
     }
@@ -597,7 +604,10 @@ private:
     ReclaimStats reclaim_stats;
     /// bbport: ReclaimMemoryFor with an explicit age gate - images unused for `unused_seconds`
     /// only. MakeRoomForImage (InsertImage) lowers it round by round: 16 s, then 4 s, then 2 s.
-    u64 ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32 unused_seconds);
+    /// bbport: `ignore_age` walks every tracked image and skips the per-image age check - only an
+    /// allocation that has already failed uses it (EmergencyReclaim).
+    u64 ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32 unused_seconds,
+                               bool ignore_age = false);
     /// bbport: gc_tick at each of the last 64 seconds (GarbageCollectImages).
     std::array<u64, 64> gc_tick_at_second{};
     u64 gc_second = 0;

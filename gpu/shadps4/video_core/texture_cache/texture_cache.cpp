@@ -1620,8 +1620,8 @@ u64 TextureCache::ReclaimMemoryFor(VAddr addr, size_t size, u64 bytes) {
     return ReclaimMemoryForUnused(addr, size, bytes, 2);
 }
 
-u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
-                                         u32 unused_seconds) {
+u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32 unused_seconds,
+                                         bool ignore_age) {
     // Unused for `unused_seconds` (2 s from ReclaimMemory, 16/4/2 from InsertImage's rounds): in
     // no command buffer still being recorded, and with WaitSubmitted in none the GPU is still
     // running, so destroying it at once is safe. Images holding GPU results (render targets)
@@ -1630,8 +1630,12 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
     const u64 second = u64(std::chrono::duration_cast<std::chrono::seconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
                                .count());
-    const u64 unused_tick = std::min(
-        gc_tick, gc_tick_at_second[(second - unused_seconds) % gc_tick_at_second.size()]);
+    // bbport: an emergency walks everything (`gc_tick` is the highest tick an image can carry), a
+    // normal reclaim only what is older than the gate.
+    const u64 unused_tick =
+        ignore_age ? gc_tick
+                   : std::min(gc_tick,
+                              gc_tick_at_second[(second - unused_seconds) % gc_tick_at_second.size()]);
     boost::container::small_vector<ImageId, 64> victims;
     u64 freed = 0;
     lru_cache.ForEachItemBelow(unused_tick, [&](ImageId image_id) {
@@ -1648,7 +1652,7 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
             ++reclaim_stats.no_backing;
             return false;
         }
-        if (image.lru_touched_tick >= unused_tick) {
+        if (!ignore_age && image.lru_touched_tick >= unused_tick) {
             ++reclaim_stats.too_recent;
             return false;
         }

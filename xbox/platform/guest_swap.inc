@@ -34,6 +34,22 @@ static uint64_t uwp_swap_disk_full, uwp_swap_write_failures;
  * bit as it passes. A normal sweep is cheap and leaves hot pages alone; once an allocation has
  * already failed, the page is worth more than the fault-in it will cost later. */
 static uint64_t uwp_swap_urgent_pages, uwp_swap_urgent_sweeps;
+/* bbport: why a sweep that was asked for memory took almost nothing. `.717` printed
+ * `paged out 0 MiB on request` ten times while the report still claimed 1,534 MiB of `pageable
+ * private`, and nothing in the log said which test those pages were failing. These are the sweep's
+ * own counters, in the same structural buckets as uwp_swap_report plus the two state ones (disk
+ * budget, view guard). Reset by runtime_memory_page_out and printed only when a request comes back
+ * empty, so they cost one increment per page scanned and nothing on a normal page-out. */
+static uint64_t uwp_scan_pages, uwp_scan_unmapped, uwp_scan_unpageable, uwp_scan_kind,
+    uwp_scan_uncommitted, uwp_scan_noview, uwp_scan_pinned, uwp_scan_shared, uwp_scan_section,
+    uwp_scan_atbudget, uwp_scan_unreadable, uwp_scan_recent_cleared, uwp_scan_viewguard,
+    uwp_scan_write_failed;
+static void uwp_swap_scan_reset(void) {
+    uwp_scan_pages = uwp_scan_unmapped = uwp_scan_unpageable = uwp_scan_kind = 0;
+    uwp_scan_uncommitted = uwp_scan_noview = uwp_scan_pinned = uwp_scan_shared = 0;
+    uwp_scan_section = uwp_scan_atbudget = uwp_scan_unreadable = uwp_scan_recent_cleared = 0;
+    uwp_scan_viewguard = uwp_scan_write_failed = 0;
+}
 static size_t uwp_swap_cursor, uwp_swap_view_cursor;
 static int uwp_swap_disabled, uwp_swap_started;
 
@@ -442,17 +458,44 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         if (uwp_swap_disk_full) break;
         if (uwp_swap_cursor >= uwp_count) uwp_swap_cursor = 0;
         UwpPage *page = &uwp_pages[uwp_swap_cursor++];
-        if (page == exclude || !page->mapped || !page->pageable ||
-            (page->kind != 1 && page->kind != 3)) {
+        ++uwp_scan_pages;
+        if (page == exclude) continue;
+        if (!page->mapped) {
+            ++uwp_scan_unmapped;
             continue;
         }
-        if ((page->kind == 1 && !page->committed) || (page->kind == 3 && !include_views)) {
+        if (!page->pageable) {
+            ++uwp_scan_unpageable;
+            continue;
+        }
+        if (page->kind != 1 && page->kind != 3) {
+            ++uwp_scan_kind;
+            continue;
+        }
+        if (page->kind == 1 && !page->committed) {
+            ++uwp_scan_uncommitted;
+            continue;
+        }
+        if (page->kind == 3 && !include_views) {
+            ++uwp_scan_noview;
             continue;
         }
         UwpPhysical *physical = &uwp_physical[page->physical / PAGE];
-        if (physical->pinned || physical->references != 1 || physical->section) continue;
+        if (physical->pinned) {
+            ++uwp_scan_pinned;
+            continue;
+        }
+        if (physical->references != 1) {
+            ++uwp_scan_shared;
+            continue;
+        }
+        if (physical->section) {
+            ++uwp_scan_section;
+            continue;
+        }
         if (physical->recent) {
             physical->recent = 0;
+            ++uwp_scan_recent_cleared;
             if (!ignore_recent) {
                 continue;
             }
@@ -463,6 +506,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             // eviction on another thread). Never dereference an address that is no longer a live
             // view: skip it and let the next sweep see the page in its new state.
             ++uwp_swap_view_guard_rejects;
+            ++uwp_scan_viewguard;
             continue;
         }
         if (page->kind == 3) {
@@ -486,7 +530,10 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
                 readable = 0;
             }
         }
-        if (!readable) continue;
+        if (!readable) {
+            ++uwp_scan_unreadable;
+            continue;
+        }
         DWORD old;
         for (unsigned i = 0; i < 4; ++i) {
             if (!VirtualProtectFromApp((void *)(page->address + i * 4096), 4096,
@@ -500,6 +547,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             // Nothing was freed yet, so the page is still complete: put its protection back and
             // leave it resident. Retried only if the error was not a full disk.
             ++uwp_swap_write_failures;
+            ++uwp_scan_write_failed;
             if (uwp_swap_transfer_error == ERROR_DISK_FULL) uwp_swap_disk_full = 1;
             else physical->hash_valid = 0;
             uwp_apply_protection(page);
@@ -523,6 +571,49 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
     return released;
 }
 
+/* bbport: the page table in five buckets - what the sweep could take ("resident"), and the four
+ * reasons it cannot. Shared by the 5 s report and by the empty-request line below, so a run can
+ * compare "the report says 1,534 MiB pageable" with "the sweep took nothing" at the same instant.
+ * The caller holds uwp_commit_lock exclusively. */
+static void uwp_swap_buckets(uint64_t *resident, uint64_t *pinned, uint64_t *section,
+                             uint64_t *shared, uint64_t *unreadable) {
+    uint64_t res = 0, pin = 0, sect = 0, sh = 0, unread = 0;
+    for (size_t i = 0; i < uwp_count; ++i) {
+        const UwpPage *page = &uwp_pages[i];
+        if (!page->mapped || !page->pageable) continue;
+        const UwpPhysical *physical = &uwp_physical[page->physical / PAGE];
+        if (physical->pinned) {
+            pin += PAGE;
+            continue;
+        }
+        if (page->kind != 1 || !page->committed) continue;
+        if (physical->section) {
+            sect += PAGE;
+            continue;
+        }
+        if (physical->references != 1) {
+            sh += PAGE;
+            continue;
+        }
+        int readable = 1;
+        for (unsigned k = 0; k < 4; ++k) {
+            if (!(page->protection[k] & PROT_READ) || (page->protection[k] & PROT_EXEC)) {
+                readable = 0;
+            }
+        }
+        if (!readable) {
+            unread += PAGE;
+            continue;
+        }
+        res += PAGE;
+    }
+    *resident = res;
+    *pinned = pin;
+    *section = sect;
+    *shared = sh;
+    *unreadable = unread;
+}
+
 static uint64_t uwp_swap_reclaim(uint64_t bytes, int include_views, int ignore_recent) {
     read_lock();
     AcquireSRWLockExclusive(&uwp_commit_lock);
@@ -540,6 +631,7 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     // and the page is worth more than the fault-in it costs later (.649: 141 MiB needed, 0 MiB
     // freed, 1,757 MiB reported pageable).
     uint64_t total = 0;
+    uwp_swap_scan_reset();
     for (int sweep = 0; sweep < 3 && total < bytes; ++sweep) {
         const uint64_t got = uwp_swap_reclaim(bytes - total, 1, sweep > 0);
         if (!got) {
@@ -551,6 +643,36 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     if (total) {
         printf("UWP swap: paged out %" PRIu64 " MiB on request (%" PRIu64 " MiB of it urgent)\n",
                total >> 20, (uwp_swap_urgent_pages * PAGE) >> 20);
+        return total;
+    }
+    /* bbport: the request came back empty. `.717` printed ten of these with no explanation while
+     * the 5 s report still claimed 1,534 MiB of `pageable private`, so the page table is counted
+     * here, in the state the sweep actually saw: one line, only when the ladder is out of moves,
+     * and only the first few times so a stuck loop cannot flood the log. */
+    static unsigned uwp_swap_empty_requests;
+    if (uwp_swap_empty_requests < 8) {
+        ++uwp_swap_empty_requests;
+        uint64_t b_resident = 0, b_pinned = 0, b_section = 0, b_shared = 0, b_unreadable = 0;
+        read_lock();
+        AcquireSRWLockExclusive(&uwp_commit_lock);
+        uwp_swap_buckets(&b_resident, &b_pinned, &b_section, &b_shared, &b_unreadable);
+        ReleaseSRWLockExclusive(&uwp_commit_lock);
+        read_unlock();
+        printf("UWP swap: request %" PRIu64 " MiB got nothing; scanned=%" PRIu64 " unmapped=%"
+               PRIu64 " unpageable=%" PRIu64 " kind=%" PRIu64 " uncommitted=%" PRIu64
+               " views-off=%" PRIu64 " pinned=%" PRIu64 " shared=%" PRIu64 " section=%" PRIu64
+               " at-budget=%" PRIu64 " unreadable=%" PRIu64 " view-guard=%" PRIu64
+               " recent=%" PRIu64 " write-failed=%" PRIu64
+               "; disk=%" PRIu64 "/%" PRIu64 " MiB full=%d write failures=%" PRIu64
+               "; page table: resident=%" PRIu64 " pinned=%" PRIu64 " section=%" PRIu64
+               " shared=%" PRIu64 " unreadable=%" PRIu64 " MiB\n",
+               bytes >> 20, uwp_scan_pages, uwp_scan_unmapped, uwp_scan_unpageable,
+               uwp_scan_kind, uwp_scan_uncommitted, uwp_scan_noview, uwp_scan_pinned,
+               uwp_scan_shared, uwp_scan_section, uwp_scan_atbudget, uwp_scan_unreadable,
+               uwp_scan_viewguard, uwp_scan_recent_cleared, uwp_scan_write_failed,
+               (uwp_swap_disk_pages * PAGE) >> 20, uwp_swap_disk_budget >> 20,
+               (int)uwp_swap_disk_full, uwp_swap_write_failures, b_resident >> 20, b_pinned >> 20,
+               b_section >> 20, b_shared >> 20, b_unreadable >> 20);
     }
     return total;
 }
@@ -583,35 +705,7 @@ static void uwp_swap_report(void) {
     // hole), and one that is executable or not readable everywhere. Without this split a run says
     // "0 MiB paged out" and gives no hint which of the four to go after.
     uint64_t resident = 0, pinned = 0, section = 0, shared = 0, unreadable = 0;
-    for (size_t i = 0; i < uwp_count; ++i) {
-        const UwpPage *page = &uwp_pages[i];
-        if (!page->mapped || !page->pageable) continue;
-        const UwpPhysical *physical = &uwp_physical[page->physical / PAGE];
-        if (physical->pinned) {
-            pinned += PAGE;
-            continue;
-        }
-        if (page->kind != 1 || !page->committed) continue;
-        if (physical->section) {
-            section += PAGE;
-            continue;
-        }
-        if (physical->references != 1) {
-            shared += PAGE;
-            continue;
-        }
-        int readable = 1;
-        for (unsigned k = 0; k < 4; ++k) {
-            if (!(page->protection[k] & PROT_READ) || (page->protection[k] & PROT_EXEC)) {
-                readable = 0;
-            }
-        }
-        if (!readable) {
-            unreadable += PAGE;
-            continue;
-        }
-        resident += PAGE;
-    }
+    uwp_swap_buckets(&resident, &pinned, &section, &shared, &unreadable);
     uint64_t out = uwp_swap_out, in = uwp_swap_in;
     uint64_t disk = uwp_swap_disk_pages, views = uwp_swap_views;
     uint64_t checks = uwp_swap_hash_checks, errors = uwp_swap_hash_errors;
