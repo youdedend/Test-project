@@ -517,3 +517,49 @@ What to look for in `dozen.log` / `errors.log` on the next hardware run:
 `Could not allocate frame buffer (… bytes, align …, texture=…)` followed by
 `Video '<path>': only N of M frame buffers … could be allocated` — that is the memory-exhaustion
 pressure the PC reports describe, now visible instead of fatal.
+
+---
+
+## The crash after character creation, second round (`1.0.26299.2359` logs)
+
+Test #13 ran the split dump correctly — `DumpLayout: kind=split; base_ver=01.00; patch_ver=01.09;
+effective=01.09; patches=required`, `Compiled startup patches: FPS=60, ... writes=196`, then died.
+The reported symptom ("exact same crash") is correct, but it is **not** the AvPlayer path fixed in
+`a416e62`:
+
+```
+Texture cache: memory pressure, 4493 of 4352 MiB (critical 4672): 1 images evicted ...
+GPU [Debug] <Critical> slot_vector.h:225 ValidateIndex: Assertion Failed!
+SlotVector invalid or freed slot index=132 capacity=2978      (previous run: 257)
+STOP: GPU library assertion failed
+```
+
+### Cause
+
+`Common::SlotId` is a bare `u32` index with **no generation counter**. The rasterizer resolves every
+texture binding in two passes: pass 1 collects `(image_id, desc)`, pass 2 calls `GetImage(image_id)`
+and `FindTexture(image_id, ...)`. Under memory pressure `InsertImage` -> `ReclaimMemoryFor` ->
+`DeleteImage` frees images *between* those passes (the log line above is that eviction), so a
+collected `image_id` can already be dead in pass 2. Indexing with it either trips `ValidateIndex`
+(the crash seen) or, if the slot is reused first, silently binds the **wrong image**.
+
+Two more places hold ids across an erase: `TextureCache::FindTexture`'s `ViewMemo` (kept in the
+rasterizer's binding entry, which outlives the image) and `Image::last_view` / `image_view_infos`,
+which keep indexes into `slot_image_views` after `DeleteImage` reset and erased those views.
+
+### Fix
+
+- `TextureCache::IsImageAlive(ImageId)` — `slot_images.is_allocated`, next to the existing `TryGetImage`.
+- `vk_rasterizer.cpp`, binding pass 2: re-resolve a dead id with `FindImage(desc)` (same guest
+  address, so the draw stays correct and the texture is simply uploaded again) and fall back to
+  `NullView()` if even that fails; the `needs_rebind` path is re-checked after it re-resolves, since
+  `FindImage` can evict while resolving.
+- `FindTexture`: the memoised view is only used while `slot_image_views.is_allocated(memo->view_id)`.
+- `Image::FindView`: `last_view` and the `image_view_infos` search only return a view whose slot is
+  still allocated; a stale list entry is overwritten with the freshly created view so the list does
+  not grow without bound.
+
+Logs to look for next run: `GPU: image binding N was evicted before it was bound; re-resolving
+addr=... size=...` (at most 8 times). Those lines replacing the assertion mean the eviction race was
+the cause; if `slot_vector.h:225` still fires, the id in the message tells us which container and
+path, since neither `FindTexture` nor `FindView` can reach it any more.

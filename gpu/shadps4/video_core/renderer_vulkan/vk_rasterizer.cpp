@@ -2430,6 +2430,34 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             image_infos.emplace_back(VK_NULL_HANDLE, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
 #endif
         } else {
+            // bbport: the first pass resolved these ids before this loop ran, and a texture-cache
+            // eviction in between (InsertImage -> ReclaimMemoryFor under memory pressure, which is
+            // what the "Texture cache: memory pressure" line right before the crash reports) frees
+            // the image while the id stays here. SlotId has no generation, so indexing with it
+            // trips slot_vector.h ValidateIndex ("invalid or freed slot index=132 capacity=2978")
+            // and stops the GPU. Re-resolve from the same descriptor instead: same guest address,
+            // uploaded again.
+            if (!texture_cache.IsImageAlive(image_id)) {
+                static int re_resolved = 0;
+                if (re_resolved < 8) {
+                    ++re_resolved;
+                    std::printf("GPU: image binding %u was evicted before it was bound; "
+                                "re-resolving addr={:#x} size={:#x}\n",
+                                binding_index, desc.info.guest_address,
+                                desc.info.guest_size);
+                    std::fflush(stdout);
+                }
+                auto& rebind_desc = image_desc_storage.emplace_back(desc);
+                image_id = texture_cache.FindImage(rebind_desc);
+                memo_entry = nullptr;
+                set_ok = false;
+                if (!image_id) {
+                    image_infos.emplace_back(VK_NULL_HANDLE, texture_cache.NullView(),
+                                             vk::ImageLayout::eGeneral);
+                    continue;
+                }
+            }
+
             if (auto& old_image = texture_cache.GetImage(image_id);
                 old_image.binding.needs_rebind) {
                 old_image.binding = {};
@@ -2438,6 +2466,13 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 image_id = texture_cache.FindImage(rebind_desc);
                 memo_entry = nullptr;
                 set_ok = false;
+                // The rebind may itself have evicted the image it resolved (FindImage can insert
+                // and reclaim); never fall through to GetImage with a dead id.
+                if (!image_id || !texture_cache.IsImageAlive(image_id)) {
+                    image_infos.emplace_back(VK_NULL_HANDLE, texture_cache.NullView(),
+                                             vk::ImageLayout::eGeneral);
+                    continue;
+                }
             }
 
             bound_images.emplace_back(image_id);

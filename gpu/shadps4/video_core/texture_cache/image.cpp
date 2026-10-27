@@ -381,13 +381,29 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
         runtime->SetBackingSamples(this, info.num_samples);
     }
     const auto& view_infos = backing->image_view_infos;
-    if (backing->last_view < view_infos.size() && view_infos[backing->last_view] == view_info) {
+    // bbport: the recorded views must still be in their slots. An image evicted under memory
+    // pressure has its views reset and erased (TextureCache::DeleteImage), while `last_view` and
+    // `image_view_infos` stay behind for a frame, so indexing blindly here trips
+    // slot_vector.h ValidateIndex and stops the GPU. Miss the cache and make a fresh view instead.
+    const auto alive = [this](u32 view_index) {
+        return view_index < backing->image_view_ids.size() &&
+               slot_image_views->is_allocated(backing->image_view_ids[view_index]);
+    };
+    if (backing->last_view < view_infos.size() && view_infos[backing->last_view] == view_info &&
+        alive(backing->last_view)) {
         return (*slot_image_views)[backing->image_view_ids[backing->last_view]];
     }
     const auto it = std::ranges::find(view_infos, view_info);
     if (it != view_infos.end()) {
-        backing->last_view = static_cast<u32>(std::distance(view_infos.begin(), it));
-        const auto view_id = backing->image_view_ids[backing->last_view];
+        const u32 found = static_cast<u32>(std::distance(view_infos.begin(), it));
+        if (alive(found)) {
+            backing->last_view = found;
+            return (*slot_image_views)[backing->image_view_ids[found]];
+        }
+        // Stale entry: overwrite it with the view created below so the list does not grow forever.
+        const auto view_id = slot_image_views->insert(runtime->GetInstance(), view_info, *this);
+        backing->image_view_ids[found] = view_id;
+        backing->last_view = found;
         return (*slot_image_views)[view_id];
     }
     const auto view_id = slot_image_views->insert(runtime->GetInstance(), view_info, *this);

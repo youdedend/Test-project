@@ -221,6 +221,14 @@ public:
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }
+    /// bbport: false once the image's slot has been freed. SlotId is a bare index without a
+    /// generation, so a stale id either trips slot_vector.h ValidateIndex ("invalid or freed slot
+    /// index", which stops the GPU) or silently aliases whatever image takes the slot next. Callers
+    /// that resolved an id earlier in the frame (the rasterizer's two-pass binding) must re-resolve
+    /// instead of indexing with it.
+    [[nodiscard]] bool IsImageAlive(ImageId id) const noexcept {
+        return slot_images.is_allocated(id);
+    }
     [[nodiscard]] Image& GetImage(ImageId id) {
         auto& image = slot_images[id];
         TouchImage(image);

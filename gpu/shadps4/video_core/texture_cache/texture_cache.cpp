@@ -757,7 +757,10 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
         UpdateImage(image_id);
     }
     if (memo && !BbToggle::Disabled(BbToggle::TextureViewMemo)) {
-        if (memo->image_id == image_id && memo->backing == image.backing && memo->view_id) {
+        // bbport: only trust the memo while its view still exists. Evicting the image erases the
+        // views, and the memo lives in the rasterizer's binding entry, which outlives it.
+        if (memo->image_id == image_id && memo->backing == image.backing && memo->view_id &&
+            slot_image_views.is_allocated(memo->view_id)) {
             return slot_image_views[memo->view_id];
         }
         ImageView& view = image.FindView(desc.view_info);
