@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `3fe9da1` — *fix(swap): pass the ignore-recent flag at the two page-in retry sites* (release target; on top of `ab0657a`, the urgent-sweep commit) |
+| HEAD | `3dec03a` — *fix(memory): emergency reclaim without an age gate, and a real answer when a page-out takes nothing* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40465344513` — [actions/runs/40465344513](https://github.com/youdedend/Test-project/actions/runs/40465344513), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.717.zip` — 10,218,418 B, sha256 `077faf4a4402acc7345cc5fdb45b93b8af249d618458d2f861b04fe70ad4c00e` (the `.zip` carries `BloodborneLauncher_1.0.26300.717_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx`) |
-| Version shown by that package | **`1.0.26300.717`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0717`** — [releases/tag/xbox-alpha-1.0.26300.0717](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0717), target `3fe9da1` (run `40465344513`): **urgent page-out** — an allocation that has already failed may ignore the second-chance bit, plus the image-reclaim rule breakdown and a 3-sweep `runtime_memory_page_out` (§2l). It is `.649` (the ladder, hardware-confirmed: no disk-full, no stall) plus the fix for what `.649` ran into. Previous: `.0649` (§2l), `.0623` (fail-soft page-out + 768 MiB disk budget, §2k), `.0559` (private pages pageable — **confirmed on the console**, §2j), `.0534` (§2i), `.0504` (§2h), `.0424` (`FindImage` freed-slot fix — **confirmed on the console**, §2g), `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — `.649` is the newest build that has run on hardware (§2l); `.717` adds the urgent sweep and is published, waiting for Device Portal. Install `.717`: it is `.649` plus the fix, so one run covers both |
-| Open blocker | **the app-heap limit, still reached**: `.649` died at `usage=5101/5120 MiB` on a 64 MiB `DeviceLocal` buffer while VMA `heap[0]` was only `2297 MiB of a 4096 MiB budget` — the failing allocation is guest/app memory, not the GPU heap (§2l). `.717` gives the pager the right to take a fresh page at that moment; if it still dies, the new `emergency reclaim … seen=/too recent=/gpu-written=/bound/target=/no backing=` line says which image rule to relax |
+| Last green CI | run `40467222025` — [actions/runs/40467222025](https://github.com/youdedend/Test-project/actions/runs/40467222025), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.736.zip` — 10,219,845 B, sha256 `a85d7e5ec0ad9e3dd55b29902e873910c85e31f2754f3525d2530324fde24d59` |
+| Version shown by that package | **`1.0.26300.736`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0736`** — [releases/tag/xbox-alpha-1.0.26300.0736](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0736), target `3dec03a` (run `40467222025`): **emergency image reclaim without the age gate** (`.717` asked and got `seen=0`) plus **the sweep's per-reason counters and a live page-table recount** whenever a page-out request comes back empty (§2m). Previous: `.0717` (urgent page-out, §2l), `.0649` (the ladder — hardware-confirmed: no disk-full, no stall, §2l), `.0623` (§2k), `.0559` (§2j), `.0534` (§2i), `.0504` (§2h), `.0424` (§2g), `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.717` (`docs/hardware-test-21/`, §2m); it still stopped at 5060/5120 MiB. `.736` is published and waiting for Device Portal |
+| Open blocker | **the app-heap limit, still reached** (`.717`: 5060/5120 MiB on a 96 MiB `DeviceLocal` buffer, VMA `heap[0]` only 2313 of 4096 MiB). Two facts came out of that run and both are addressed in `.736`: the image reclaim never entered its walk (`seen=0`, age gate at the current second), and the sweep took nothing while the report claimed 1,534 MiB pageable (§2m) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -639,6 +639,38 @@ UWP memory emergency (allocation failed): need 141 MiB; paged out 0 MiB in 3 ms,
 | The sweep takes `ignore_recent`, counted as `urgent sweeps=N (N MiB)` in the report | `guest_swap.inc:429-446, 522-534, 640-648` |
 | `TextureCache::EmergencyReclaim` prints why it could not take the images: seen / too recent / gpu-written / bound-or-target / no backing | `texture_cache.h:220-238`, `texture_cache.cpp:1633-1670` |
 | The two page-in/commit retry callers pass `0` for `ignore_recent` — only a failed allocation may take a fresh page. **`.665` never got here:** the first push (`ab0657a`) failed to compile because those two sites still passed three arguments (`too few arguments to function call, expected 4, have 3`, `runtime_memory.c.obj`, run `40464733034`); `3fe9da1` fixes both | `guest_swap.inc:367-371`, `guest_memory.inc:196-198` |
+
+---
+
+## 2m. `.717` run: the ladder is fine, the two things it asks were blind (2026-10-27)
+
+Full logs in `docs/hardware-test-21/` (loader 857 lines, errors 79). Build identity: the pager line
+has `disk budget=768 MiB` and the report ends in `urgent sweeps=…`, so it is `.717`.
+
+What the run settled: **no disk-full** (367 of a 768 MiB budget, 0 write failures), **no stall**
+(`STALL` count 0; slowest frame 575.5 ms at start-up, then ≤ 52.4 ms), **nothing pinned**
+(`guest pinned=0` throughout). The urgent sweep printed `urgent sweeps=0 (0 MiB)` in every report:
+the second-chance bit was **not** what the sweep was rejecting, so the `.665`/`.717` premise was
+wrong about the guest side.
+
+Two dead ends, both with a numeric fingerprint:
+
+| Symptom | Why |
+|---|---|
+| `Texture cache: emergency reclaim freed 0 MiB of the 132 MiB asked for; seen=0 too recent=0 …` | `EmergencyReclaim` called the walk with `unused_seconds = 0`, and `ForEachItemBelow` returns as soon as it meets an item newer than the gate. With `unused_seconds = 0` the gate is the tick recorded at the start of this second — during an area load every image is created or touched after it, so the loop body never ran: `seen` counts walk entries, not refusals |
+| ten `UWP swap: paged out 0 MiB on request` lines (7 ms each) while the 5 s report still said `pageable private=1534 pinned=0 … section=0 shared=0 exec/unreadable=0` | the sweep and the report used the same rules, so one of them was reading stale state. Nothing in the log could tell which — the sweep had no per-reason counters |
+
+### Fixes in `.736`
+
+| What | Where |
+|---|---|
+| `ReclaimMemoryForUnused(…, ignore_age)`; the emergency path walks everything (`gate = gc_tick`) and skips the per-image age check, while every structural rule stays: bound, target, scene proxy, video-out, `IsImageCollected`, overlap with the new image, `GpuModified`. Line now prints `gc_tick=` | `texture_cache.h:221-250`, `texture_cache.cpp:1633-1660` |
+| `uwp_swap_buckets()` — the five-bucket page-table walk is now one function, used by the report **and** by the empty-request line, under the same lock | `guest_swap.inc:610-655` |
+| The sweep counts why it refused each page: unmapped, unpageable, kind, uncommitted, views-off, pinned, shared, section, at-budget, unreadable, view-guard, recent-cleared, write-failed | `guest_swap.inc:456-521` |
+| When a request comes back empty: one line with those counters, the disk state (`full=`) and a fresh page-table recount (`resident=/pinned=/section=/shared=/unreadable=`), at most 8 times per run | `guest_swap.inc:632-684` |
+
+Hardware reproduction (Series S/X) for the reclaim change: **still required** — `.736` has not been
+run anywhere yet.
 
 ---
 
