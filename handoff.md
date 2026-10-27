@@ -468,8 +468,11 @@ before the stop, and whether it reproduces with the upscaler off.
 - Public API changes are called out and justified: `TryGetImageTouched`, `HoldCollectedImage` /
   `ClearCollectedImages` / `IsImageCollected`, `TryGetImage`/`IsImageAlive` reuse, `reason` parameters
   on `DeleteImage`/`EraseImage`/`FreeImage`, `ReleaseRetiredArenas` moved to public.
-- No push to `main`, no merge, no release, no tag for this work. `[release]` is only placed in a
-  commit message when a package is actually meant to be published.
+- No push to `main`, no merge to `main`. **Standing instruction (2026-10-27): every change is
+  published as a pre-release without asking first.** Either `[release]` in the commit message or a
+  `workflow_dispatch` run with `release=true`; the tag is `xbox-alpha-<version>` from the package
+  time, target = the branch tip at that moment. This supersedes the earlier "no release unless asked"
+  rule.
 - The branch name is fixed by the platform (`arena/8ac58bdb-test-project`); it matches the workflow's
   `arena/**` trigger, so pushes build automatically.
 - Do not reintroduce anything listed in §11.
@@ -499,8 +502,8 @@ making them public.
 2. Optionally read the compiler warnings from the green run page and hand them over for a cleanup commit.
 3. If the run is clean over long play and multiple area loads, the next milestone is a proper stress
    pass (more distinct areas, Dream round trips, long combat) before calling the crash closed.
-4. Only then consider a merge to `main` (a PR from `arena/8ac58bdb-test-project`) and a `[release]`
-   package. Neither has been done.
+4. Releases are no longer a separate step: every push publishes one (§10). A merge to `main`
+   (a PR from `arena/8ac58bdb-test-project`) is still not done and still needs a decision.
 
 ---
 
