@@ -65,6 +65,53 @@ warnings and the log endpoints are unreachable from the sandbox).
 
 ---
 
+## 2b. Test #13 logs (2026-10-27, after `1.0.26300.211` was published) — the OLD build ran
+
+The six log files supplied after the release are from the **pre-fix binary**, not from
+`1.0.26300.129` / `1.0.26300.211`. Proof, all from `loader.log.txt` / `errors.log.txt`:
+
+| Evidence | Old build | This run | New build would print |
+|---|---|---|---|
+| Pressure-line format | no pinned field | `… 49 old GPU-written tiled images kept (0 MiB), 0 dropped` | `… , N pinned` |
+| Memory marks | −768 / −448 | `4504 of 4352 MiB (critical 4672)` | `of 4096 MiB (critical 4352)` |
+| Per-free trace | absent | 0 occurrences of `Texture cache: free id=` | one per freed image |
+| Erase trace | absent | 0 occurrences of `Texture cache: erase id=` | one per erased slot |
+| Dead-id report | absent | 0 occurrences of `DEAD IMAGE` | printed before the assertion |
+
+So both runs (this one and the `.prev` pair) are the same old binary: identical fingerprint
+`slot_vector.h:225 ValidateIndex`, `SlotVector invalid or freed slot index=132 capacity=2978`.
+
+What the old-build logs do establish:
+
+- **Crash position:** right after the character-creator threads start (`CSChrThread0..5`,
+  `CSChrBackInitialize1`, `CSClothThread0..5`) — i.e. in the character creator, as reported.
+- **Memory at the crash:** `AppMemoryUsage` 4504 MiB of the 5120 MiB limit (616 MiB headroom),
+  `AppMemoryUsageLevel` still `0`. Telemetry: 84 → 1148 → 1027 → 1974 → 2299 → 2292 → 2298 MiB
+  (last sample at `presents=1010`); the jump to 4504 MiB happens after telemetry stops printing
+  (it only prints for the first 24 samples).
+- **Exactly one image was evicted by that pressure report** (`1 images evicted`), and the assertion
+  follows within the same frame — consistent with the diagnosed cause, but the old binary cannot say
+  *which* image, because it has no free trace. This is precisely what the new build adds.
+- **Configuration in use:** split dump (`base=01.00` + `patch=01.09`, `effective=01.09`,
+  `patches=required`, 436 overlay paths, digest `ee93feb5f771`), `Compiled startup patches: FPS=60,
+  scene=1920x1080, UI=1920x1080, writes=196`, `Scene resolution: raster 640x360, half-resolution
+  targets 320x180, UI 1920x1080 (live)`, `FSR1 and RCAS disabled`, 30→60 FPS patch. 56–59 FPS,
+  slowest frame 116 ms.
+- **No precompiled pipeline cache:** `driver.vkcache` is missing under
+  `LocalState\user\cache\CUSA03173\`, so shaders compile at runtime (that is the 116 ms frame, not
+  a crash factor). Running **Precompile shaders** once from the launcher removes it.
+- **Only the previous run** logged `liverpool.cpp:70 NextPacket: packet length exceeds remaining
+  submission size. Packet dword count=2, remaining submission dwords=1` — a truncated PM4 submission.
+  It did **not** appear in this run. If it reappears, it is a separate guest-command-stream bug worth
+  its own investigation.
+
+Next action: install **`1.0.26300.211`** from
+`https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0211`, confirm the
+version in "Manage app", and repeat. If the version shows `.211` **and** `loader.log` still has no
+`Texture cache: free id=` lines, the new code is not in the binary — report that immediately.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**
