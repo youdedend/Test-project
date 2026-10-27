@@ -165,6 +165,36 @@ fault leaks that shader's IR pools. Both are bounded and deliberate.
 
 ---
 
+## 2d. Community research on the precompile crash (2026-10-27)
+
+Full report: [`docs/PRECOMPILE_CRASH_RESEARCH.md`](docs/PRECOMPILE_CRASH_RESEARCH.md). Summary:
+
+- **Nobody reports this crash.** No shadPS4 issue/PR mentions `RemoveUnreachableBlocks`,
+  `GotoPass`/`kMaxGotoTransforms` or a precompile step (upstream has no precompile feature).
+  GitHub issue search plus web search turned up nothing for the same symptom.
+- **The sibling ports precompile the same game without dying**, which is the useful finding:
+  `Jgamrot/bloodborne_pc` builds a *catalog* of shaders the game is known to use;
+  `visy/bloodborne_pc_windows_port` compiles only the *recorded* pipeline cache and states
+  "shaders the game has never used on any machine cannot be prepared up front: a pipeline depends on
+  draw state the game only sets while running"; `Awakenchan/LanternEngine` ships ~510 pipelines.
+  We sweep 10,256 synthetic archive items instead — one to two orders of magnitude more than the game
+  uses.
+- **The habit that shows up in every real root-cause**: name the shader and fail open
+  (`axylpup/shadPS4` #25: "no longer closes when the driver refuses one of the faster shader
+  versions… the log names the shader so I can look at it"), and replay the offending shader offline
+  (`boykopovar/AnyPS5` #9702 found a 177 s structurization that way). §2c's quarantine is the first
+  half; a source dump/journal would be the second.
+- **Rules out** "cherry-pick an upstream fix": upstream still has the same
+  `RemoveUnreachableBlocks` shape (ours is stricter), and this tree's frontend carries hardening
+  upstream does not have (goto-transform cap 65536, tree guards, `VisitExpr` depth limit 512).
+
+Three routes, in the report: **A** precompile only what the game uses (catalog, like the siblings) —
+makes the crash stop; **B** keep the sweep and make one bad shader cost nothing (time budget, resume,
+journal, retry list) — extends §2c; **C** journal each shader and replay it offline — diagnosis, the
+prerequisite for fixing the real frontend bug.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**
