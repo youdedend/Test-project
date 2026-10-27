@@ -543,6 +543,48 @@ gives each page one grace period); and the guest-memory self-test (`run.txt` = `
 inspection says it does not, since the pages it faults are kind 1 and took `uwp_commit` before and
 after, but "inspected" is not "ran".
 
+### Confirmed on the console (`.559` run)
+
+Logs in `docs/hardware-test-18/`. Every prediction above held:
+
+| | `.534` | `.559` |
+|---|---|---|
+| `guest pinned` | 0 → 1,355 MiB | **0 MiB, every sample** |
+| pager pageable set | ~400 MiB, flat | **989 MiB** |
+| page-out passes / nothing to give | 6 / 6 | **237 / 0** |
+| swapped out | 0 MiB | **1,016 MiB**, `checks=660 corrupt=0` |
+
+The pin rule was the reason the pager had no work. That is now measured.
+
+---
+
+## 2k. `.559`: the pager filled the device, and a failed write stopped the app (2026-10-27)
+
+The same run then ended differently, and this is progress: `STOP: UWP swap private write at
+00000010ACD30000, error 112` — **ERROR_DISK_FULL**. The sparse swap file in `LocalState` grew to
+~1,016 MiB, the volume had no more room, and `uwp_swap_page_out_locked` treated the failed write as
+fatal. The game itself was still running normally when the pager killed it.
+
+Two things were wrong with that, both fixed:
+
+| What | Where |
+|---|---|
+| A page-out that cannot be written is **not** fatal: the page is still intact (nothing was freed yet), so its protection is put back and it stays resident, exactly as if it were pinned. Only a later allocation failure ends the run - and that one is honest | `guest_swap.inc:472-486` |
+| The pager keeps a **disk budget** (768 MiB by default, `BB_UWP_SWAP_DISK_MB` to change it) and stops paging private pages when it is reached or when the device says it is full. LocalState is shared with saves: filling it is worse than not paging | `guest_swap.inc:13-22, 423-428, 587-596` |
+| A window page that cannot be saved stays mapped: `uwp_swap_unmap_view` returns whether it unmapped, and both callers count only what actually happened | `guest_swap.inc:230-268, 286-288, 448-456` |
+| The sweep stops instead of walking up to twice the page table once the device is full (each attempt still costs a protection change) | `guest_swap.inc:402-406` |
+| The report says which half is short: `disk pages=N MiB of a 768 MiB budget; write failures=N (device full: private pages stay resident)` | `guest_swap.inc:556-566` |
+| Start line names the budget: `… private pages pageable; disk budget=768 MiB` | `guest_swap.inc:592-596` |
+
+Also noted in that log, and not yet acted on: `UWP STALL DETECTED (presents stuck at 829 for 10 s)`
+right before the stop, with 108 MiB paged out *during* the stall - the allocation-retry path
+(`buffer.cpp:113-152`) pages out synchronously while the GPU thread waits. That is where a stall
+counter/time budget belongs (§13, next).
+
+What this run settles: the scene at `presents=829` wants more than 5,120 MiB. Memory that could be
+handed back now is (1 GiB to disk, with the hashes verifying), so the next step is not "free more" but
+"survive less" - the approved degradation path (§10).
+
 ---
 
 ## 3. Code map (the files that matter)
