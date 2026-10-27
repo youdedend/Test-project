@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `b7fff3c` — *diag(memory): keep printing usage near the limit, and print the limit itself* (release target) |
+| HEAD | `817f291` — *fix(memory): stop pinning every private page a guest thread touches* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40455238798` — [actions/runs/40455238798](https://github.com/youdedend/Test-project/actions/runs/40455238798), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.534` — contains `BloodborneLauncher_1.0.26300.534_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,218,137 B, sha256 `8f45e0ded23ac80141a20e76f396275bfa506b39ff65729b833d0c0a9c53d265`) |
-| Version shown by that package | **`1.0.26300.534`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0534`** — [releases/tag/xbox-alpha-1.0.26300.0534](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0534), target `b7fff3c` (run `40455238798`, both jobs green, publish step ran): **memory telemetry keeps printing near the limit (1 s) with the delta, and the eviction report prints the 5,120 MiB limit** (§2i; no behaviour change). Previous: `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
-| Console validation of this build | **not installed yet** — the console ran `.504` (§2i: `guest pinned` works, the stop is the 5,108/5,120 MiB allocation wall); `.534` (near-limit telemetry) is published and waiting for Device Portal |
-| Open blocker | the crash is now a **capacity** problem, not a stale id: the app hits the platform's 5,120 MiB limit with ~1.3 GiB of it unpageable guest memory (§2h) |
+| Last green CI | run `40457758599` — [actions/runs/40457758599](https://github.com/youdedend/Test-project/actions/runs/40457758599), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.559` — contains `BloodborneLauncher_1.0.26300.559_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` (10,216,310 B, sha256 `8cd2738bcceea908b9193a1bbfb4f23346390b69a4b78db1f90e8ca651151280`) |
+| Version shown by that package | **`1.0.26300.559`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0559`** — [releases/tag/xbox-alpha-1.0.26300.0559](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0559), target `817f291` (run `40457758599`, both jobs green, publish step ran): **private guest pages stay pageable - the pager keeps ~1.3 GiB of workload instead of being locked out** (§2j; `BB_UWP_PIN_PRIVATE=1` restores the old rule). Previous: `.0534` (near-limit telemetry, §2i), `.0504` (pinned memory printed, §2h), `.0424` (`FindImage` freed-slot fix + stale-id report, §2g — **confirmed on the console: no more `slot_vector` stop**), `.0405` (stale-id report + memo re-check), `.0345` (skip-intro question + `[dump]` preserved, §2f), `.0328` (depth reclaim, §2e), `.0300` (precompile isolation, §2c) |
+| Console validation of this build | **not installed yet** — the console ran `.534` (§2j: the ramp is logged, `guest pinned` 0 → 1,355 MiB); `.559` (pin-rule fix) is published and waiting for Device Portal |
+| Open blocker | the crash is a **capacity** problem, not a stale id: the app hits the platform's 5,120 MiB limit with ~1.3 GiB of it unpageable guest memory (§2h) - `.559` makes that memory pageable again, unproven until a console run (§2j) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
