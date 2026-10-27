@@ -1,157 +1,411 @@
 # Bloodborne Xbox Series X|S UWP Port — Engineering Handoff
 
-## 1. Goals
+**Read this first.** This document is the complete record of the port: what it is, what has been
+built, what broke, what was changed to fix it, how it is built and tested, and what is still
+unproven. Sections 1–9 are the current, authoritative state. Section 10 is an **archival appendix**
+kept word for word from earlier rounds (it explains how the current state was reached; its branch
+names, PR numbers and "current" claims are historical and superseded).
 
-Build and ship a complete, fully playable Xbox Series X|S Developer Mode UWP port of `bloodborne_pc` (`Supermedo/bloodborne_pc`, `windows` baseline `5adea35dbd38`) in `youdedend/Test-project`, compiled and signed end-to-end inside GitHub Actions so a user can install the `.appx` on an Xbox console, supply their own decrypted PS4 Bloodborne `v01.09` dump (`eboot.bin`, `sce_module`, `sce_sys`, `dvdroot_ps4`), and play the game natively on hardware.
-
-Core acceptance criteria and standing constraints:
-
-- **Native CPU + HLE + GPU Execution**:
-  - Compile the PS4 x86-64 ELF loader (`src/probe.c`) and HLE kernel/libc/filesystem/thread/sync/pad/audio runtime (`src/runtime*.c`) with `clang-cl` (`sysv_abi` bridge) alongside the `shadPS4` Liverpool GPU emulator (`gpu/shadps4/**`).
-  - Run Vulkan rendering on Xbox Series X|S Direct3D 12 via packaged Mesa Dozen (`vulkan_dzn.dll` built from `Cosmo/mesa_ai_slop_version` @ `a76cd3caa23f14839f15259cd3abbfa400b1b217` with MSVC `14.44`), DirectX Shader Compiler `v1.9.2609` (`dxil.dll`), and a native D3D12 `CoreWindow` flip-model swapchain presentation bridge (`xbox/graphics/present_bridge.cpp`).
-- **In-App Native C++ Dump Preparation (Zero Python Dependency on Console)**:
-  - Replicate the desktop Python preparation pipeline (`prepare.py`, `link_modules.py`, `link_libc.py`, `cpu_compat.py`, `patches.py`, `content_profile.py`, `patches/redzone.json`, `patches/Bloodborne.xml`) natively in `xbox/platform/prepare_game.cpp` (`prepared-format.txt` = `2`), enforcing `APP_VER = 01.09` whenever `redzone.json` targets `01.09` offsets and emitting `LocalState\prepared\boot-linked.bin`.
-- **Unified `5,120 MiB` Xbox Game Mode Memory Architecture**:
-  - Fit PS4 guest memory, `boot-linked.bin`, `shadPS4` buffer/texture caches, Mesa Dozen/D3D12 heaps, and `VkPipelineCache` comfortably inside the `5,120 MiB` Xbox Series S|X Game Mode AppContainer cap (`AppMemoryUsageLimit`).
-  - Guarantee `< 1 TiB` (`< 0x10000000000`) virtual addresses for all guest-visible allocations, stacks, TLS blocks, GOT tables, and media buffers; back GPU page-tracking via `VirtualAlloc2FromApp` / `MapViewOfFile3FromApp`; and swap cold `WC_GARLIC` pages cleanly to a sparse file in `LocalState` without evicting CPU-touched pages.
-- **Crash-Free Ahead-of-Gameplay Shader & Pipeline Precompilation**:
-  - Parse Bloodborne `.shaderbnd.dcx` (`BND4` + `DCX` deflate) archives plus `boot-linked.bin` / DLC / mod directories ahead of gameplay (`gpu/shim/bb_precompile.cpp`), pre-build linked `(VS, PS)`, depth-only `VS`, and `RectList`/`QuadList` geometry pipelines into Mesa Dozen's `driver.vkcache`, recover automatically from crashes via disk breadcrumbs, and synchronize caches across `LocalState` and USB dumps.
-- **Complete Console UX & I/O**:
-  - Support `Windows.Gaming.Input.Gamepad` (buttons, analog sticks, triggers, rumble, `L3 + R3` ImGui settings overlay, touchpad gestures, and controller virtual keyboard for Hunter Name entry), `XAudio2` 7.1/stereo output, `LibAtrac9`/FFmpeg `AvPlayer` decoding, and dump discovery from `D:\DevelopmentFiles\Bloodborne`, `LocalState\game`, or USB drives (`removableStorage` + `FutureAccessList` + `fileTypeAssociation`).
-- **Strict UWP & Legal Compliance**:
-  - Zero `runFullTrust` or `broadFileSystemAccess` declarations in `xbox/AppxManifest.xml`.
-  - Every PE binary verified by `xbox/scripts/check-imports.ps1` against `WindowsApp.lib`, the Store CRT, or packaged DLLs.
-  - Zero copyrighted Sony binaries, `eboot.bin`, keys, ISOs, or private credentials committed to Git (test signing uses the purposefully public self-signed `xbox/signing/bloodborne_xbox-signing.pfx` for Xbox Developer Mode sideloading).
+Last updated: after commit `03b74ac` (CI run `40432005224`, green). Console-tested: **no**.
 
 ---
 
-## 2. Current state
+## 1. What this project is
 
-- **Repository & Branch**:
-  - Repo: `https://github.com/youdedend/Test-project` (`/home/user/Test-project`)
-  - Active session branch: `arena/c39edde2-test-project` (branched from `main` @ `cd63381710b002818a91aa4618eeb1b1ca68b410`)
-  - Open Pull Request: **PR #10** (`arena/c39edde2-test-project` -> `main`) — `https://github.com/youdedend/Test-project/pull/10` (`status: OPEN`)
-- **Latest Verified CI Build & Signed Pre-Release** (updated for the documentation-only head; see "Final state of this branch" for the per-commit table):
-  - Code commit: `7a6ef60` (`Pin the launcher panel text and the Prepare lines in CI`) — the last commit that changes code; everything after it is `handoff.md` only.
-  - Branch head: `5320763` (`Record the final branch state and the verified design facts in handoff.md`).
-  - GitHub Actions run: **`40404940063`** on that head — both `Dozen for UWP` and `Xbox UWP package` completed **green**, and `gh pr checks 10` reports `pass` for both. (`40399498409` on `7a6ef60` is the last green run that actually rebuilt the binary.)
-  - Published pre-releases along the way: `xbox-alpha-1.0.26299.{0743,0837,0929,0959,1047,1148,1759,1819,1841,1919}`; the Test #11 build referred to below is `xbox-alpha-1.0.26299.1047` (`https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26299.1047`, bundle `10,101,375` bytes; contains `BloodborneLauncher_1.0.26299.1047_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx`).
-  - **The handoff is superseded in two places, read them together**: §6 steps 1–2 describe Hardware Test #11, which *ran and crashed*; the authoritative current state is the "Hardware Test #12" and "Update / Patch Handling" sections further down, and the merge gate is the `Still blocking the merge` list at the end.
-- **Console Hardware Validation State**:
-  - Validated on real Xbox Series S hardware (`5,120 MiB` Game Mode) across 10 hardware test iterations through `xbox-alpha-1.0.26299.0959` (`9d261ad`):
-    - In-app C++ preparation (`boot-linked.bin`), offline `.shaderbnd.dcx` precompile (**`driver.vkcache` = `173,715 KiB` / `169.6 MiB`**), startup `WarmUp` (**`121/121` pipelines**), `XAudio2` sound, controller input, Hunter Name creation, and save-data mount (`SPRJ0005`) all succeeded on hardware.
-    - Title/menus ran at **`29.4–29.5 FPS`** (`0.85 ms` present), and Central Yharnam (`map/m24`) finished streaming into **live 3D gameplay at `25.8 FPS`** (`presents=1885`, `UWP swap: out=808 in=250 disk=572`, **`corrupt=0`**).
-  - All 6 issues identified in the Hardware Test #9/#10 logs (`bb:DrawScan` `+0x270628` sequence-gap crash, `1.28 GiB` host stack commit across 82 OS threads, `GotoPass::MoveOutwardIf` crash on shader `i = 1024`, `174 MiB` `FlushCaches()` memory spike, `.vkcache` `pipelineCacheUUID` validation, and frame-boundary retired dense-arena reclamation) are **fixed, built, and published in `xbox-alpha-1.0.26299.1047` (`a3d39fd`)**.
-  - **Hardware Test #11 has since run and failed on a `01.00` dump**: `Fault: read access to 0000020500987170 at bloodborne.exe+0x3003f0` at `4135/5120 MiB` (`presents=1376`). Its root cause is the split base/update dump layout, not a GPU bug — see "Update / Patch Handling". The eight fixes for it are in the "Hardware Test #12" section and are **not yet exercised on hardware**.
+Build and ship a playable Xbox Series X|S Developer Mode UWP port of `bloodborne_pc`
+(`Supermedo/bloodborne_pc`, `windows` baseline `5adea35dbd38`) in `youdedend/Test-project`, compiled
+and signed end to end inside GitHub Actions, so a user can sideload the `.appx` on a console, point
+it at their own decrypted PS4 Bloodborne `v01.09` dump (`eboot.bin`, `sce_module`, `sce_sys`,
+`dvdroot_ps4`) and play natively on the console.
 
----
+Standing goals and constraints:
 
-## 3. Active files
-
-### Build, Packaging, & CI
-- `.github/workflows/xbox.yml`: Two-job GitHub Actions pipeline (`dozen` builds `vulkan_dzn.dll` with MSVC `14.44`; `xbox` fetches `dxil.dll` + third-party libs, builds `bloodborne.exe` with `clang-cl`, audits UWP imports, packages/signs `.appx`, and publishes `[release]` pre-releases).
-- `xbox/CMakeLists.txt`: UWP target definition (`CMAKE_SYSTEM_NAME=WindowsStore`, `CMAKE_SYSTEM_VERSION=10.0.22621.0`, `/APPCONTAINER`, `/HIGHENTROPYVA:NO`, `/Oy-`, `/STACK:8388608,65536`).
-- `xbox/AppxManifest.xml`: Strict UWP AppContainer manifest (`uap:AppSupportsMultipleInstances` omitted, `removableStorage` + PS4 archive `fileTypeAssociation`, zero `runFullTrust` / `broadFileSystemAccess`).
-- `xbox/prepared-format.txt`: Monotonic format version (`2`) invalidating stale pre-`01.09`-gated `LocalState\prepared\boot-linked.bin` outputs.
-- `xbox/scripts/{fetch-deps.py,boost-headers.py,build-deps.ps1,build.ps1,check-imports.ps1,package.ps1,assets.ps1}`: Dependency fetch/build scripts, PE import verifier (`WindowsApp.lib` + Store CRT allowlist), and `MakeAppx` + `SignTool` packager.
-
-### Xbox Platform, Launcher, Memory, & HLE Runtime
-- `xbox/platform/main.cpp`: UWP `CoreApplication` lifecycle, Launcher UI (`Prepare & Launch`, `Precompile shaders`, `Start game`, `Pick USB dump`), `FutureAccessList` USB token persistence, `bbport.ini` preset sync, and `uwp_last_chance_logger` crash breadcrumbs.
-- `xbox/platform/prepare_game.cpp` & `xbox/platform/prepare_game.h`: Native C++ PS4 SELF/ELF unpacker, PRX module linker (`libc.prx`, `libSceFios2.prx`), `sysv_abi` trampoline/red-zone patcher (`patches/redzone.json`), `Bloodborne.xml` patch applier, and `01.09` version gate.
-- `xbox/platform/guest_memory.inc` & `xbox/platform/guest_swap.inc`: `< 1 TiB` placeholder/view reservation (`VirtualAlloc2FromApp` / `MapViewOfFile3FromApp`), 4 KiB GPU write-tracking protection hooks, `WC_GARLIC`-only sparse swap pager (`LocalState\garlic_swap.bin`), and fault-time pinning of CPU-accessed guest pages.
-- `xbox/platform/{input.cpp,audio.cpp,runtime_compat.c,desktop_shims.cpp}`: `Windows.Gaming.Input` gamepad + vibration + virtual keyboard support, `XAudio2` 7.1/stereo output, `< 1 TiB` Win32/UCRT shims, and AppContainer POSIX compatibility.
-- `src/probe.c`: ELF image mapper, VEH guest page-fault/GPU write-watch dispatcher, single-winner `fatal_exception` logger, and `< 1 TiB` module/GOT layout.
-- `src/{runtime_memory.c,runtime_thread.c,runtime_mutex.c,runtime_rwlock.c,runtime_sema.c,runtime_file.c,runtime_pad.c}`: PS4 Direct/Flexible memory allocator, `< 1 TiB` `low_stack` guest thread trampolines, `GuestMutex` (`0x28` layout), `clang-cl` `__atomic_*` primitives, and case-insensitive UWP/USB file I/O.
-
-### Liverpool GPU, Mesa Dozen Bridge, & Shader Precompiler
-- `gpu/CMakeLists.txt` & `gpu/bbgpu.h`: `BB_UWP` build configuration for `bbgpu` static library and C ABI hooks (`bbgpu_uwp_active_precompile_diag`, `bbgpu_uwp_pending_retired_arena_bytes`).
-- `gpu/shim/bb_precompile.cpp` & `gpu/shim/bb_precompile.h`: Offline `.shaderbnd.dcx` (`BND4`/`DCX`) archive scanner, `boot-linked.bin`/DLC/mod shader extractor, SPIR-V validator, linked `(VS, PS)` + depth-only `VS` + `RectList`/`QuadList` PSO builder, `precompile_inflight.txt` / `precompile_quarantine_v2.txt` crash recovery, and UUID-validated portable/USB `.vkcache` sync.
-- `gpu/shim/{bbgpu.cpp,bbport_overlay.cpp}`: Renderer entrypoints, W^X `64 MiB` SRT walker executable arena (`VirtualProtectFromApp`), controller-driven `L3 + R3` overlay, and gamepad Hunter Name virtual keyboard.
-- `xbox/graphics/{present_bridge.cpp,swapchain.cpp,window.cpp,dense_buffers.cpp,descriptor_fallback.cpp}`: D3D12-to-Dozen shared texture swapchain (`frame_index == 0`), deferred `GetDenseArena` `VkBuffer` retirement + pending byte counter, and `maxPerSetDescriptors = 1024` clamping/fallback.
-- `gpu/shadps4/video_core/renderer_vulkan/{vk_instance.cpp,vk_draw_prep.h,vk_draw_prep.cpp,vk_pipeline_cache.cpp,vk_pipeline_serialization.cpp,vk_graphics_pipeline.cpp}`: Dozen `5,120 MiB` UMA + `VK_EXT_memory_budget` integration, gap-safe `DrawPreparation` queue + speculative fault recovery (`TryGetParams`), UUID-checked `driver.vkcache` loader, and memory-aware `FlushCaches()`.
-- `gpu/shadps4/video_core/{cache_storage.cpp,texture_cache/texture_cache.cpp,amdgpu/regs_shader.h}`: Single-`get_future()` async `DataBase::Flush()`, `AppMemoryUsage`-aware `TextureCache` GC + frame-boundary dense-arena retirement, and non-aborting `TrySearchBinaryInfo` / `TryGetParams`.
-- `gpu/shadps4/shader_recompiler/{frontend/control_flow_graph.cpp,frontend/structured_control_flow.cpp,backend/spirv/emit_spirv.cpp,backend/spirv/emit_spirv_context_get_set.cpp,backend/spirv/spirv_emit_context.cpp,ir/passes/flatten_extended_userdata_pass.cpp}`: DFS unreachable-CFG pruning, `GotoPass::MoveOutwardIf` fix + transform/recursion bounds, SPIR-V `Id{0}` / `PerVertex` / `F32[0]` / `OpReturn` fixes, and fault-safe W^X SRT walker signal recovery.
+- **Native CPU + HLE + GPU.** PS4 x86-64 ELF loader (`src/probe.c`) and HLE kernel/libc/thread/pad/
+  audio runtime (`src/runtime*.c`) compiled with `clang-cl` (`sysv_abi` bridge) beside the shadPS4
+  Liverpool GPU emulator (`gpu/shadps4/**`); Vulkan on Xbox through packaged Mesa Dozen
+  (`vulkan_dzn.dll`, `Cosmo/mesa_ai_slop_version` @ `a76cd3ca…`, MSVC 14.44 — never 19.51, which
+  ICEs), DXC `v1.9.2609` (`dxil.dll`), and a native D3D12 flip-model present bridge
+  (`xbox/graphics/present_bridge.cpp`).
+- **In-app native C++ dump preparation**, no Python on the console
+  (`xbox/platform/prepare_game.cpp`, `prepared-format.txt` = `2`), enforcing `APP_VER = 01.09`
+  whenever `patches/redzone.json` targets 01.09 offsets.
+- **One 5,120 MiB app-memory limit** for guest memory, images, buffers, Dozen/D3D12 heaps and the
+  pipeline cache — hence all of the eviction work in §4.
+- **Ahead-of-gameplay shader/pipeline precompilation** from `.shaderbnd.dcx` (BND4 + DCX) with
+  crash recovery via disk breadcrumbs (`gpu/shim/bb_precompile.cpp`).
+- **Complete console UX:** `Windows.Gaming.Input` gamepad + rumble, `L3 + R3` settings overlay,
+  virtual keyboard for Hunter Name, XAudio2, LibAtrac9/FFmpeg AvPlayer, dump discovery from
+  `D:\DevelopmentFiles\Bloodborne`, `LocalState\game` or USB.
+- **Strict UWP and legal:** zero `runFullTrust` / `broadFileSystemAccess`; every PE audited by
+  `xbox/scripts/check-imports.ps1` against `WindowsApp.lib`, the Store CRT or packaged DLLs; no Sony
+  binaries, keys or ISOs in Git; test signing uses the intentionally public
+  `xbox/signing/bloodborne_xbox-signing.pfx`.
 
 ---
 
-## 4. Changes made
+## 2. Where things stand right now
 
-1. **GitHub Actions Build & Strict UWP Packaging (`26303d9`..`5e37667`)**:
-   - Created `.github/workflows/xbox.yml` to compile Mesa Dozen (`vulkan_dzn.dll`) with MSVC `14.44`, bundle DXC `v1.9.2609` (`dxil.dll`), build `bloodborne.exe` via `clang-cl`, enforce AppContainer PE import rules (`xbox/scripts/check-imports.ps1`), sign `.appx` packages with `xbox/signing/bloodborne_xbox-signing.pfx`, and publish GitHub pre-releases on `[release]` commits.
-   - Replaced UWP-blocked file type associations (`.ini`, `.ttf`, `.otf`) in `xbox/AppxManifest.xml` with PS4 Bloodborne archive extensions (`.dcx`, `.bhd`, `.bdt`, `.bnd`, `.chrbnd`, `.partsbnd`, `.mapbnd`, `.shaderbnd`) and persisted USB folder permissions across restarts via `StorageApplicationPermissions::FutureAccessList`.
+| Item | Value |
+|---|---|
+| Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
+| HEAD | `03b74acfe1b8c0687ef425ab102455e7ba683ac2` — *fix(uwp): make BufferCache::ReleaseRetiredArenas callable from the rasterizer* |
+| `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
+| Last green CI | run `40432005224` — [actions/runs/40432005224](https://github.com/youdedend/Test-project/actions/runs/40432005224), both jobs green, all tests green |
+| Package built by it | `BloodborneXbox-1.0.26300.129` — 10,217,374 B, contains `BloodborneLauncher_1.0.26300.129_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
+| Version shown by that package | **`1.0.26300.129`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published releases | none from this work; latest pre-release is still `xbox-alpha-1.0.26300.0034` |
+| Tags / merge | none added, nothing merged, no PR opened for this work |
+| Console validation of this build | **none yet** |
+| Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
 
-2. **Native C++ PS4 Dump Preparer & `< 1 TiB` Guest Runtime (`2f694dc`..`05d2d04`)**:
-   - Implemented `xbox/platform/prepare_game.cpp` (`prepared-format.txt` = `2`) with `APP_VER = 01.09` enforcement whenever `patches/redzone.json` requires `01.09`, preventing mismatched red-zone/patch offsets on `01.00` base dumps.
-   - Restricted all guest-visible pointers, thread stacks (`low_stack`), TLS blocks, `AvPlayer` buffers, and GOT tables below `1 TiB` (`0x10000000000`), fixed `GuestMutex` size/offset (`+0x20`), switched `runtime_mutex.c` atomics to plain `size_t` `__atomic_*` builtins for `clang-cl`, and restricted sparse swap-out (`xbox/platform/guest_swap.inc`) strictly to `WC_GARLIC` pools while pinning any page touched by CPU faults (`corrupt=0`).
-
-3. **Xbox Series S|X `5,120 MiB` UMA, Swapchain, & Dense-Arena Management (`19a8772`, `7197c87`, `9b74bb3`)**:
-   - Overrode Dozen's default `1,280 MiB` Series S heap cap to expose the `5,120 MiB` Game Mode budget via `VK_EXT_memory_budget`, matched `NUM_DMA_BUFFERS = BufferCache::DmaViewCount = 176`, and pinned `Swapchain::frame_index = 0` for the single-image D3D12 `PresentBridge`.
-   - Deferred superseded `BufferCache::GetDenseArena` `VkBuffer` destruction via `scheduler.DeferOperation`, added `g_uwp_pending_retired_arena_bytes` tracking (`xbox/graphics/dense_buffers.cpp`), called `scheduler.PopPendingOperations()` before allocating replacement arenas, and triggered `scheduler.Finish(); scheduler.PopPendingOperations();` at frame boundaries inside `TextureCache::RunGarbageCollector()` whenever pending retired arenas reach `64 MiB` or `AppMemoryUsage` exceeds pressure thresholds.
-   - Changed `xbox/CMakeLists.txt` linker flags from `/STACK:16777216,16777216` to `/STACK:8388608,65536` (`8 MiB` reserve, `64 KiB` initial commit) plus `/Oy-`, reclaiming **`~1.25 GiB` of eagerly committed physical RAM** across Bloodborne's ~82 live OS threads.
-
-4. **Offline `.shaderbnd.dcx` Precompiler & SPIR-V / CFG / SCF Compiler Fixes (`360f2ff`..`9b74bb3`)**:
-   - Built `gpu/shim/bb_precompile.cpp` to extract and precompile linked `(VS, PS)`, depth-only `VS` (`ZFormat::Z32Float`, `rasterizationSamples = e1`), and `RectList`/`QuadList` pipelines from all game/DLC/mod `.shaderbnd.dcx` archives and `boot-linked.bin`, writing `LocalState\precompile_inflight.txt` before each compile and quarantining fatal shaders across restarts (`precompile_quarantine_v2.txt`).
-   - Fixed `Storage::DataBase::Flush()` double `fence.get_future()` crash (`cache_storage.cpp`), moved the SRT walker JIT into a `64 MiB` W^X arena (`VirtualProtectFromApp` `RW <-> RX`) with AV address verification, capped `MapVsOutputsSafe` to `0..3`, guarded `PerVertex`/`F32[0]`/`BaryCoord*`/`PrimitiveId` `Id{0}` SPIR-V emission paths, replaced single-pass `CFG::RemoveUnreachableBlocks()` with DFS reachability + `num_predecessors` recomputation, and emitted `OpReturn` instead of `OpUnreachable` on `BB_UWP` for Mesa Dozen's `nir_to_dxil` backend.
-   - Fixed `GotoPass::MoveOutwardIf` (`structured_control_flow.cpp`) by removing the buggy `if_body.pop_front()` after `if_body.splice(if_body.begin(), body, std::next(goto_stmt), body.end())` (which corrupted the intrusive list sentinel on shader `i = 1024` / `begin=0x27c`), guarding empty `if_body` `If` creation, and bounding `GotoPass` transforms (`65,536`) and `Visit`/`VisitExpr` recursion depth (`512`).
-
-5. **`DrawPreparation` Gap Safety & `VkPipelineCache` Serialization Hardening (`9b74bb3`, `a3d39fd`)**:
-   - Fixed the Yharnam `bb:DrawScan` crash (`bloodborne.exe+0x270628`) in `vk_draw_prep.cpp`: replaced raw `submissions[seq - front]` array indexing with binary-searched `FindSubmissionLocked()` and `HasContiguousRangeLocked()`, rebased `tail_regs` / `tail_seq` / `tail_checksum` whenever a memory-pressure-skipped `Build()` leaves a sequence gap, raised the `Build()` skip watermark to `used + 256_MB >= limit` (`4,864 MiB`), and wrapped speculative `RefreshGraphicsStages` (`sel.worker != nullptr`) in `runtime_fault_recover` + `std::optional<Shader::ShaderParams>` / `AmdGpu::TryGetParams()`.
-   - Validated `VkPipelineCacheHeaderVersionOne` (`vendorID`, `deviceID`, `pipelineCacheUUID`) on `driver.vkcache` load and portable/USB sync (`512 MiB` cap), freed `driver_cache_data` immediately after `vkCreatePipelineCache`, raised runtime `FlushCaches()` cadence from `32` to `128` new PSOs, skipped transient `174 MiB` `getPipelineCacheData()` dumps during high-memory live gameplay (`!driver_cache_dirty && used + 768_MB >= limit`), and compacted the process heap after cache writes.
+Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
+errors were caught and fixed that way (§7). No local GPU build is possible in the agent sandbox (see
+§8), and no compiler warnings from the changed files have been read (the workflow does not annotate
+warnings and the log endpoints are unreachable from the sandbox).
 
 ---
 
-## 5. Failed attempts
+## 3. Code map (the files that matter)
 
-Do **not** reintroduce any of the following approaches:
+**Build / CI / packaging**
+- `.github/workflows/xbox.yml` — two jobs. `dozen` builds `vulkan_dzn.dll` (MSVC 14.44, cached);
+  `xbox` fetches DXC + third-party deps, builds `bloodborne.exe` with clang-cl, runs the six unit
+  suites, audits imports, packs and signs the `.appx`, uploads artifacts, and publishes a
+  pre-release **only** when `[release]` is in the head commit message or a `workflow_dispatch` run
+  asks for it (`release` defaults to `true`, so dispatch with `-f release=false` to build only).
+- `xbox/CMakeLists.txt` — UWP target (`WindowsStore`, `10.0.22621.0`, `/APPCONTAINER`,
+  `/HIGHENTROPYVA:NO`, `/Oy-`, `/STACK:8388608,65536`).
+- `xbox/AppxManifest.xml`, `xbox/prepared-format.txt` (format `2`), `xbox/signing/*`.
+- `xbox/scripts/{fetch-deps.py,boost-headers.py,build-deps.ps1,build.ps1,check-imports.ps1,package.ps1,assets.ps1,symbolicate.py,crash-rvas.txt}`.
 
-1. **Linking with `/STACK:16777216,16777216` (`xbox/CMakeLists.txt`)**:
-   - Setting `SizeOfStackCommit = 16 MiB` in the PE header forces Windows `CreateThread` / `_beginthreadex` to commit `16 MiB` of physical RAM per OS thread (`82 × 16 MiB ≈ 1,312 MiB`), overriding `pthread_attr_setstacksize` and starving the `5,120 MiB` Series S budget. Keep `/STACK:8388608,65536`.
-2. **Returning `{}` from `DrawPreparation::Build()` without gap-aware lookup/rebase (`vk_draw_prep.cpp`)**:
-   - `Liverpool::SubmitGfx()` unconditionally increments `gfx_submit_seq++`. Any skipped `Build()` creates non-contiguous `seq` numbers in `submissions`, causing `submissions[next_seq - submissions.front()->seq]` in `ScannerLoop`/`WorkerLoop`/`BeginSubmission` to index out of bounds (`bloodborne.exe+0x270628`) and desynchronizing `tail_regs` deltas.
-3. **Unguarded speculative guest-shader reads on `bb:DrawPrep0` (`vk_pipeline_cache.cpp` / `regs_shader.h`)**:
-   - Calling `AmdGpu::GetParams(*pgm)` when `sel.worker != nullptr` dereferences guest shader memory without `runtime_fault_recover` and aborts via `UNREACHABLE_MSG` if the guest reused that page ahead of the GPU thread. Always use `runtime_fault_recover` + `AmdGpu::TryGetParams(*pgm)`.
-4. **Default-constructing `Shader::ShaderParams params{}` or block-scope `extern "C"`**:
-   - `Shader::ShaderParams::user_data` is `std::span<const u32, NumShaderUserData>` (fixed extent != `std::dynamic_extent`), which has no default constructor in C++20/23 (`clang-cl` error); always wrap deferred initialization in `std::optional<Shader::ShaderParams>`. Likewise, `clang-cl` rejects `extern "C"` declarations inside function bodies (`[dcl.link]/4`); keep them at namespace scope.
-5. **Calling `scheduler.Finish()` inside `BufferCache::GetDenseArena()` (`xbox/graphics/dense_buffers.cpp`)**:
-   - `GetDenseArena` runs inside `ObtainBuffer` -> `ResolveVertexBuffers` *after* `BeginRendering`. Calling `scheduler.Finish()` there splits and submits an active render pass mid-draw. Only call `scheduler.PopPendingOperations()` inside `GetDenseArena`, and run `scheduler.Finish(); scheduler.PopPendingOperations();` at frame boundaries inside `TextureCache::RunGarbageCollector()`.
-6. **Serializing `getPipelineCacheData(*pipeline_cache)` every 32 runtime PSOs or when `num_flushed_pipelines == 0`**:
-   - Allocates a temporary `~174 MiB` `std::vector<u8>` and queues a `174 MiB` SSD write mid-gameplay, pushing `AppMemoryUsage` across thresholds.
-7. **Syncing `.vkcache` solely by file size (`src_size > dst_size`)**:
-   - Overwrites valid local caches across Mesa Dozen rebuilds or skips valid exports when `pipelineCacheUUID` changes; always validate the 32-byte `VkPipelineCacheHeaderVersionOne` + `pipelineCacheUUID`.
-8. **Keeping `if_body.pop_front()` in `GotoPass::MoveOutwardIf` or emitting `OpUnreachable` on `BB_UWP`**:
-   - `if_body.splice(if_body.begin(), body, std::next(goto_stmt), body.end())` already excludes `goto_stmt`; calling `if_body.pop_front()` unlinks the empty `boost::intrusive::list` sentinel when `std::next(goto_stmt) == body.end()` (crashing shader `i = 1024`) and drops statements otherwise. Also emit `OpReturn` instead of `OpUnreachable` on `BB_UWP` because Mesa Dozen's `nir_to_dxil.c` (`emit_jump`) only handles `break`/`continue`.
-9. **Single-pass `num_predecessors == 0` erasure in `CFG::RemoveUnreachableBlocks()`**:
-   - Leaves unreachable loops/diamonds intact (`num_predecessors >= 1`), crashing Mesa's `vtn_cfg.c`. Always compute DFS reachability from the entry block and recompute `num_predecessors` over reachable edges only.
-10. **Offline Dozen `GraphicsPipeline` pitfalls (`bb_precompile.cpp`)**:
-    - Never compile color-pass `VS` standalone at `binding = 0` (`dzn_pipeline.c` `adjust_var_bindings` asserts `b < binding_count`); never leave depth-only `z_format` as `0` (`ZFormat::Invalid` skips shader compilation—use `ZFormat::Z32Float`); force `rasterizationSamples = e1` when `preloading == true`; cap VS attributes to `<= 28` (`semantic < 32`); ensure passthrough VS writes `gl_Position`; and cap `rt.hw.vs.num_outputs` to `0..3`.
-11. **Relying on VEH / `signal(SIGABRT)` for static UCRT `abort()` or using `bb_longjmp` across C++ frames**:
-    - Static `libucrt.lib` `abort()` executes `__fastfail` (`int 0x29`), bypassing Win32 VEH handlers. Crash-resilient precompilation must flush `LocalState\precompile_inflight.txt` before compiling and consume it on startup.
-12. **Swapping `ONION`/`guest_code` memory, calling `TextureCache` GC inside VMA `createImage`, or committing after container refresh without checking `HEAD`**:
-    - Restrict swap strictly to `WC_GARLIC` with fault-time guest pinning; run `TextureCache` GC only at frame boundaries outside `TextureCache::mutex`/VMA callbacks; build Mesa Dozen with MSVC `14.44` (never `19.51`, which ICEs on Mesa); never use `gh release download` in sandbox (`release-assets.githubusercontent.com` is outside the proxy allowlist); and after any container refresh, verify `git log -n 2` against `origin/arena/c39edde2-test-project` (`git fetch` + `git reset --soft origin/arena/c39edde2-test-project && git reset`) before committing.
+**Platform / launcher / memory / HLE**
+- `xbox/platform/main.cpp` — UWP lifecycle, launcher UI, `FutureAccessList` USB tokens,
+  `bbport.ini` preset sync, last-chance crash breadcrumbs, `STOP:` dialog.
+- `xbox/platform/prepare_game.{cpp,h}` — SELF/ELF unpacker, PRX linker, red-zone/`sysv_abi` patcher,
+  `Bloodborne.xml` patch applier, 01.09 gate, split-dump detection.
+- `xbox/platform/guest_memory.inc`, `guest_swap.inc` — sub-1 TiB reservation, 4 KiB GPU
+  write-tracking, `WC_GARLIC`-only sparse swap (`LocalState\garlic_swap.bin`).
+- `xbox/platform/{input.cpp,audio.cpp,runtime_compat.c,desktop_shims.cpp}`, `src/probe.c`,
+  `src/runtime_*.c`.
+
+**GPU**
+- `gpu/shadps4/video_core/texture_cache/` — `texture_cache.{h,cpp}` (collector, free trace,
+  dead-image report), **new** `texture_cache_policy.h` (pin rules).
+- `gpu/shadps4/video_core/renderer_vulkan/` — `vk_rasterizer.{h,cpp}` (binding walk, held ids,
+  `OnSubmit`), `vk_temporal_upscaler.{h,cpp}` (upscaler + FSR/DLSS + frame gen), `vk_camera_motion.*`,
+  `vk_instance.cpp` (5,120 MiB UMA + `VK_EXT_memory_budget`), `vk_draw_prep.*`, `vk_pipeline_cache.cpp`,
+  `vk_pipeline_serialization.cpp`, `vk_graphics_pipeline.cpp`.
+- `gpu/shadps4/video_core/{cache_storage.cpp,amdgpu/regs_shader.h}`,
+  `gpu/shadps4/shader_recompiler/**` (CFG/SCF/SPIR-V fixes), `gpu/shim/bb_precompile.cpp`.
+- `xbox/graphics/{present_bridge.cpp,swapchain.cpp,window.cpp,dense_buffers.cpp,descriptor_fallback.cpp}`.
+
+**Tests**
+- `xbox/tests/` — `sfo_version`, `overlay_index`, `ini_file`, `dense_arena_lifetime`,
+  **new** `texture_cache_policy`, `dump_layout` (links the real `prepare_game.cpp`).
+- `uwp/tests/test_uwp_port_core.cpp` — host C++20 suite for UWP platform/input/storage/D3D12 caches.
+- `tests/` — desktop regression suites (Python + `test_content.c`).
+
+---
+
+## 4. Work log — everything done on this port, in order
+
+Each round: what was wrong → what was changed → how it was verified.
+
+### 4.1 CI, strict UWP packaging, console launcher (`26303d9`..`5e37667`)
+Built `.github/workflows/xbox.yml`: Dozen (MSVC 14.44), DXC fetch, clang-cl build, AppContainer PE
+import audit, `.appx` sign/pack, `[release]`-gated pre-releases. Replaced UWP-blocked file type
+associations in the manifest with PS4 archive extensions (`.dcx`, `.bhd`, `.bdt`, `.bnd`, …) and
+persisted USB folder permissions via `FutureAccessList`.
+
+### 4.2 Native C++ dump preparer and sub-1 TiB guest runtime (`2f694dc`..`05d2d04`)
+`prepare_game.cpp` (format 2) with `APP_VER = 01.09` enforcement; every guest pointer, thread stack,
+TLS block, GOT entry and AvPlayer buffer kept below `1 TiB`; `GuestMutex` layout fixed; `clang-cl`
+atomics; swap restricted to `WC_GARLIC` with fault-time pinning (`corrupt=0`).
+
+### 4.3 5,120 MiB UMA, swapchain, dense arenas, stack flags (`19a8772`, `7197c87`, `9b74bb3`)
+Dozen's 1,280 MiB Series S cap overridden to expose the 5,120 MiB Game Mode budget; `NUM_DMA_BUFFERS
+= DmaViewCount = 176`; `Swapchain::frame_index = 0` for the single-image bridge; superseded dense
+`VkBuffer`s retired through `scheduler.DeferOperation` with a pending-bytes counter; `/STACK` changed
+from 16 MiB commit to `8 MiB reserve / 64 KiB commit`, reclaiming ~1.25 GiB of eagerly committed RAM
+across ~82 OS threads.
+
+### 4.4 Shader precompilation and compiler fixes (`360f2ff`..`9b74bb3`)
+Offline `.shaderbnd.dcx` scanner + PSO builder with `precompile_inflight.txt` /
+`precompile_quarantine_v2.txt` crash recovery; UUID-validated `driver.vkcache`; fixed the
+`get_future()` double-wait, W^X SRT walker arena, `Id{0}`/`PerVertex`/`F32[0]` emission, DFS
+reachability in `RemoveUnreachableBlocks`, `OpReturn` instead of `OpUnreachable` on `BB_UWP`, and the
+`GotoPass::MoveOutwardIf` sentinel corruption (shader `i = 1024`).
+
+### 4.5 Post-character-creation crash — round 1 (AvPlayer) and round 2 (texture cache)
+**Round 1** (`xbox-alpha-1.0.26299.2359` logs): community reports and logs pointed at the audio/
+cutscene path; fixed in `gpu/shadps4/core/libraries/avplayer/` (frame-buffer allocation assert).
+
+**Round 2** (`xbox-alpha-1.0.26300.34` logs) — the live blocker:
+
+```
+Texture cache: memory pressure, 4493 of 4352 MiB (critical 4672): 1 images evicted
+slot_vector.h:225 ValidateIndex: Assertion Failed!
+SlotVector invalid or freed slot index=132 capacity=2978
+STOP: GPU library assertion failed
+```
+
+Two independent defects, both from `Common::SlotId` being a bare `u32` index with **no generation**:
+
+1. **The collector freed images that were still held.** `GarbageCollectImages`' `clean_up` decided on
+   `SafeToDownload()` / `IsTiled()` / LRU age alone and never asked whether the image was in use,
+   while `ReclaimMemoryFor` had always skipped `scene_proxy`, `usage.vo_surface`, `binding.is_bound`
+   and `binding.is_target`. Under pressure a bound render target or the video-out surface the
+   presenter reads could be evicted, and the rasterizer/presenter/upscaler then indexed the freed slot.
+2. **Every stored `ImageId` was re-read with `GetImage()`**, which asserts on a dead slot and
+   silently aliases a reused one. Holders: the upscaler (`scene_color`, `ldr_target`, `ui_color`,
+   `ui_depth`), `CameraMotion::depth_id`, `Rasterizer::bound_images`.
+
+Fixes now in the tree:
+
+- **Pin policy** in the new `texture_cache_policy.h` (`BbGpu::ImagePinState`, `ImagePinned`,
+  `GcMayFreeImage`), applied by `clean_up`; pinned candidates cost no deletion and get their LRU entry
+  touched, so a run of unevictable images cannot stall or exhaust the bounded scan.
+- **Ids the draw already resolved but has not bound yet** are held: `Rasterizer::CollectImage()` at
+  all five collection sites → `TextureCache::HoldCollectedImage`, cleared in `ResetBindings`; both
+  reclaim paths skip them (`ImagePinState::collected`, `IsImageCollected`).
+- **uid-paired stored ids**: `Track(slot, uid, id)` / `Lookup(slot, uid)` / `LookupLive(id)` in the
+  upscaler, `TryGetImage(id, uid)` everywhere; the member is cleared and the work skipped on a null.
+  `Rasterizer::ResetBindings` only clears `binding` for live images; scene-colour detection is
+  gated on both images being alive. `TryGetImageTouched(id, uid)` is the public resolve-plus-LRU-touch
+  used by the upscaler and camera motion.
+- `slot_vector.h` was **not** modified, by instruction: the assertion still stops the GPU, it is only
+  preceded by a diagnostic now.
+
+### 4.6 Conservative UWP memory handling ported from GoW3 (same console family)
+1. **Marks** (`texture_cache.cpp` ~1183): `trigger = limit − 1280 MiB`, `pressure = limit − 1024 MiB`,
+   `critical = limit − 768 MiB` (was −1152 / −768 / −448). On a 5,120 MiB limit that is 3840 / 4096 /
+   4352 instead of 3968 / 4352 / 4672 — the pressure line the user watches now shows ≈4096/4352.
+2. **`BB_GC_DROP_OLD` defaults off on UWP too** (opt in with `=1`): GoW3 has no tiled-drop path, and a
+   dropped target costs a reload that competes for the same limit.
+3. **Eviction path** (`clean_up`): a single `keep()` exit for every non-freed candidate — pinned, old
+   GPU-written tiled, or below the pressure mark — which touches the LRU entry. The readback resolve
+   before the free is `DownloadImageMemory(image_id, /*sync=*/true)`.
+4. **`InsertImage` = MakeRoomForImage**: three rounds over unused periods 16 s → 4 s → 2 s
+   (64 / 256 / 1024 MiB wants), then `scheduler.Finish()` + `scheduler.PopPendingOperations()` and one
+   final round before the `UNREACHABLE_MSG`; the `Finish()` path is last-resort only and logs when it
+   fires. `ReclaimMemoryFor` keeps its signature; the age gate moved to private
+   `ReclaimMemoryForUnused(addr, size, bytes, unused_seconds)`.
+5. **`Rasterizer::OnSubmit()`** calls `buffer_cache.ReleaseRetiredArenas()` under `BB_UWP`, before the
+   collector reads app memory. It had never been called — retired dense arenas were never given back.
+6. **Stored ids** as in §4.5.
+
+Fence review of (5): `DenseArenaLifetime::CanRelease` requires the 64-tick grace window, the retire
+tick to be signalled (`Scheduler::IsFree` on the timeline value the GPU reached) and `Inflight() == 0`;
+`OnSubmit` runs after `DrainDrawPipe()` and the guest submission. Added: an arena still referenced by
+any `dense_views` entry (a raw `VkBuffer` handed to descriptor sets) is never erased — release is
+deferred and logged.
+
+### 4.7 Diagnostics that ship (BB_UWP), cheap enough for release
+- `Texture cache: free id=… uid=… by=<eviction|unmap|make-room|other> guest=… size=… bound=… target=…
+  proxy=… vo=… tiled=… gpu_modified=… deferred=…` — one line per free, printed from `DeleteImage`,
+  the single choke point every free passes through.
+- `Texture cache: erase id=… (freed by=…)` — the deferred half, when the slot really dies.
+- `Texture cache: DEAD IMAGE id=… indexed by GetImage|GetImageView at file:line (function)` followed by
+  `last N frees (oldest first): id(uid,reason) …` — printed when a freed id is indexed, *before* the
+  unmodified `slot_vector.h` assertion. `GetImage`/`GetImageView` take a defaulted
+  `std::source_location`, so the tag is the real call site with zero changes at the callers.
+- `pinned` added to the 5-second pressure line; `GPU: video memory full: three rounds freed … finishing
+  the GPU …` when the last-resort path fires.
+
+### 4.8 Test added for the policy
+`xbox/tests/texture_cache_policy_test.cpp` — 26 checks, plain C++20, no Vulkan: each pin flag holds an
+image, a pinned image costs no deletion, the drawn-but-unbound `collected` case, uid ownership vs
+slot reuse vs freed slot. Wired into `xbox.yml`'s test list so it runs on every build.
 
 ---
 
-## 6. Next steps
+## 5. Build, CI and artifacts
 
-> **Superseded.** Steps 1–2 below describe Hardware Test #11 (`xbox-alpha-1.0.26299.1047`), which ran
-> and crashed on a `01.00` dump. The live plan is the "Hardware Test #12" section (eight fixes plus
-> its own acceptance list) and the "Update / Patch Handling" section (split-dump support); the merge
-> gate is the `Still blocking the merge` list at the end of this document. Kept for the evidence trail.
+**Toolchain the workflow uses:** windows-2022 runner, MSVC 14.44 for Dozen, clang-cl (LLVM shipped
+with VS) for `bloodborne.exe`, DXC 1.9.2609, MSYS2 for third-party deps, `MakeAppx` + `SignTool` for
+packaging.
 
-1. **Run Hardware Test #11 with `xbox-alpha-1.0.26299.1047`** (done — crashed; see above):
-   - Download `BloodborneXbox-1.0.26299.1047.zip` from `https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26299.1047` and update `BloodborneLauncher_1.0.26299.1047_x64.appx` via Xbox Device Portal (preserving existing `LocalState` prepared image, `SPRJ0005` save, and `173.7 MiB` `driver.vkcache`).
-2. **Verify Post-Fix Telemetry in `loader.log` / `errors.log` / `dozen.log`**:
-   - Confirm `presents=0` startup `AppMemoryUsage` drops by `~450–500 MiB` and Central Yharnam (`map/m24`) 3D gameplay `AppMemoryUsage` drops from `4,356–4,583 MiB` down into the **`~3,000–3,350 MiB`** range (`~1.25 GiB` reclaimed from `/STACK:8388608,65536`).
-   - Confirm shader `i = 1024` (`begin=0x27c`) compiles cleanly with zero entries in `precompile_quarantine_v2.txt`.
-   - Confirm sustained Central Yharnam gameplay, combat, lamp warp to Hunter's Dream, and zone transitions run cleanly past `presents > 10,000` with zero `bb:DrawScan` faults and `corrupt=0`.
-3. **Address Any Extended-Play Edge Cases (If Observed in Test #11 Logs)**:
-   - Inspect `Thread sample` RVAs (`/Oy-` frame pointers are now enabled in `bloodborne.exe` for multi-frame stack unwinding) and `dozen.log` if any rare runtime shader specialization, cutscene (`AvPlayer`), or boss-arena particle effect exhibits a fault or stutter.
-   - If even more Series S RAM headroom is desired for 60 FPS / higher-res modes, `bda_pagetable_buffer` (`128 MiB` in `vk_instance.cpp`) can be lazily committed or sized to active BDA range.
-4. **Finalize & Merge PR #10 (`arena/c39edde2-test-project` -> `main`)** — **gated on Test #12, not Test #11**:
-   - Do **not** merge on the strength of a Test #11 result. The current gate is a Series S run with a **split `01.09` dump** that reaches `presents > 10,000` in Yharnam with `effective=01.09; patches=required` and zero faults at `+0x3003f0` / `+0x26bbb7` / `+0x27222e` / `+0x272f1c` (see `Still blocking the merge`).
-   - Only then merge PR `#10` (`https://github.com/youdedend/Test-project/pull/10`) into `main` using `gh pr merge 10 --merge`.
+**Windows build chain (run in this order):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\xbox\scripts\build-deps.ps1 -Python <python>   # ffmpeg (msvc/clang-cl/lld-link), winpthreads, boost headers
+powershell -ExecutionPolicy Bypass -File .\xbox\scripts\build.ps1                          # cmake -S xbox -B xbox\.local\build -G Ninja, clang-cl, RelWithDebInfo -> layout
+powershell -ExecutionPolicy Bypass -File .\xbox\scripts\package.ps1                        # BloodborneXbox-<version>.zip
+powershell -ExecutionPolicy Bypass -File .\uwp\build.ps1 -Configuration Release -UseClangCL # MSBuild UWP path -> uwp\AppPackages\*.msix
+```
+
+**Version string:** `package.ps1` derives `1.0.{YY%100*1000 + dayOfYear}.{HHmm}`, writes it into
+`AppxManifest.xml`, the `.appx` name and the zip name. It is **not** printed by `loader.log` (whose
+first line is `Bloodborne Xbox Series X|S UWP loader started`); confirm it in the app list /
+"Manage app" / the `.appx` filename.
+
+**Workflow triggers:** `push` on `arena/**` and `main`, plus `workflow_dispatch`. A pre-release is
+published only when the head commit message contains `[release]` or a dispatch passes `release=true`.
+
+**Last three runs of this work:**
+
+| Run | Result | Note |
+|---|---|---|
+| [40431164960](https://github.com/youdedend/Test-project/actions/runs/40431164960) | failed | `'TouchImage' is a private member of 'VideoCore::TextureCache'` |
+| [40431551643](https://github.com/youdedend/Test-project/actions/runs/40431551643) | failed | `'ReleaseRetiredArenas' is a private member of 'VideoCore::BufferCache'` |
+| **[40432005224](https://github.com/youdedend/Test-project/actions/runs/40432005224)** | **green** | build + all unit tests + package; release step skipped |
+
+Artifacts of the green run: `BloodborneXbox-1.0.26300.129` (10,217,374 B), `bloodborne-map-03b74ac…`
+(1,436,472 B), `dozen-uwp` (1,691,571 B). Download with `gh run download 40432005224` or from the run
+page.
 
 ---
+
+## 6. Tests — how to run everything by hand
+
+Portable suites (Linux/macOS/g++ or clang++), each from the repo root:
+
+```bash
+g++ -std=c++20 -O1 -Wall -Wextra -Werror -I xbox/platform   -o /tmp/sfo     xbox/tests/sfo_version_test.cpp
+g++ -std=c++20 -O1 -Wall -Wextra -Werror -I xbox/platform   -o /tmp/ovl     xbox/tests/overlay_index_test.cpp
+g++ -std=c++20 -O1 -Wall -Wextra -Werror -I xbox/platform   -o /tmp/ini     xbox/tests/ini_file_test.cpp
+g++ -std=c++20 -O1 -Wall -Wextra -Werror -I xbox/graphics   -o /tmp/arena   xbox/tests/dense_arena_lifetime_test.cpp
+g++ -std=c++20 -O1 -Wall -Wextra -Werror -I gpu/shadps4/video_core/texture_cache \
+                                                             -o /tmp/policy  xbox/tests/texture_cache_policy_test.cpp
+g++ -std=c++20 -O1 -I xbox/platform -o /tmp/dump xbox/tests/dump_layout_test.cpp xbox/platform/prepare_game.cpp
+# then run each binary. Current counts: 25, 33, 42, 16, 26, 92 = 234 checks, all pass.
+```
+
+`uwp/tests` needs its platform/renderer translation units (the old single-TU command in the appendix
+no longer links):
+
+```bash
+g++ -std=c++20 -O2 -Wall -Wextra -Werror -I. uwp/tests/test_uwp_port_core.cpp \
+    uwp/renderer/d3d12/{D3D12DescriptorManager,D3D12RenderPassCache,SpirvToDxilCompiler}.cpp \
+    uwp/BBPort.UWP/Platform/{LifecycleManager,StorageLayer,GamepadInput,XAudio2Sink,UwpFileLoader}.cpp \
+    uwp/input/DirectInputShim.cpp -o /tmp/uwp_core && /tmp/uwp_core
+# PASS: all BBPort.UWP core platform, input, storage, SFO/ELF, and D3D12 cache tests succeeded.
+
+gcc -std=gnu11 -D_GNU_SOURCE -Wall -Wextra -Isrc tests/test_content.c src/runtime_content.c -o /tmp/tc && /tmp/tc
+# PASS: AppContent lifecycle, profile and output boundaries
+```
+
+CI runs the six `xbox/tests` suites with clang-cl (`/W3`), then builds and packs.
+
+---
+
+## 7. Compile errors found by CI (and how they were fixed properly)
+
+1. `vk_camera_motion.cpp(347,19)`: `'TouchImage' is a private member of 'VideoCore::TextureCache'`.
+   Fixed by adding public `TextureCache::TryGetImageTouched(id, uid)` next to `TryGetImage` — the
+   resolve *plus* the LRU touch `GetImage` used to do — and routing the upscaler's `Lookup`/
+   `LookupLive` and camera motion's `Overlay` through it.
+2. `vk_rasterizer.cpp(1435,18)`: `'ReleaseRetiredArenas' is a private member of
+   'VideoCore::BufferCache'`. Fixed by moving that declaration (still `#ifdef BB_UWP`) out of the
+   private section, next to `SubmitPendingArenaBinds`.
+
+No assertion was weakened, no diagnostic removed, no feature disabled to get green.
+
+---
+
+## 8. What cannot be done from the agent sandbox (and why)
+
+- **No Windows/UWP build.** Linux only: no `clang-cl`/`cl`/`MSBuild`/`vswhere`, no Windows SDK
+  (`windows.h`, `d3d12.h`, `appmodel.h`), no `xbox/.local/deps` (winpthreads, MSVC-target ffmpeg,
+  Mesa/Dozen DLLs, DXC), no `xbox/.local/settings.json`, no `makeappx`. CMake 4.4.4 + Ninja 1.13.2
+  *can* be installed from PyPI, but the configure stops at
+  `CMakeLists.txt:2 (project): The CMAKE_C_COMPILER clang-cl ... was not found in the PATH`.
+  `xbox/scripts/build-deps.ps1` builds ffmpeg with `--toolchain=msvc --cc=clang-cl --ld=lld-link`,
+  which cannot run on Linux. Every GPU compile therefore happens in CI only.
+- **No logs or artifacts can be downloaded here.** GitHub redirects job logs and artifacts to
+  `*.blob.core.windows.net`, which is outside the sandbox's allowlist: `gh run view --log`,
+  `gh api .../jobs/<id>/logs` and `gh run download` all end in `EOF`. Consequence: **compiler warnings
+  in the changed files have never been read.** They are on the run page under "Build Bloodborne Xbox
+  UWP" (`warning:`); paste them and they can be fixed in a follow-up.
+- **No console run.** Obviously; that is what §9 is for.
+
+---
+
+## 9. Hardware test plan (Series S / X, Developer Mode) — for `1.0.26300.129`
+
+1. Dev Mode → Device Portal → **Add**, pick `BloodborneLauncher_1.0.26300.129_x64.appx` plus the
+   `Dependencies/Microsoft.VCLibs.x64.14.00.appx` from the zip. Saves and settings are preserved.
+2. Confirm **`1.0.26300.129`** in the app list / "Manage app".
+3. Run the same flow that crashed: character creation → tutorial street → Central Yharnam lamp →
+   **multiple** area transitions and Hunter's Dream round trips, 10+ minutes. The Dream/area loads are
+   where memory peaked before. Note: pressure cannot be forced on console (`BB_GC_BUDGET_MB` is
+   `std::getenv`-only and a packaged app cannot set it), so the extra headroom may simply delay the
+   collector — a short clean session does not prove anything.
+
+What to look for:
+
+| Log line (grep) | Meaning |
+|---|---|
+| `Texture cache: memory pressure, … , N pinned` | collector ran; `critical` should now be limit − 768 MiB (≈4352), `pressure` limit − 1024 MiB (≈4096); `pinned` non-zero is expected under load |
+| `Texture cache: free … by=eviction\|make-room\|unmap` | who freed an image — the line before a failure names the culprit |
+| `Texture cache: erase id=… (freed by=…)` | the slot actually died |
+| `Texture cache: DEAD IMAGE id=… indexed by … at file:line` + `last N frees` | the stale id, its call site, and the frees that preceded it |
+| `GPU: video memory full: three rounds freed … finishing the GPU` | last-resort path fired (should never appear) |
+| `UWP dense GPU arena: … released` / `… still has a DMA view, release deferred` | arena release runs / the new guard is holding one |
+
+`errors.log` must **not** contain `slot_vector.h:225`, `ValidateIndex`, `SlotVector invalid or freed
+slot index`, `STOP: GPU library assertion failed`, `ErrorOutOfDeviceMemory`, `Failed allocating image`,
+`avplayer_source.h:48`, or any device-lost error.
+
+If it fails, send: full `loader.log` + `errors.log` (plus the previous run's copies), how long after
+load, the scene, whether `DEAD IMAGE` appeared and the 20 ids printed after it, the pressure lines
+before the stop, and whether it reproduces with the upscaler off.
+
+**The crash is not fixed until this run passes.** A clean run is encouraging, not proof.
+
+---
+
+## 10. Decision and constraint log
+
+- `slot_vector.h`'s assertion is **never** modified; the fix is around it, and diagnostics print before it.
+- `third_party/` is not modified.
+- Non-UWP behaviour stays as it was unless a change is needed for correctness; UWP-only behaviour is
+  under `#ifdef BB_UWP`.
+- Public API changes are called out and justified: `TryGetImageTouched`, `HoldCollectedImage` /
+  `ClearCollectedImages` / `IsImageCollected`, `TryGetImage`/`IsImageAlive` reuse, `reason` parameters
+  on `DeleteImage`/`EraseImage`/`FreeImage`, `ReleaseRetiredArenas` moved to public.
+- No push to `main`, no merge, no release, no tag for this work. `[release]` is only placed in a
+  commit message when a package is actually meant to be published.
+- The branch name is fixed by the platform (`arena/8ac58bdb-test-project`); it matches the workflow's
+  `arena/**` trigger, so pushes build automatically.
+- Do not reintroduce anything listed in §11.
+- Never claim the crash is fixed without a console run.
+
+---
+
+## 11. Failed attempts — do not reintroduce
+
+Carried forward in full in the appendix ("Failed attempts"): `/STACK:16777216,16777216`;
+`DrawPreparation::Build()` returning `{}` without gap-aware lookup; unguarded speculative guest-shader
+reads; default-constructed `Shader::ShaderParams`; `scheduler.Finish()` inside `GetDenseArena`;
+serializing `getPipelineCacheData()` every 32 PSOs; `.vkcache` sync by file size;
+`if_body.pop_front()` in `GotoPass::MoveOutwardIf` / `OpUnreachable` on `BB_UWP`; single-pass
+`num_predecessors == 0` erasure; the offline Dozen pipeline pitfalls; relying on VEH for static
+`abort()`; swapping non-`WC_GARLIC` memory or running the texture-cache GC inside VMA callbacks. Add
+to that list from this round: comparing a `std::list<Buffer>::iterator` with a `const Buffer*`
+(`&*it` instead), and calling `TouchImage` / `ReleaseRetiredArenas` from outside their classes before
+making them public.
+
+---
+
+## 12. Next steps
+
+1. Console run per §9 with `1.0.26300.129`. If it crashes, the tracing in §4.7 is designed to name
+   the exact free that caused it — send the logs.
+2. Optionally read the compiler warnings from the green run page and hand them over for a cleanup commit.
+3. If the run is clean over long play and multiple area loads, the next milestone is a proper stress
+   pass (more distinct areas, Dream round trips, long combat) before calling the crash closed.
+4. Only then consider a merge to `main` (a PR from `arena/8ac58bdb-test-project`) and a `[release]`
+   package. Neither has been done.
+
+---
+
+# Appendix — archival record of earlier rounds
+
+Everything below is kept word for word from earlier versions of this handoff. It is the evidence
+trail: hardware test numbers, the split-dump/update handling, the character-creation crash
+investigation in detail, and the port/review notes from this round. Branch names, PR numbers, commit
+hashes and "current state" statements inside it are **historical**; §2 above is authoritative.
 
 ## Hardware Test #12
 
@@ -610,67 +864,40 @@ console, a next log should show `pinned` in the pressure line and, with `BB_GC_L
 image was freed right before any remaining assertion. **This is not confirmed until it runs on a
 Series S / X through character creation and into Central Yharnam.**
 
-### Conservative memory handling ported from GoW3 (same console family)
 
-Six changes, all either `BB_UWP`-only or a no-op on desktop:
+---
 
-1. **Memory marks** (`texture_cache.cpp` ~1177): `trigger = limit - 1280 MiB`, `pressure = limit -
-   1024 MiB`, `critical = limit - 768 MiB` (was -1152 / -768 / -448). On UWP everything - guest
-   pages, image heaps, buffer arenas, the D3D12 driver - is committed against one app-wide limit,
-   and going over it terminates the process instead of failing an allocation, so the collector now
-   keeps 768 MiB of room instead of 448.
-2. **`BB_GC_DROP_OLD` defaults off on UWP too** (was on): dropped tiled targets cost a reload that
-   competes for the same limit. Opt in with `BB_GC_DROP_OLD=1` on either platform.
-3. **Eviction path** (`clean_up`): one `keep()` exit for every candidate that is not freed - pinned,
-   old GPU-written tiled, and any image below the pressure mark - which touches the LRU entry so the
-   next bounded scan does not walk the same unevictable images (that is what stopped the collector
-   for good before). The readback resolve before the free is `DownloadImageMemory(image_id, true)`,
-   i.e. GoW3's `ResolveReadbacks(addr, size, sync, CacheCleanup)`.
-4. **`InsertImage` = MakeRoomForImage**: three rounds over unused periods 16 s, 4 s, 2 s (64, 256,
-   1024 MiB), then `scheduler.Finish()` + `scheduler.PopPendingOperations()` and one final round
-   before the `UNREACHABLE_MSG`. `ReclaimMemoryFor` keeps its signature; the age gate moved into the
-   new private `ReclaimMemoryForUnused(addr, size, bytes, unused_seconds)`.
-5. **`Rasterizer::OnSubmit()`** calls `buffer_cache.ReleaseRetiredArenas()` under `BB_UWP`, before
-   `texture_cache.RunGarbageCollector()`, so the collector's app-memory reading already excludes the
-   released arenas. It was previously never called: retired dense arenas were never given back.
-6. **Stored ids** in `vk_temporal_upscaler.cpp` / `vk_camera_motion.cpp` resolve through
-   `TryGetImage(id, uid)` and clear the member on a null (see the section above).
+## Failed attempts — original list, verbatim
 
-Verification on this machine (Linux, GCC 13): `uwp/tests/test_uwp_port_core.cpp` built with its
-platform/renderer TUs and passes (the single-TU command in section 10.4 of the old handoff does not
-link any more - the D3D12, storage, input and loader .cpp files must be given too); the six
-`xbox/tests` suites pass (228 checks); `tests/test_content.c` passes with `-std=gnu11 -D_GNU_SOURCE`.
-The UWP package itself still has to be built on Windows (`uwp/build.ps1` / `xbox.yml`).
+This is §5 of the old handoff, kept so nothing is lost. §11 above summarises it and adds
+two entries from the latest round.
 
-### Review of the GoW3 port: the two risks, plus fence and pin gaps
+Do **not** reintroduce any of the following approaches:
 
-- **Retired dense arenas (1a).** `BufferCache::ReleaseRetiredArenas` releases only when
-  `DenseArenaLifetime::CanRelease` holds: the 64-tick grace window since the replacement has passed,
-  the tick recorded at the replacement has been signalled (`Scheduler::IsFree` = the timeline value
-  the GPU has reached is past it) and no producer still holds an arena (`Inflight() == 0`). It is
-  called from `Rasterizer::OnSubmit`, after `DrainDrawPipe()` and after the guest submission, so
-  everything recorded before a replacement has been submitted and signalled by then. Added on top:
-  an arena with a live `dense_views` entry (a raw VkBuffer handed to descriptor sets) is never
-  erased - release is deferred and logged.
-- **`InsertImage` victims (1b).** The victim filter excluded `binding.is_bound` / `is_target` /
-  `scene_proxy` / `vo_surface`, but not the ids the rasterizer had already resolved for the draw
-  being recorded but not yet bound (pass 1 of the binding walk). Those are now held: `Rasterizer`
-  registers every id it collects (`CollectImage` -> `TextureCache::HoldCollectedImage`) and the
-  cache clears the set in `ResetBindings`, so `ReclaimMemoryForUnused` and `clean_up` both skip them
-  (`ImagePinState::collected`). This also covers what `scheduler.PopPendingOperations()` would run
-  afterwards: nothing it destroys was a victim.
-- **`scheduler.Finish()`** stays last-resort (three rounds, then Finish, then one more round) and
-  now logs `GPU: video memory full: three rounds freed N MiB, finishing the GPU for a WxH image`
-  (at most 8 times) before it fires.
+1. **Linking with `/STACK:16777216,16777216` (`xbox/CMakeLists.txt`)**:
+   - Setting `SizeOfStackCommit = 16 MiB` in the PE header forces Windows `CreateThread` / `_beginthreadex` to commit `16 MiB` of physical RAM per OS thread (`82 × 16 MiB ≈ 1,312 MiB`), overriding `pthread_attr_setstacksize` and starving the `5,120 MiB` Series S budget. Keep `/STACK:8388608,65536`.
+2. **Returning `{}` from `DrawPreparation::Build()` without gap-aware lookup/rebase (`vk_draw_prep.cpp`)**:
+   - `Liverpool::SubmitGfx()` unconditionally increments `gfx_submit_seq++`. Any skipped `Build()` creates non-contiguous `seq` numbers in `submissions`, causing `submissions[next_seq - submissions.front()->seq]` in `ScannerLoop`/`WorkerLoop`/`BeginSubmission` to index out of bounds (`bloodborne.exe+0x270628`) and desynchronizing `tail_regs` deltas.
+3. **Unguarded speculative guest-shader reads on `bb:DrawPrep0` (`vk_pipeline_cache.cpp` / `regs_shader.h`)**:
+   - Calling `AmdGpu::GetParams(*pgm)` when `sel.worker != nullptr` dereferences guest shader memory without `runtime_fault_recover` and aborts via `UNREACHABLE_MSG` if the guest reused that page ahead of the GPU thread. Always use `runtime_fault_recover` + `AmdGpu::TryGetParams(*pgm)`.
+4. **Default-constructing `Shader::ShaderParams params{}` or block-scope `extern "C"`**:
+   - `Shader::ShaderParams::user_data` is `std::span<const u32, NumShaderUserData>` (fixed extent != `std::dynamic_extent`), which has no default constructor in C++20/23 (`clang-cl` error); always wrap deferred initialization in `std::optional<Shader::ShaderParams>`. Likewise, `clang-cl` rejects `extern "C"` declarations inside function bodies (`[dcl.link]/4`); keep them at namespace scope.
+5. **Calling `scheduler.Finish()` inside `BufferCache::GetDenseArena()` (`xbox/graphics/dense_buffers.cpp`)**:
+   - `GetDenseArena` runs inside `ObtainBuffer` -> `ResolveVertexBuffers` *after* `BeginRendering`. Calling `scheduler.Finish()` there splits and submits an active render pass mid-draw. Only call `scheduler.PopPendingOperations()` inside `GetDenseArena`, and run `scheduler.Finish(); scheduler.PopPendingOperations();` at frame boundaries inside `TextureCache::RunGarbageCollector()`.
+6. **Serializing `getPipelineCacheData(*pipeline_cache)` every 32 runtime PSOs or when `num_flushed_pipelines == 0`**:
+   - Allocates a temporary `~174 MiB` `std::vector<u8>` and queues a `174 MiB` SSD write mid-gameplay, pushing `AppMemoryUsage` across thresholds.
+7. **Syncing `.vkcache` solely by file size (`src_size > dst_size`)**:
+   - Overwrites valid local caches across Mesa Dozen rebuilds or skips valid exports when `pipelineCacheUUID` changes; always validate the 32-byte `VkPipelineCacheHeaderVersionOne` + `pipelineCacheUUID`.
+8. **Keeping `if_body.pop_front()` in `GotoPass::MoveOutwardIf` or emitting `OpUnreachable` on `BB_UWP`**:
+   - `if_body.splice(if_body.begin(), body, std::next(goto_stmt), body.end())` already excludes `goto_stmt`; calling `if_body.pop_front()` unlinks the empty `boost::intrusive::list` sentinel when `std::next(goto_stmt) == body.end()` (crashing shader `i = 1024`) and drops statements otherwise. Also emit `OpReturn` instead of `OpUnreachable` on `BB_UWP` because Mesa Dozen's `nir_to_dxil.c` (`emit_jump`) only handles `break`/`continue`.
+9. **Single-pass `num_predecessors == 0` erasure in `CFG::RemoveUnreachableBlocks()`**:
+   - Leaves unreachable loops/diamonds intact (`num_predecessors >= 1`), crashing Mesa's `vtn_cfg.c`. Always compute DFS reachability from the entry block and recompute `num_predecessors` over reachable edges only.
+10. **Offline Dozen `GraphicsPipeline` pitfalls (`bb_precompile.cpp`)**:
+    - Never compile color-pass `VS` standalone at `binding = 0` (`dzn_pipeline.c` `adjust_var_bindings` asserts `b < binding_count`); never leave depth-only `z_format` as `0` (`ZFormat::Invalid` skips shader compilation—use `ZFormat::Z32Float`); force `rasterizationSamples = e1` when `preloading == true`; cap VS attributes to `<= 28` (`semantic < 32`); ensure passthrough VS writes `gl_Position`; and cap `rt.hw.vs.num_outputs` to `0..3`.
+11. **Relying on VEH / `signal(SIGABRT)` for static UCRT `abort()` or using `bb_longjmp` across C++ frames**:
+    - Static `libucrt.lib` `abort()` executes `__fastfail` (`int 0x29`), bypassing Win32 VEH handlers. Crash-resilient precompilation must flush `LocalState\precompile_inflight.txt` before compiling and consume it on startup.
+12. **Swapping `ONION`/`guest_code` memory, calling `TextureCache` GC inside VMA `createImage`, or committing after container refresh without checking `HEAD`**:
+    - Restrict swap strictly to `WC_GARLIC` with fault-time guest pinning; run `TextureCache` GC only at frame boundaries outside `TextureCache::mutex`/VMA callbacks; build Mesa Dozen with MSVC `14.44` (never `19.51`, which ICEs on Mesa); never use `gh release download` in sandbox (`release-assets.githubusercontent.com` is outside the proxy allowlist); and after any container refresh, verify `git log -n 2` against `origin/arena/c39edde2-test-project` (`git fetch` + `git reset --soft origin/arena/c39edde2-test-project && git reset`) before committing.
 
-### Diagnostics that ship (BB_UWP)
+---
 
-- `Texture cache: free id=.. uid=.. by=<eviction|unmap|make-room|other> guest=.. size=.. bound=..
-  target=.. proxy=.. vo=.. tiled=.. gpu_modified=.. deferred=..` - one line per free, printed from
-  `DeleteImage`, which every free passes through.
-- `Texture cache: erase id=.. (freed by=..)` - the deferred half, printed when the slot really goes.
-- `Texture cache: DEAD IMAGE id=.. indexed by GetImage|GetImageView at file:line (function)` followed
-  by `last N frees (oldest first): id(uid,reason) ...` - printed from the accessors when a freed id
-  is indexed, *before* the unmodified `slot_vector.h` assertion stops the GPU.
-  `GetImage`/`GetImageView` take a defaulted `std::source_location`, so the tag is the real call
-  site without touching a single caller.
