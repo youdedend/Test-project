@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `3dec03a` — *fix(memory): emergency reclaim without an age gate, and a real answer when a page-out takes nothing* (release target) |
+| HEAD | `af6aaa0` — *fix(swap): raise the disk budget for a waiting allocation, and stop rescanning when the disk is the blocker* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40467222025` — [actions/runs/40467222025](https://github.com/youdedend/Test-project/actions/runs/40467222025), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.736.zip` — 10,219,845 B, sha256 `a85d7e5ec0ad9e3dd55b29902e873910c85e31f2754f3525d2530324fde24d59` |
-| Version shown by that package | **`1.0.26300.736`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0736`** — [releases/tag/xbox-alpha-1.0.26300.0736](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0736), target `3dec03a` (run `40467222025`): **emergency image reclaim without the age gate** (`.717` asked and got `seen=0`) plus **the sweep's per-reason counters and a live page-table recount** whenever a page-out request comes back empty (§2m). Previous: `.0717` (urgent page-out, §2l), `.0649` (the ladder — hardware-confirmed: no disk-full, no stall, §2l), `.0623` (§2k), `.0559` (§2j), `.0534` (§2i), `.0504` (§2h), `.0424` (§2g), `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.717` (`docs/hardware-test-21/`, §2m); it still stopped at 5060/5120 MiB. `.736` is published and waiting for Device Portal |
-| Open blocker | **the app-heap limit, still reached** (`.717`: 5060/5120 MiB on a 96 MiB `DeviceLocal` buffer, VMA `heap[0]` only 2313 of 4096 MiB). Two facts came out of that run and both are addressed in `.736`: the image reclaim never entered its walk (`seen=0`, age gate at the current second), and the sweep took nothing while the report claimed 1,534 MiB pageable (§2m) |
+| Last green CI | run `40472410412` — [actions/runs/40472410412](https://github.com/youdedend/Test-project/actions/runs/40472410412), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.823.zip` — 10,219,777 B, sha256 `7332864e5b001c1a59522a02fe19cc33dc9167f44f19c8be3af1328bbaec4326` |
+| Version shown by that package | **`1.0.26300.823`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0823`** — [releases/tag/xbox-alpha-1.0.26300.0823](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0823), target `af6aaa0` (run `40472410412`): **the swap budget grows on demand** (768 MiB → 1 GiB, only for a waiting allocation) and a disk-blocked request no longer rescans the page table; it is `.736` (emergency reclaim without the age gate — **hardware-confirmed working: freed 117 MiB, `seen=610`**) plus the fix for the wall `.736` hit (§2n). Previous: `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623` (§2k), `.0559` (§2j), `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.736` (`docs/hardware-test-22/`, §2n). That run **did not stop**: it hit the wall, freed 117 MiB of images and kept going, then stalled 10 s and was suspended at 5,116/5,120 MiB |
+| Open blocker | **the swap budget, not the device** (`.736`): `disk pages=768 MiB of a 768 MiB budget`, `write failures=0`, `full=0`, with 1,209 MiB of pages that passed every structural test and were refused only by that ceiling. `.823` raises it to 1 GiB for a waiting allocation; if the next run still stops, the next 256 MiB step and the `gpu-written=149` images are the remaining levers (§2n) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -671,6 +671,47 @@ Two dead ends, both with a numeric fingerprint:
 
 Hardware reproduction (Series S/X) for the reclaim change: **still required** — `.736` has not been
 run anywhere yet.
+
+---
+
+## 2n. `.736` run: no crash, and the wall turns out to be our own swap budget (2026-10-27)
+
+Logs in `docs/hardware-test-22/` (loader 1,506 lines, errors 77). Build identity: pager line has
+`disk budget=768 MiB` without a `ceiling` field, report has `urgent sweeps=0 (0 MiB)`.
+
+**The emergency reclaim works on hardware** — first time:
+
+```
+Texture cache: emergency reclaim freed 117 MiB of the 116 MiB asked for;
+    seen=610 too recent=0 gpu-written=149 bound/target=1 no backing=3 (gc_tick=1251)
+UWP memory emergency (allocation failed): need 116 MiB; paged out 0 MiB in 7 ms,
+    freed 117 MiB of images in 214 ms (usage now 5025/5120 MiB)
+```
+
+`seen=610` (was 0), and it freed more than asked. **The run did not stop**: no `FATAL`, no
+assertion, no `STOP`, unlike `.649` and `.717`. It went on to 5,116/5,120 MiB, stalled once for 10 s
+(`presents stuck at 1291`) and was suspended by hand.
+
+**What it hit instead, from three lines that agree:**
+
+| Line | Reading |
+|---|---|
+| `disk pages=768 MiB of a 768 MiB budget; write failures=0 … full=0` | the device never refused a write; 768 MiB is this port's own ceiling |
+| `pageable private=1209 pinned=0; not paged - pinned=0 section=0 shared=0 exec/unreadable=0` | 1,209 MiB passed every structural test |
+| `request 64 MiB got nothing; … at-budget=0 … ; page table: resident=1209 …` | the unaccounted 309,540 scanned pages are exactly the budget check — and `at-budget` was never incremented in `.736` (a missing counter, not a fourth rule) |
+
+### Fixes in `.823`
+
+| What | Where |
+|---|---|
+| Disk budget grows 256 MiB per step from 768 MiB to a **1 GiB ceiling**, and only while an allocation is waiting (`uwp_swap_disk_growable`); `BB_UWP_SWAP_DISK_MB` stays a hard cap; past the ceiling or on `ERROR_DISK_FULL` a page stays resident as before. 1 GiB and not more because `.559` had writes refused at 1,252 MiB used and LocalState is shared with saves | `guest_swap.inc:24-46, 537-558, 831-841` |
+| The missing `at-budget` counter | `guest_swap.inc:545` |
+| A request the *disk* refused is answered at once if under 500 ms has passed since the last one — fourteen full-table walks under `uwp_commit_lock` (7–8 ms each) are what the 10 s stall looked like. A request that failed for any other reason still rescans | `guest_swap.inc:666-675, 706-712` |
+| Report and pager line print the ceiling and how many times it was raised | `guest_swap.inc:786-792, 859-864` |
+
+Hardware reproduction (Series S/X) for the budget growth: **still required** — `.823` has not run.
+Remaining levers if it still stops: one more 256 MiB step, and the `gpu-written=149` images the
+emergency reclaim refuses (GPU output that cannot be written back from a tiled layout).
 
 ---
 
