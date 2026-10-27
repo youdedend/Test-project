@@ -531,6 +531,10 @@ static void host_discard(uint64_t offset, uint64_t size) {
             physical->disk = 0;
             --uwp_swap_disk_pages;
         }
+        // bbport: a recycled physical frame must not keep the swap record of its previous owner.
+        // Nothing reads it (physical->disk is clear), but a stale record is a page of guest data
+        // left on the device for no reason - and now it is a record the store could otherwise reuse.
+        if (uwp_swap_slot && at / PAGE < uwp_swap_slot_count) uwp_swap_slot[at / PAGE] = 0;
         physical->pinned = physical->recent = physical->hash_valid = 0;
     }
 }
