@@ -146,6 +146,64 @@ void TestClearingPatchPath() {
     CheckEqual(BbIni::Parse(out).at("dump.use_patch"), "1", "the toggle is left alone");
 }
 
+
+void TestTopLevelInsert() {
+    const std::string base = "# player settings\nupscaler=off\n\n[dump]\nuse_patch=1\n";
+    bool changed = false;
+    const std::string out = BbIni::SetTopLevel(base, "skip_intro", "1", &changed);
+    Check(changed, "a new top-level key reports a change");
+    const auto values = BbIni::Parse(out);
+    CheckEqual(values.at("skip_intro"), "1", "the key reads back");
+    CheckEqual(values.at("dump.use_patch"), "1", "the section below is untouched");
+    Check(out.find("[dump]\nuse_patch=1") != std::string::npos, "section order is kept");
+    Check(out.find("upscaler=off\nskip_intro=1") != std::string::npos,
+          "the key lands at the end of the top-level block");
+}
+
+void TestTopLevelReplace() {
+    const std::string base = "skip_intro=0\n# comment\nfps_cap=60\n[dump]\nskip_intro=9\n";
+    bool changed = false;
+    const std::string out = BbIni::SetTopLevel(base, "skip_intro", "1", &changed);
+    Check(changed, "changing a top-level key reports a change");
+    Check(out.find("# comment") != std::string::npos, "comments survive");
+    const auto values = BbIni::Parse(out);
+    CheckEqual(values.at("fps_cap"), "60", "other keys survive");
+    // A key of the same name inside a section keeps its own line; the bare key is the one written.
+    Check(out.find("[dump]\nskip_intro=9") != std::string::npos,
+          "the section's own key is not rewritten");
+    CheckEqual(BbIni::Parse(out).at("dump.skip_intro"), "9",
+               "and the section still answers for it");
+}
+
+void TestTopLevelDuplicate() {
+    const std::string base = "a=1\nskip_intro=0\nb=2\nskip_intro=0\n[c]\nk=v\n";
+    bool changed = false;
+    const std::string out = BbIni::SetTopLevel(base, "skip_intro", "1", &changed);
+    Check(changed, "a duplicate key reports a change");
+    size_t count = 0;
+    for (size_t at = out.find("skip_intro="); at != std::string::npos;
+         at = out.find("skip_intro=", at + 1)) {
+        ++count;
+    }
+    Check(count == 1, "duplicates collapse to one line");
+    CheckEqual(BbIni::Parse(out).at("skip_intro"), "1", "the surviving line wins");
+    CheckEqual(BbIni::Parse(out).at("c.k"), "v", "sections survive");
+}
+
+void TestTopLevelSameValue() {
+    const std::string base = "skip_intro=1\n[dump]\npatch_path=\n";
+    bool changed = true;
+    BbIni::SetTopLevel(base, "skip_intro", "1", &changed);
+    Check(!changed, "writing the same value reports no change");
+}
+
+void TestTopLevelEmptyFile() {
+    bool changed = false;
+    const std::string out = BbIni::SetTopLevel("", "skip_intro", "1", &changed);
+    Check(changed, "an empty file gains the key");
+    CheckEqual(out, std::string("skip_intro=1\n"), "and nothing else");
+}
+
 } // namespace
 
 int main() {
@@ -159,6 +217,11 @@ int main() {
     TestEmptyFile();
     TestCrlfInput();
     TestClearingPatchPath();
+    TestTopLevelInsert();
+    TestTopLevelReplace();
+    TestTopLevelDuplicate();
+    TestTopLevelSameValue();
+    TestTopLevelEmptyFile();
 
     if (failures != 0) {
         std::printf("%d check(s) failed\n", failures);

@@ -222,6 +222,41 @@ Full report: [`docs/MEMORY_CRASH_RESEARCH.md`](docs/MEMORY_CRASH_RESEARCH.md). S
 
 ---
 
+## 2f. "Skip the intro" option (2026-10-27)
+
+The PC port has `skip_intro` (its `scripts/patches.py` turns it into the "Skip Intro" patch), and
+`patches/Bloodborne.xml` here already carried that patch — but on the console there was no way to
+turn it on *before* the intro plays: the only switch was the in-game overlay's checkbox, and the
+overlay cannot be opened until the game is running, by which time the intro is over.
+
+What was added:
+
+| What | Where |
+|---|---|
+| Ask once, before the first start that applies patches: "Skip the intro?" (`Play the intro` / `Skip the intro`, dismissal = play) | `xbox/platform/main.cpp:887-910` (`ask_intro_once`) |
+| Called from the launcher before the dump panel, so the panel's `Intro: …` line shows the answer; skipped in headless `run.txt`/self-test starts | `main.cpp:928-933` |
+| Panel text now carries the current state and says where to change it later | `main.cpp:949-956` |
+| `skip_intro` written as a bare key (the layout `scripts/patches.py` and the Windows launcher use), preserving every other line | `main.cpp:704-717` (`set_ini_top_level`), `xbox/platform/ini_file.h:199-260` (`BbIni::SetTopLevel`) |
+| Default ini no longer pre-sets `skip_intro`: its *absence* is what makes a fresh install ask once | `main.cpp:638-660` |
+| Tests for the new ini writer (5 cases: insert, replace, duplicate collapse, same value, empty file) | `xbox/tests/ini_file_test.cpp:150-207`, run by CI's `ini_file` test binary |
+| The in-game path made to work end to end: `BbSettings::Save()` rewrote `bbport.ini` from scratch and **dropped the launcher's `[dump]` section**, so toggling "Skip intro logos and movie" in the overlay also forgot the patch folder. `Save()` now carries every `[section] …` block over | `gpu/shim/bbport_settings.cpp:353-380`, `:382`, `:429-431` |
+
+Why a separate dialog and not a fourth launcher button: `Windows.UI.Popups.MessageDialog` accepts at
+most **three** commands on desktop (a fourth throws `E_INVALIDARG`), and every panel here already has
+two or three. `ask_player` also gained an explicit `cancel_index` so a dismissal cannot be mistaken
+for a choice (`main.cpp:182-199`).
+
+Verification: `xbox/tests/ini_file_test.cpp` compiled and run locally with g++ — all checks pass
+(`bbport.ini round-trip: all checks passed`, 5 new cases among them); `tests/test_patches.py`
+15 passed / 6 skipped; `gpu/shim/bbport_settings.cpp` passes `g++ -fsyntax-only`. `main.cpp` needs
+WinRT and can only be compiled by CI.
+
+Not verified on hardware — as usual, CI says it builds; a Series S/X launch says it works. Expected
+log line after the answer: `Launcher panel: intro skipped`, and with patches applied the intro is
+gone on the next start.
+
+---
+
 ## 3. Code map (the files that matter)
 
 **Build / CI / packaging**

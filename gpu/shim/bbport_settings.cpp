@@ -350,8 +350,36 @@ bool FsrSettingsNeedRestart() {
          (fsr_now && v.object_motion) != (fsr_start && v.startup_object_motion));
 }
 
+/// Everything from the first `[section]` line to the end of the file. The Xbox launcher owns those
+/// sections in this same file (`[dump] patch_path=` / `use_patch=`, see xbox/platform/ini_file.h),
+/// and Save() rebuilds the file from scratch: without carrying them over, changing any option in
+/// the menu dropped the player's patch folder, and the next start fell back to auto-detection.
+static std::string OtherSections() {
+    std::string out;
+    bool in_sections = false;
+    if (FILE* file = std::fopen(Path(), "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof(line), file)) {
+            const std::string text{line};
+            const size_t begin = text.find_first_not_of(" \t");
+            if (!in_sections && begin != std::string::npos && text[begin] == '[') {
+                in_sections = true;
+            }
+            if (in_sections) {
+                out += text;
+            }
+        }
+        std::fclose(file);
+    }
+    if (!out.empty() && out.back() != '\n') {
+        out += '\n';
+    }
+    return out;
+}
+
 void Save() {
     const auto& v = Get();
+    const std::string other_sections = OtherSections();
     FILE* file = std::fopen(Path(), "w");
     if (!file) {
         std::printf("Settings: cannot write %s\n", Path());
@@ -398,6 +426,9 @@ void Save() {
                  : v.xbox_fps_patch == 30 ? "30"
                  : v.xbox_fps_patch == 90 ? "90"
                                           : "60");
+    if (!other_sections.empty()) {
+        std::fputs(other_sections.c_str(), file);
+    }
     std::fclose(file);
 }
 

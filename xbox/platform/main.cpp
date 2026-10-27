@@ -179,12 +179,20 @@ static void set_default_env_var(const char* name, const std::string& value) {
     set_env_var(name, value);
 }
 
-static int ask_player(const std::string& text, const std::vector<std::string>& buttons) {
+/// `cancel_index` is the button the dialog reports when the player dismisses it (Back, B, escape).
+/// It used to be the last one; a panel that appends a toggle after its last real choice has to say
+/// which button that is, or dismissing the panel would flip the toggle instead of closing it.
+static int ask_player(const std::string& text, const std::vector<std::string>& buttons,
+                      int cancel_index = -1) {
     std::printf("Player dialog: %s\n", text.c_str());
     auto choice = std::make_shared<std::promise<int>>();
     auto answer = choice->get_future();
+    if (cancel_index < 0 || cancel_index >= static_cast<int>(buttons.size())) {
+        cancel_index = static_cast<int>(buttons.size()) - 1;
+    }
     g_core_window.get().Dispatcher().RunAsync(
-        winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, [text, buttons, choice] {
+        winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+        [text, buttons, choice, cancel_index] {
             try {
                 winrt::Windows::UI::Popups::MessageDialog dialog(winrt::to_hstring(text),
                                                                  L"Bloodborne");
@@ -193,7 +201,7 @@ static int ask_player(const std::string& text, const std::vector<std::string>& b
                         winrt::to_hstring(buttons[i]), nullptr, winrt::box_value(int(i))));
                 }
                 dialog.DefaultCommandIndex(0);
-                dialog.CancelCommandIndex(uint32_t(buttons.size() - 1));
+                dialog.CancelCommandIndex(uint32_t(cancel_index));
                 dialog.ShowAsync().Completed(
                     [choice](const auto& op, winrt::Windows::Foundation::AsyncStatus status) {
                         int index = -1;
@@ -633,6 +641,8 @@ static void ensure_default_ini(const std::string& ini_path) {
     }
     const char* defaults =
         "# Bloodborne Xbox Series X|S UWP settings (in-game overlay: L3 + R3)\n"
+        "# skip_intro=1 skips the intro logos and movie (also in the in-game menu); absent = asked\n"
+        "# once on the first start.\n"
         "upscaler=off\n"
         "scene_res=1280x720\n"
         "output_res=1920x1080\n"
@@ -684,6 +694,28 @@ static bool set_ini_value(const std::string& path, const std::string& section, c
         return true;
     }
     std::printf("Settings %s: %s.%s=%s\n", path.c_str(), section.c_str(), key.c_str(), value.c_str());
+    if (!write_file_bytes(path, BbPrepare::Bytes(updated.begin(), updated.end()))) {
+        std::printf("Settings %s: write failed\n", path.c_str());
+        return false;
+    }
+    return true;
+}
+
+/// Writes one bare (top-level) key of the settings file, the layout the patch settings use
+/// (`skip_intro=1`, `effect_ssao=0`), keeping every line of the [dump] section intact.
+static bool set_ini_top_level(const std::string& path, const std::string& key,
+                              const std::string& value) {
+    BbPrepare::Bytes raw;
+    std::string text;
+    if (read_file_bytes(path, raw)) {
+        text.assign(raw.begin(), raw.end());
+    }
+    bool changed = false;
+    const std::string updated = BbIni::SetTopLevel(text, key, value, &changed);
+    if (!changed) {
+        return true;
+    }
+    std::printf("Settings %s: %s=%s\n", path.c_str(), key.c_str(), value.c_str());
     if (!write_file_bytes(path, BbPrepare::Bytes(updated.begin(), updated.end()))) {
         std::printf("Settings %s: write failed\n", path.c_str());
         return false;
@@ -852,6 +884,31 @@ static std::string base_only_banner(const DumpSelection& sel) {
     return BbPanel::BaseOnlyBanner(PanelOf(sel));
 }
 
+/// Asks once, before the first start that applies patches, whether the intro should be skipped.
+///
+/// The intro (FromSoftware/Sony logos and the title movie) is skipped by the "Skip Intro" patch in
+/// patches/Bloodborne.xml, which BuildPatches() compiles at start - the same `skip_intro` key the
+/// Windows launcher's settings write (scripts/patches.py). The in-game menu can change it later, but
+/// only for the next start, which is exactly what the intro is not: reachable. A MessageDialog takes
+/// three commands at most, so it cannot be a fourth button on the launcher panel.
+///
+/// "Answered" is the presence of the key: the default bbport.ini does not contain it, so a fresh
+/// install is asked once and never again.
+static void ask_intro_once(const std::string& ini_path) {
+    auto ini = parse_kv_file(ini_path);
+    if (ini.find("skip_intro") != ini.end()) {
+        return;
+    }
+    const int choice =
+        ask_player("Skip the intro?\n\nBloodborne can start straight at the title screen instead "
+                   "of playing the FromSoftware/Sony logos and the title movie.\n\nYou can change "
+                   "this later in the in-game menu (hold L3 + R3, \"Visual & gameplay patches\").",
+                   {"Play the intro", "Skip the intro"}, /*cancel_index=*/0);
+    set_ini_top_level(ini_path, "skip_intro", choice == 1 ? "1" : "0");
+    std::printf("Launcher panel: intro %s%s\n", choice == 1 ? "skipped" : "played",
+                choice < 0 ? " (dialog dismissed)" : "");
+}
+
 /// Shows the detected layout and applies the player's choice. Returns false when the app must not
 /// start the game (unreadable dump, or the player closed the panel).
 static bool launcher_select_dump_layout(const std::string& picked, const std::string& ini_path,
@@ -867,6 +924,13 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
         std::printf("Saved patch folder is gone: %s\n", saved_patch.c_str());
         saved_patch.clear();
         set_ini_value(ini_path, "dump", "patch_path", "");
+    }
+
+    // Before the panel, so the panel's "Intro: ..." line shows the answer just given. Never in a
+    // headless start (run.txt mode, the memory self-test): there is no one to answer it.
+    if (player) {
+        ask_intro_once(ini_path);
+        ini = parse_kv_file(ini_path);
     }
 
     for (;;) {
@@ -891,10 +955,18 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
         const std::string header = "Bloodborne dump\n\n";
         enum class Action { Launch, LaunchUnpatched, EnablePatch, PickPatch, ChangeFolder, Close };
         Action action = Action::Close;
+        // bbport: the intro is skipped by a startup patch, so its state belongs in the panel: the
+        // switch itself is in the in-game menu (Visual & gameplay patches), and a fresh install was
+        // asked once at the top of this function.
+        const std::string intro_line =
+            BbIni::Flag(ini, "skip_intro", false)
+                ? "\n\nIntro: skipped (logos and title movie). Change it in the in-game menu."
+                : "\n\nIntro: played. Change it in the in-game menu.";
         if (sel.IsMerged()) {
             std::printf("Launcher panel: merged dump (effective=%s)\n",
                         sel.EffectiveVersion().c_str());
-            const int choice = ask_player(header + dump_panel_text(sel) + "\n\nLaunch the game?",
+            const int choice = ask_player(header + dump_panel_text(sel) + "\n\nLaunch the game?" +
+                                              intro_line,
                                           {"Launch", "Change game folder"});
             action = choice == 0 ? Action::Launch
                                  : (choice == 1 ? Action::ChangeFolder : Action::Close);
@@ -904,7 +976,8 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
             const int choice = ask_player(
                 header + dump_panel_text(sel) +
                     "\n\nThe update is merged over the game dump inside the app's LocalState; "
-                    "your USB folder is never modified.",
+                    "your USB folder is never modified." +
+                    intro_line,
                 {"Launch", "Run base only", "Pick patch folder"});
             action = choice == 0   ? Action::Launch
                      : choice == 1 ? Action::LaunchUnpatched
@@ -916,7 +989,8 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
             const int choice = ask_player(
                 header + dump_panel_text(sel) +
                     "\n\nThe update was found but \"Use patch\" is off: the game runs the "
-                    "unpatched 30 FPS build.",
+                    "unpatched 30 FPS build." +
+                    intro_line,
                 {"Use patch", "Launch unpatched", "Pick patch folder"});
             action = choice == 0   ? Action::EnablePatch
                      : choice == 1 ? Action::LaunchUnpatched
@@ -926,7 +1000,7 @@ static bool launcher_select_dump_layout(const std::string& picked, const std::st
             std::printf("Launcher panel: base-only dump (effective=%s)\n",
                         sel.EffectiveVersion().c_str());
             const int choice = ask_player(header + dump_panel_text(sel) + "\n\n" +
-                                              base_only_banner(sel),
+                                              base_only_banner(sel) + intro_line,
                                           {"Pick patch folder", "Continue anyway (unpatched)", "Close"});
             action = choice == 0   ? Action::PickPatch
                      : choice == 1 ? Action::LaunchUnpatched

@@ -65,6 +65,11 @@ via SMB (`\\<xbox-ip>\DevelopmentFiles`) or Xbox Device Portal **File Explorer**
    startup patches (`60 FPS++`, `1280x720` scene + crisp native `1920x1080` HUD) into `LocalState\Prepared`
    (~10–20 seconds once; cached on subsequent launches).
 3. On the in-app **Bloodborne** launcher screen:
+   - The first start asks **"Skip the intro?"** — the FromSoftware/Sony logos and the title movie,
+     straight to the title screen (`skip_intro=1` in `LocalState\bbport.ini`, the same key the
+     Windows launcher writes; the "Skip Intro" patch from `patches/Bloodborne.xml` is compiled into
+     the startup patch set). It is asked once; change it later in the in-game overlay under
+     **Visual & gameplay patches** → *Skip intro logos and movie*, then **Apply and restart**.
    - Run **Precompile shaders** once (recommended to eliminate first-run DXIL compilation stutter).
    - Select **Start game**!
 

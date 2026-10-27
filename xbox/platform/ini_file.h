@@ -191,4 +191,83 @@ inline std::string SetValue(const std::string& text, const std::string& section,
     return out;
 }
 
+/// Rewrites a *top-level* `key` (a bare line above the first `[section]`, the layout
+/// scripts/patches.py and the Windows launcher write). `SetValue` cannot do this: it looks for a
+/// literal `[]` section, whereas a bare key belongs to no section at all. Replacements keep every
+/// other line (comments, order, `[dump]`) untouched; duplicates collapse to the one line so a stale
+/// copy cannot win, since a later line overrides an earlier one when the file is parsed.
+inline std::string SetTopLevel(const std::string& text, const std::string& key,
+                               const std::string& value, bool* changed) {
+    std::vector<std::string> lines;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        std::string line = text.substr(pos, end - pos);
+        pos = end + 1;
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        lines.push_back(line);
+    }
+    size_t first_section = lines.size();
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string trimmed = Trim(lines[i]);
+        if (!trimmed.empty() && trimmed[0] == '[') {
+            first_section = i;
+            break;
+        }
+    }
+    bool wrote = false;
+    bool unchanged = false;
+    for (size_t i = 0; i < lines.size();) {
+        const std::string trimmed = Trim(lines[i]);
+        bool matches = i < first_section && !trimmed.empty() && trimmed[0] != '#' &&
+                       trimmed[0] != ';';
+        if (matches) {
+            const size_t eq = lines[i].find('=');
+            matches = eq != std::string::npos && Trim(lines[i].substr(0, eq)) == key;
+        }
+        if (!matches) {
+            ++i;
+            continue;
+        }
+        if (wrote) {
+            lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(i));
+            if (i < first_section) {
+                --first_section;
+            }
+            continue;
+        }
+        unchanged = Trim(lines[i].substr(lines[i].find('=') + 1)) == Trim(value);
+        lines[i] = key + "=" + value;
+        wrote = true;
+        ++i;
+    }
+    bool modified = true;
+    if (!wrote) {
+        size_t insert_at = 0;
+        for (size_t i = 0; i < first_section; ++i) {
+            if (!Trim(lines[i]).empty()) {
+                insert_at = i + 1;
+            }
+        }
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insert_at), key + "=" + value);
+    } else {
+        modified = !unchanged;
+    }
+
+    std::string out;
+    for (const auto& line : lines) {
+        out += line;
+        out += '\n';
+    }
+    if (changed) {
+        *changed = modified;
+    }
+    return out;
+}
+
 } // namespace BbIni
