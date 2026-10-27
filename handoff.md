@@ -48,14 +48,13 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `7535ba2170d199b43fd03dec00588d64c822be3a` — *build: publish the precompile fault isolation as a pre-release* (release target; code identical to `0234b1a`) |
+| HEAD | `47573ac` — *fix(texture-cache): reclaim transient depth targets under memory pressure* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40440888038` — [actions/runs/40440888038](https://github.com/youdedend/Test-project/actions/runs/40440888038), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.300` — 10,214,059 B, contains `BloodborneLauncher_1.0.26300.300_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
-| Version shown by that package | **`1.0.26300.300`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0300`** — [releases/tag/xbox-alpha-1.0.26300.0300](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0300), asset `BloodborneXbox-1.0.26300.300.zip` (10,214,059 B), target `7535ba2` (run `40440888038`, both jobs green, publish step ran). This is the **precompile fault-isolation build** (§2c). Previous: `xbox-alpha-1.0.26300.0211` (target `23e7f4d`), before that `xbox-alpha-1.0.26300.0034` |
-| Tags / merge | tags `xbox-alpha-1.0.26300.0034`, `.0211`, `.0300`, all on the work branch only (pre-release tags, not on `main`); nothing merged, no PR opened for this work |
-| Console validation of this build | **not installed yet** — the console still has `1.0.26300.211`; `1.0.26300.300` (the precompile fault-isolation build) is published and waiting to be added through Device Portal |
+| Last green CI | run `40443524883` — [actions/runs/40440888038](https://github.com/youdedend/Test-project/actions/runs/40440888038), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.328` — contains `BloodborneLauncher_1.0.26300.328_x64.appx` + `Dependencies/Microsoft.VCLibs.x64.14.00.appx` |
+| Version shown by that package | **`1.0.26300.328`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0328`** — [releases/tag/xbox-alpha-1.0.26300.0328](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0328), target `47573ac` (run `40443524883`, both jobs green, publish step ran): **depth-target reclaim under memory pressure** (§2e). Previous: `xbox-alpha-1.0.26300.0300` (precompile fault isolation, §2c) and `.0211` || Tags / merge | tags `xbox-alpha-1.0.26300.0034`, `.0211`, `.0300`, all on the work branch only (pre-release tags, not on `main`); nothing merged, no PR opened for this work |
+| Console validation of this build | **not installed yet** — the console still has `1.0.26300.211`; `1.0.26300.328` (depth reclaim, §2e) is published and waiting to be added through Device Portal |
 | Open blocker | the post-character-creation crash (see §4.5) is *addressed but unproven* |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
