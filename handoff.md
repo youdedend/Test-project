@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `af6aaa0` — *fix(swap): raise the disk budget for a waiting allocation, and stop rescanning when the disk is the blocker* (release target) |
+| HEAD | `4165722` — *fix(memory): 1.5 GiB swap ceiling, images reclaimed before an allocation fails, pager state in the stall dump* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40472410412` — [actions/runs/40472410412](https://github.com/youdedend/Test-project/actions/runs/40472410412), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.823.zip` — 10,219,777 B, sha256 `7332864e5b001c1a59522a02fe19cc33dc9167f44f19c8be3af1328bbaec4326` |
-| Version shown by that package | **`1.0.26300.823`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0823`** — [releases/tag/xbox-alpha-1.0.26300.0823](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0823), target `af6aaa0` (run `40472410412`): **the swap budget grows on demand** (768 MiB → 1 GiB, only for a waiting allocation) and a disk-blocked request no longer rescans the page table; it is `.736` (emergency reclaim without the age gate — **hardware-confirmed working: freed 117 MiB, `seen=610`**) plus the fix for the wall `.736` hit (§2n). Previous: `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623` (§2k), `.0559` (§2j), `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.736` (`docs/hardware-test-22/`, §2n). That run **did not stop**: it hit the wall, freed 117 MiB of images and kept going, then stalled 10 s and was suspended at 5,116/5,120 MiB |
-| Open blocker | **the swap budget, not the device** (`.736`): `disk pages=768 MiB of a 768 MiB budget`, `write failures=0`, `full=0`, with 1,209 MiB of pages that passed every structural test and were refused only by that ceiling. `.823` raises it to 1 GiB for a waiting allocation; if the next run still stops, the next 256 MiB step and the `gpu-written=149` images are the remaining levers (§2n) |
+| Last green CI | run `40477469886` — [actions/runs/40477469886](https://github.com/youdedend/Test-project/actions/runs/40477469886), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.908.zip` — 10,221,091 B, sha256 `6488851b4360ce0387fb11d70dfe3cdd6265bb25527ba01e9fb7bedaa066476f` |
+| Version shown by that package | **`1.0.26300.908`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.0908`** — [releases/tag/xbox-alpha-1.0.26300.0908](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0908), target `4165722` (run `40477469886`): **swap ceiling 1.5 GiB**, **image reclaim before an allocation fails** (when the pager under-delivers), and **the pager state printed into the stall dump** — built on `.823` (the growing budget, **hardware-confirmed: it raised once and paged 62 MiB in 220 ms**, §2o). Previous: `.0823` (§2n), `.0736` (emergency reclaim — **hardware-confirmed: freed 117 MiB**, §2m), `.0717` (§2l), `.0649` (the ladder), `.0623` (§2k), `.0559` (§2j), `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.823` (`docs/hardware-test-23/`, §2o). Three runs in a row have reached the wall **without stopping** (`.736`, `.823`); what still ends a session is the 10 s stall and the suspend that follows it |
+| Open blocker | **the swap ceiling, with the device still willing** (`.823`): `at-budget=234572` pages (916 MiB) refused by the budget alone, `disk=1024/1024 MiB`, `write failures=0`, `full=0`. `.908` takes it to 1.5 GiB and starts reclaiming images before an allocation fails. The 10 s stall at `presents` stuck is **unexplained** — `.908` prints the pager state into that dump (§2o) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -712,6 +712,51 @@ assertion, no `STOP`, unlike `.649` and `.717`. It went on to 5,116/5,120 MiB, s
 Hardware reproduction (Series S/X) for the budget growth: **still required** — `.823` has not run.
 Remaining levers if it still stops: one more 256 MiB step, and the `gpu-written=149` images the
 emergency reclaim refuses (GPU output that cannot be written back from a tiled layout).
+
+---
+
+## 2o. `.823` run: the budget raise works; the ceiling is what stops it (2026-10-27)
+
+Logs in `docs/hardware-test-23/` (loader 1,032 lines, errors 77). Build identity: pager line ends
+`disk budget=768 MiB (ceiling 1024 MiB)`.
+
+**The growing budget did what it was written for, on hardware:**
+
+```
+UWP swap: disk budget raised to 1024 MiB (ceiling 1024 MiB) for a waiting allocation
+UWP swap: paged out 62 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 62 MiB for a 65536 KiB allocation in 220 ms (usage 4958/5120 MiB)
+```
+
+One step, taken during the area load, filled immediately. No `FATAL`, no assertion, no `STOP` — the
+third consecutive run that reached the wall without stopping.
+
+**Where it ended — the ceiling, with the device still willing:**
+
+| Line | Reading |
+|---|---|
+| `disk=1024/1024 MiB full=0 write failures=0` | the device never refused a byte; 1 GiB is still our number |
+| `at-budget=234572` (= 916 MiB), `resident=916 MiB`, `pinned=section=shared=unreadable=0` | the only thing refusing those pages is `uwp_swap_disk_budget >= uwp_swap_disk_ceiling` |
+| `out=1033 in=15 MiB` | 1,033 MiB were paged out over the run before that |
+| `UWP STALL DETECTED (presents stuck at 832 for 10 s)` at 4,972 MiB, then `lifecycle: suspending` at 5,111 MiB | the freeze arrives **before** the ceiling, and `presents` never moves again |
+
+### Fixes in `.908`
+
+| What | Where |
+|---|---|
+| Ceiling 1 GiB → **1.5 GiB** (start 768, step 256): `.823`'s own step, twice. `.559` had writes refused at 1,252 MiB, so step 2 likely fits and step 3 finds the edge; past it writes fail, `full=1`, growth stops, the page stays resident — fail-soft | `guest_swap.inc:24-46, 878-889` |
+| Growth also stops when the sweep saw any write failure (a limit writes are not reaching is not worth raising) | `guest_swap.inc:545-566` |
+| **Images go before an allocation fails**: when the pager under-delivers (`paged < want`), the image reclaim runs as the ladder's second rung — bounded to 128 MiB, at most once a second, same structural rules (bound / target / scene proxy / video-out / collected stay), on the GPU thread because the scheduler is ours there | `buffer.cpp:180-225` |
+| `runtime_memory_pager_state()` printed into the stall dump: lock holder and how long it has held it, the in-flight or last page-out request and its age, out/in/disk/budget | `guest_swap.inc:677-701`, `main.cpp:58, 1895` |
+
+Hardware reproduction (Series S/X): **still required** — `.908` has not run.
+
+### Why the guest cannot be given more swap without giving it something else
+
+`Runtime: direct memory allocations=14, maps=14, live=4812046336, budget=5301600256` in every run:
+the guest's own direct memory is 4.48 GiB of the 5 GiB app budget and the pager may not touch it
+(POOL_SIZE, the guest's 4.94 GiB direct pool, is the number that would have to move). What is
+pageable is the ~1.2 GiB underneath, and that is exactly what the swap ceiling bounds.
 
 ---
 
