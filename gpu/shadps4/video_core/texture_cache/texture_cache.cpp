@@ -589,12 +589,19 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     auto& cached = find_image_cache[key_hash % find_image_cache.size()];
     // An exact match stays valid while that image is registered with the same description;
     // resolved overlaps (views into other images) only until any image registration changes.
+    // bbport: the entry is consulted exactly when the generation has changed since it was made -
+    // that is, after some image was registered or unregistered, which is what an eviction does
+    // (free id=58 ... erase id=58 in the console log, then slot_vector.h:225 "invalid or freed
+    // slot index=58"). So the slot must be checked before it is indexed, and the uid must still
+    // match: without both, this read either trips that assertion or silently treats whichever
+    // image took the slot as the cached one.
     const auto still_exact = [&] {
-        if (cached.view_mip >= 0 || cached.view_slice >= 0 || !cached.image_id) {
+        if (cached.view_mip >= 0 || cached.view_slice >= 0 || !cached.image_id ||
+            !slot_images.is_allocated(cached.image_id)) {
             return false;
         }
         const Image& image = IndexImage(cached.image_id);
-        return True(image.flags & ImageFlagBits::Registered) &&
+        return image.image_uid == cached.uid && True(image.flags & ImageFlagBits::Registered) &&
                image.info.guest_address == info.guest_address &&
                image.info.guest_size == info.guest_size && image.info.size == info.size &&
                image.info.pixel_format == info.pixel_format;
@@ -707,6 +714,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         .layers = info.resources.layers,
         .generation = registry_generation.load(std::memory_order_relaxed),
         .image_id = image_id,
+        .uid = image.image_uid,
         .view_mip = view_mip,
         .view_slice = view_slice,
     };

@@ -290,19 +290,21 @@ What changed:
 | `IndexImage` / `IndexImageView`: the direct index wrapped so a freed slot prints the same report (id, caller's `file:line`, last frees) before the unmodified assertion. One `is_allocated` test per index, under `BB_UWP` | `texture_cache.h:245-276` |
 | Every in-class direct `slot_images[...]` now goes through it (`MarkFound`, `IsUpToDate`, `UpdateImage`, `ForEachImageInRegion`, `GetAssociatedDepth`-adjacent sites) | `texture_cache.h:111, 157, 174, 186, 384, 406` |
 | Same for all 37 sites in the cache's translation unit, plus the one unguarded `slot_image_views[...]` (the view memo's `ids[last]`) | `texture_cache.cpp:143, 257, 309, 312, 332, 376, 547, 562, 563, 596, 609, 629, 657, 669, 686, 734, 748, 772, 780, 806, 836, 840, 843, 960, 975, 1001, 1027, 1042, 1058, 1072, 1090, 1127, 1298, 1519, 1545, 1565, 1626, 1656, 1721` |
-| **The fix candidate itself:** the three memoized lookups that keep an `ImageId` between frames and then index it directly now also require the slot to still be allocated, and re-resolve when it is not. `MarkFound` is what they call, and it is a direct index — a memo hit on a slot freed since stopped the GPU with no hint of the path | `vk_rasterizer.cpp:190` (`last_targets`), `:214` (`target_memo`), `:2376` (`image_desc_cache`/`desc_entry`) |
+| **Fix 1 — the likely culprit:** `FindImage`'s own cache entry (`find_image_cache`) is consulted *exactly* when the texture registry generation has changed, i.e. after some image was registered or unregistered — which is what an eviction does. Its `still_exact` fallback then indexed `slot_images[cached.image_id]` with no allocation check: after `erase id=58`, the next `FindImage` for that entry's key read the freed slot and tripped `ValidateIndex` with `index=58`. It now requires the slot to be allocated **and** the cached uid to still match, so a reused slot can never be mistaken for the cached image. Entries carry the uid for that (`texture_cache.h:599-603`, set at `texture_cache.cpp:717`) | `texture_cache.cpp:592-608` |
+| **Fix 2 — the same shape elsewhere:** the three memoized lookups in the rasterizer that keep an `ImageId` between frames and then index it directly also require the slot to still be allocated, and re-resolve when it is not. `MarkFound` is what they call, and it is a direct index | `vk_rasterizer.cpp:190` (`last_targets`), `:214` (`target_memo`), `:2376` (`image_desc_cache`/`desc_entry`) |
 
-Why the memos are the suspect: they are the only places that reach a direct `slot_images[...]`
-**without** going through `GetImage` first. Every other site that uses a stored id either re-checks
-with `is_allocated`/uid (`GetAssociatedDepth`, `TryGetImage`, `TryGetImageTouched`, the upscaler,
-camera motion, scene resolution) or is reached after a guarded `GetImage` in the same iteration, so
-it would have printed `DEAD IMAGE` — and nothing did.
+Why these and not the collector: every other site that uses a stored id either re-checks it with
+`is_allocated`/uid (`GetAssociatedDepth`, `TryGetImage`, `TryGetImageTouched`, the upscaler, camera
+motion, scene resolution) or is reached after a guarded `GetImage` in the same iteration — and would
+therefore have printed `DEAD IMAGE`. Nothing did. `FindImage`'s entry and the rasterizer's three
+memos are the only paths that index a *remembered* `ImageId` directly, and `FindImage`'s is the one
+that is by construction only consulted after a registration change.
 
-Note what this is and is not: the generation stamp the memos already check (`RegistryGeneration()`)
-changes on every register *and* unregister, so a **finished** free can never leave a memo looking
-valid. What the stamp cannot see is the window inside one lookup, and above all it does not by
-itself make the id safe to index — the aliveness test does, and it is one bitset read on a branch
-that is already taken only on a memo hit.
+Note what the generation stamp is and is not: it changes on every register *and* unregister, so it
+does mark a free — but only in one direction. `FindImage` uses a mismatch as a reason to *fall back*
+to `still_exact`, which is where the unchecked index was; the rasterizer's memos use a mismatch as a
+reason to re-resolve, which was already right. The aliveness test (one bitset read, plus a uid
+compare in `FindImage`) is what actually makes a remembered id safe to index.
 
 Verification: `xbox/tests/texture_cache_policy_test.cpp` rebuilt and run with g++ (host) — all
 checks pass; `tests/test_patches.py` unchanged and green. `texture_cache.cpp`/`.h` and
@@ -310,6 +312,28 @@ checks pass; `tests/test_patches.py` unchanged and green. `texture_cache.cpp`/`.
 compile check. **Not verified on hardware.** If it is not this, the next run prints
 `Texture cache: DEAD IMAGE id=… indexed by index slot_images at <file>:<line>` immediately before the
 same assertion, which names the site outright.
+
+### What was run locally for this build (not only in CI)
+
+Everything in this repository that can execute on Linux was compiled with `g++ 12` (`-std=c++20`)
+and run, from the trees that ship:
+
+| Suite | Command | Result |
+|---|---|---|
+| `dense_arena` | `g++ -Ixbox/graphics xbox/tests/dense_arena_lifetime_test.cpp` | `dense arena lifetime: all checks passed` |
+| `texture_cache_policy` | `g++ -Igpu/shadps4/video_core/texture_cache xbox/tests/texture_cache_policy_test.cpp` | `texture cache policy: all checks passed` |
+| `sfo_version` | `g++ -Ixbox/platform xbox/tests/sfo_version_test.cpp` | `ps4 version helpers: all checks passed` |
+| `dump_layout` | `g++ -Ixbox/platform xbox/tests/dump_layout_test.cpp xbox/platform/prepare_game.cpp` | `dump layout detection: all checks passed` |
+| `ini_file` | `g++ -Ixbox/platform xbox/tests/ini_file_test.cpp` | `bbport.ini round-trip: all checks passed` |
+| `overlay_index` | `g++ -Ixbox/platform xbox/tests/overlay_index_test.cpp` | `update overlay paths: all checks passed` |
+| Python | `pytest` on every test that does not import `ctypes.windll` (the Windows launcher/tray/FSR tests cannot) | **148 passed, 60 skipped**, 3 `test_low_vram` failures caused only by `ctypes.windll` not existing on Linux |
+| Syntax | `g++ -fsyntax-only gpu/shim/bbport_settings.cpp` and `xbox/platform/prepare_game.cpp` | clean |
+
+What cannot be run here: the UWP package itself. It needs MSVC 14.44 (or clang-cl), the Windows SDK,
+the Vulkan/DXC headers and `vulkan_dzn.dll`; the sandbox is Linux, has no Windows toolchain, and the
+hosts that would serve one are outside its network. That is why the `.appx` is built by CI and why
+`texture_cache.cpp`/`vk_rasterizer.cpp` are compile-checked only there — no emulator binary was built
+or run in this environment, and nothing here is a hardware result.
 
 ---
 

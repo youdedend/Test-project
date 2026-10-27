@@ -596,6 +596,10 @@ private:
         u32 layers = 0;
         u64 generation = ~0ULL;
         ImageId image_id{};
+        /// bbport: the uid of `image_id` when it was cached. An ImageId is a bare slot index, so
+        /// without it an entry can name a slot that has since been freed and reused by another
+        /// image (still_exact in the .cpp then reads the wrong image as if it were the cached one).
+        u64 uid = 0;
         int view_mip = -1;
         int view_slice = -1;
     };
