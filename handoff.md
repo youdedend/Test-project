@@ -563,3 +563,114 @@ Logs to look for next run: `GPU: image binding N was evicted before it was bound
 addr=... size=...` (at most 8 times). Those lines replacing the assertion mean the eviction race was
 the cause; if `slot_vector.h:225` still fires, the id in the message tells us which container and
 path, since neither `FindTexture` nor `FindView` can reach it any more.
+
+### Second cause: the collector freed images that were still held (this round)
+
+The `1.0.26300.x` run stops in the same assertion, but the free that caused it is a *different* path
+than the two-pass binding race above:
+
+```
+Texture cache: memory pressure, 4493 of 4352 MiB (critical 4672): 1 images evicted
+slot_vector.h:225 ValidateIndex: Assertion Failed!
+SlotVector invalid or freed slot index=132 capacity=2978
+STOP: GPU library assertion failed
+```
+
+`GarbageCollectImages`' `clean_up` lambda decided purely on `SafeToDownload()`, `IsTiled()` and the
+LRU age. It never asked whether the image was still in use, while `ReclaimMemoryFor` has always
+skipped `info.scene_proxy`, `usage.vo_surface`, `binding.is_bound` and `binding.is_target`. Under
+pressure (4 GB console memory) a bound render target or the video-out surface the presenter reads
+could therefore be evicted, and the rasterizer / presenter / upscaler then indexed the freed slot.
+
+The second half is that `Common::SlotId` has no generation, so even a *correctly* pinned image can be
+freed later (UnmapMemory) behind a stored id: `GetImage` on it either asserts or silently returns
+whichever image reused the slot.
+
+Fix:
+
+- `video_core/texture_cache/texture_cache_policy.h` (new, no Vulkan): `BbGpu::ImagePinState`,
+  `ImagePinned`, `GcMayFreeImage`. `clean_up` now returns `false` for a pinned candidate without
+  spending a deletion, and touches its LRU entry so the next pass is not stuck on the same entry.
+  A `pinned` count is added to the 5-second pressure line, `gc_pinned`.
+- Stale ids now carry their `image_uid`: the upscaler's `scene_color` / `ldr_target` / `ui_color` /
+  `ui_depth` are stored through `Track(slot, uid, id)` and read through `Lookup(slot, uid)`
+  (`TryGetImage(id, uid)`) or `LookupLive(id)` for ids owned by another component; every read site
+  bails out instead of indexing. `OnDraw` also drops `color`/`depth` parameters that are already
+  dead. `CameraMotion::Overlay` and `Rasterizer::ResetBindings` do the same with
+  `TryGetImage(id, 0)` / `IsImageAlive`.
+- `BB_GC_LOG_FREES=1` (UWP builds) traces every free with `id uid guest size bound target proxy vo
+  tiled gpu_modified now`, to match a next-run assertion against the image that was freed.
+
+Not changed: `TextureCache::UnmapMemory` still frees every image in the unmapped guest range, since
+the guest really did unmap them; the holders now tolerate that instead.
+
+How to verify: `xbox/tests/texture_cache_policy_test.cpp` (CI test, plain C++20, compiles with
+`g++ -std=c++20 -I gpu/shadps4/video_core/texture_cache`) pins the policy and the uid rule. On the
+console, a next log should show `pinned` in the pressure line and, with `BB_GC_LOG_FREES=1`, which
+image was freed right before any remaining assertion. **This is not confirmed until it runs on a
+Series S / X through character creation and into Central Yharnam.**
+
+### Conservative memory handling ported from GoW3 (same console family)
+
+Six changes, all either `BB_UWP`-only or a no-op on desktop:
+
+1. **Memory marks** (`texture_cache.cpp` ~1177): `trigger = limit - 1280 MiB`, `pressure = limit -
+   1024 MiB`, `critical = limit - 768 MiB` (was -1152 / -768 / -448). On UWP everything - guest
+   pages, image heaps, buffer arenas, the D3D12 driver - is committed against one app-wide limit,
+   and going over it terminates the process instead of failing an allocation, so the collector now
+   keeps 768 MiB of room instead of 448.
+2. **`BB_GC_DROP_OLD` defaults off on UWP too** (was on): dropped tiled targets cost a reload that
+   competes for the same limit. Opt in with `BB_GC_DROP_OLD=1` on either platform.
+3. **Eviction path** (`clean_up`): one `keep()` exit for every candidate that is not freed - pinned,
+   old GPU-written tiled, and any image below the pressure mark - which touches the LRU entry so the
+   next bounded scan does not walk the same unevictable images (that is what stopped the collector
+   for good before). The readback resolve before the free is `DownloadImageMemory(image_id, true)`,
+   i.e. GoW3's `ResolveReadbacks(addr, size, sync, CacheCleanup)`.
+4. **`InsertImage` = MakeRoomForImage**: three rounds over unused periods 16 s, 4 s, 2 s (64, 256,
+   1024 MiB), then `scheduler.Finish()` + `scheduler.PopPendingOperations()` and one final round
+   before the `UNREACHABLE_MSG`. `ReclaimMemoryFor` keeps its signature; the age gate moved into the
+   new private `ReclaimMemoryForUnused(addr, size, bytes, unused_seconds)`.
+5. **`Rasterizer::OnSubmit()`** calls `buffer_cache.ReleaseRetiredArenas()` under `BB_UWP`, before
+   `texture_cache.RunGarbageCollector()`, so the collector's app-memory reading already excludes the
+   released arenas. It was previously never called: retired dense arenas were never given back.
+6. **Stored ids** in `vk_temporal_upscaler.cpp` / `vk_camera_motion.cpp` resolve through
+   `TryGetImage(id, uid)` and clear the member on a null (see the section above).
+
+Verification on this machine (Linux, GCC 13): `uwp/tests/test_uwp_port_core.cpp` built with its
+platform/renderer TUs and passes (the single-TU command in section 10.4 of the old handoff does not
+link any more - the D3D12, storage, input and loader .cpp files must be given too); the six
+`xbox/tests` suites pass (228 checks); `tests/test_content.c` passes with `-std=gnu11 -D_GNU_SOURCE`.
+The UWP package itself still has to be built on Windows (`uwp/build.ps1` / `xbox.yml`).
+
+### Review of the GoW3 port: the two risks, plus fence and pin gaps
+
+- **Retired dense arenas (1a).** `BufferCache::ReleaseRetiredArenas` releases only when
+  `DenseArenaLifetime::CanRelease` holds: the 64-tick grace window since the replacement has passed,
+  the tick recorded at the replacement has been signalled (`Scheduler::IsFree` = the timeline value
+  the GPU has reached is past it) and no producer still holds an arena (`Inflight() == 0`). It is
+  called from `Rasterizer::OnSubmit`, after `DrainDrawPipe()` and after the guest submission, so
+  everything recorded before a replacement has been submitted and signalled by then. Added on top:
+  an arena with a live `dense_views` entry (a raw VkBuffer handed to descriptor sets) is never
+  erased - release is deferred and logged.
+- **`InsertImage` victims (1b).** The victim filter excluded `binding.is_bound` / `is_target` /
+  `scene_proxy` / `vo_surface`, but not the ids the rasterizer had already resolved for the draw
+  being recorded but not yet bound (pass 1 of the binding walk). Those are now held: `Rasterizer`
+  registers every id it collects (`CollectImage` -> `TextureCache::HoldCollectedImage`) and the
+  cache clears the set in `ResetBindings`, so `ReclaimMemoryForUnused` and `clean_up` both skip them
+  (`ImagePinState::collected`). This also covers what `scheduler.PopPendingOperations()` would run
+  afterwards: nothing it destroys was a victim.
+- **`scheduler.Finish()`** stays last-resort (three rounds, then Finish, then one more round) and
+  now logs `GPU: video memory full: three rounds freed N MiB, finishing the GPU for a WxH image`
+  (at most 8 times) before it fires.
+
+### Diagnostics that ship (BB_UWP)
+
+- `Texture cache: free id=.. uid=.. by=<eviction|unmap|make-room|other> guest=.. size=.. bound=..
+  target=.. proxy=.. vo=.. tiled=.. gpu_modified=.. deferred=..` - one line per free, printed from
+  `DeleteImage`, which every free passes through.
+- `Texture cache: erase id=.. (freed by=..)` - the deferred half, printed when the slot really goes.
+- `Texture cache: DEAD IMAGE id=.. indexed by GetImage|GetImageView at file:line (function)` followed
+  by `last N frees (oldest first): id(uid,reason) ...` - printed from the accessors when a freed id
+  is indexed, *before* the unmodified `slot_vector.h` assertion stops the GPU.
+  `GetImage`/`GetImageView` take a defaulted `std::source_location`, so the tag is the real call
+  site without touching a single caller.

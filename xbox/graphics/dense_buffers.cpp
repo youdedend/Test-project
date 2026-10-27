@@ -133,6 +133,25 @@ void BufferCache::ReleaseRetiredArenas() {
                 deferred += inflight != 0 ? 1 : 0;
                 return false;
             }
+            // Fence retirement (CanRelease) is: the grace window has passed since the replacement,
+            // the tick recorded then has been signalled (IsFree, i.e. the GPU is past it), and no
+            // producer holds an arena. Called from Rasterizer::OnSubmit - after DrainDrawPipe and
+            // the submit - everything recorded before the replacement has therefore been submitted
+            // and signalled. On top of that, never free an arena a DMA view still hands to a
+            // descriptor set: those views are raw VkBuffers, and a destroyed one written later
+            // would be as fatal as freeing under a running submission.
+            const Buffer* const arena = &*retired.arena;
+            if (std::any_of(dense_views.cbegin(), dense_views.cend(),
+                            [arena](const DenseView& view) { return view.arena == arena; })) {
+                if (deferred == 0) {
+                    std::printf("UWP dense GPU arena: %#llx still has a DMA view, release "
+                                "deferred\n",
+                                static_cast<unsigned long long>(retired.arena->cpu_addr));
+                    std::fflush(stdout);
+                }
+                ++deferred;
+                return false;
+            }
             std::printf("UWP dense GPU arena: %#llx, %llu MiB released\n",
                         static_cast<unsigned long long>(retired.arena->cpu_addr),
                         static_cast<unsigned long long>(retired.arena->size_bytes >> 20));

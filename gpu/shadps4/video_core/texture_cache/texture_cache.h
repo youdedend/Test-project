@@ -10,8 +10,11 @@
 
 #include <condition_variable>
 #include <mutex>
+#include <source_location>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 #include <queue>
 #include <tsl/robin_map.h>
@@ -229,15 +232,53 @@ public:
     [[nodiscard]] bool IsImageAlive(ImageId id) const noexcept {
         return slot_images.is_allocated(id);
     }
-    [[nodiscard]] Image& GetImage(ImageId id) {
+    /// bbport: `loc` is the caller's, captured by default: when `id` names a freed slot the report
+    /// printed before the (unmodified) slot_vector.h assertion says which call site held the stale
+    /// id, instead of leaving a bare "invalid or freed slot index" to reason back from. Costs one
+    /// pointer-sized argument: the report itself is a branch that never runs in a working build.
+    [[nodiscard]] Image& GetImage(ImageId id, [[maybe_unused]] const std::source_location& loc =
+                                                 std::source_location::current()) {
+#ifdef BB_UWP
+        if (!slot_images.is_allocated(id)) {
+            ReportDeadImage(id, "GetImage", loc);
+        }
+#endif
         auto& image = slot_images[id];
         TouchImage(image);
         return image;
     }
 
     /// Retrieves the image view with the specified id.
-    [[nodiscard]] ImageView& GetImageView(ImageId id) {
+    [[nodiscard]] ImageView& GetImageView(
+        ImageId id, [[maybe_unused]] const std::source_location& loc =
+                        std::source_location::current()) {
+#ifdef BB_UWP
+        if (!slot_image_views.is_allocated(id)) {
+            ReportDeadImage(id, "GetImageView", loc);
+        }
+#endif
         return slot_image_views[id];
+    }
+
+    /// bbport: ids the draw being recorded has already resolved (ImageId of a colour/depth target
+    /// or of a binding), whether or not their binding flags are set yet. The collector must not
+    /// free them: pass 2 of the binding walk re-indexes these ids. Same thread as the rasterizer,
+    /// which is what owns the flags consulted above; cleared when the draw's bindings are reset.
+    void HoldCollectedImage(ImageId id) {
+        collected_images.push_back(id);
+    }
+
+    void ClearCollectedImages() {
+        collected_images.clear();
+    }
+
+    [[nodiscard]] bool IsImageCollected(ImageId id) const noexcept {
+        for (const ImageId held : collected_images) {
+            if (held == id) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Get the associated depth stencil image if it is still valid.
@@ -408,9 +449,9 @@ private:
 
     /// Removes the image and any views/surface metas that reference it.
     /// bbport: now: at once, for an image the GPU is done with (ReclaimMemoryFor).
-    void DeleteImage(ImageId image_id, bool now = false);
+    void DeleteImage(ImageId image_id, bool now = false, const char* reason = "other");
     /// Destroys the image and its views (DeleteImage, once the GPU is done with them).
-    void EraseImage(ImageId image_id);
+    void EraseImage(ImageId image_id, const char* reason = "other");
 
     /// bbport: a new image in slot_images; out of GPU memory for it, frees unused images and
     /// tries again (ReclaimMemoryFor) rather than ending the game.
@@ -423,10 +464,12 @@ private:
     /// Touch the image in the LRU cache.
     void TouchImage(const Image& image);
 
-    void FreeImage(ImageId image_id) {
+    /// bbport: `reason` names the caller in the BB_UWP free trace ("eviction", "unmap",
+    /// "make-room", "other"); it must be a literal - the last-freed ring keeps the pointer.
+    void FreeImage(ImageId image_id, const char* reason = "other") {
         UntrackImage(image_id);
         UnregisterImage(image_id);
-        DeleteImage(image_id);
+        DeleteImage(image_id, false, reason);
     }
 
     void GarbageCollectImages();
@@ -447,12 +490,34 @@ private:
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
     u64 gc_evictions = 0, gc_downloads = 0, gc_dropped = 0; ///< bbport: pressure report
+    /// bbport: candidates the pin rules kept (bound / render target / scene proxy / video-out).
+    u64 gc_pinned = 0;
     u64 gc_kept = 0, gc_kept_bytes = 0; ///< bbport: old images the latest pass could not evict
     std::chrono::steady_clock::time_point gc_report_time{};
     /// bbport: registered images and their guest size, for the once-a-minute memory line.
     u64 image_count = 0, image_bytes = 0;
     std::chrono::steady_clock::time_point memory_report_time{};
     void ReportMemory();
+    /// bbport: a freed slot id was indexed: print the id, the call site and the last few frees,
+    /// then let the unmodified slot_vector.h assertion stop the GPU. BB_UWP only (called from the
+    /// accessors above).
+    void ReportDeadImage(ImageId id, const char* accessor, const std::source_location& loc) const;
+    /// bbport: the last 20 frees (ring), for ReportDeadImage. Static-initialised, no allocation.
+    struct FreedImage {
+        u32 id = 0;
+        u64 uid = 0;
+        const char* reason = "other";
+    };
+    static constexpr u32 FreedHistorySize = 20;
+    std::array<FreedImage, FreedHistorySize> freed_history{};
+    u32 freed_history_head = 0;
+    u32 freed_history_count = 0;
+    void RememberFreed(ImageId id, u64 uid, const char* reason);
+    /// bbport: ids resolved by the draw being recorded (HoldCollectedImage).
+    std::vector<ImageId> collected_images;
+    /// bbport: ReclaimMemoryFor with an explicit age gate - images unused for `unused_seconds`
+    /// only. MakeRoomForImage (InsertImage) lowers it round by round: 16 s, then 4 s, then 2 s.
+    u64 ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32 unused_seconds);
     /// bbport: gc_tick at each of the last 64 seconds (GarbageCollectImages).
     std::array<u64, 64> gc_tick_at_second{};
     u64 gc_second = 0;

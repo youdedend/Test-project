@@ -248,7 +248,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         }
         const auto& hint = CbExtent(cb);
         const u32 tag = 1;
-        image_id = bound_images.emplace_back(FindTargetMemoized(
+        image_id = CollectImage(FindTargetMemoized(
             desc, last_targets[cb], [&] { std::construct_at(&desc, col_buf, hint); }, tag,
             col_buf, hint));
         auto& image = texture_cache.GetImage(image_id);
@@ -261,7 +261,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         const auto& hint = DbExtent();
         auto& [image_id, desc] = db_desc;
         const u32 tag = 2;
-        image_id = bound_images.emplace_back(FindTargetMemoized(
+        image_id = CollectImage(FindTargetMemoized(
             desc, last_targets[AmdGpu::NUM_COLOR_BUFFERS],
             [&] {
                 std::construct_at(&desc, regs.depth_buffer, regs.depth_view, regs.depth_control,
@@ -284,7 +284,8 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     // bbport: scene color: a full-size RGBA16F target drawn with the scene depth.
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&
-        cb_descs[0].first && std::popcount(key.mrt_mask) <= 2) {
+        cb_descs[0].first && std::popcount(key.mrt_mask) <= 2 &&
+        texture_cache.IsImageAlive(cb_descs[0].first) && texture_cache.IsImageAlive(db_desc.first)) {
         const auto& color = texture_cache.GetImage(cb_descs[0].first);
         const auto& depth = texture_cache.GetImage(db_desc.first);
         if (color.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
@@ -1425,6 +1426,14 @@ void Rasterizer::OnSubmit() {
         fault_process_pending = false;
         buffer_cache.ProcessFaultBuffer();
     }
+#ifdef BB_UWP
+    // bbport: the dense guest-DMA arenas the buffer cache retired are only given back once no
+    // submission still reads them, and OnSubmit is where a submission has just been handed to the
+    // GPU (GoW3 releases them here too). Before the collector below, so the app memory it reads
+    // already excludes what was released - otherwise the eviction decision is made on memory that
+    // is no longer committed, and images are thrown away for nothing.
+    buffer_cache.ReleaseRetiredArenas();
+#endif
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
     runtime.TickFrame();
@@ -1882,8 +1891,15 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
 
 void Rasterizer::ResetBindings(bool is_compute) {
     for (auto& image_id : bound_images) {
-        texture_cache.GetImage(image_id).binding = {};
+        // bbport: an image bound earlier in this frame can be gone already (TextureCache::UnmapMemory
+        // frees everything in an unmapped guest range). SlotId has no generation, so clear only the
+        // slots that still exist rather than indexing a freed one.
+        if (texture_cache.IsImageAlive(image_id)) {
+            texture_cache.GetImage(image_id).binding = {};
+        }
     }
+    // The draw is over: the ids it held are no longer pinning anything.
+    texture_cache.ClearCollectedImages();
     for (const auto [buffer, offset, size, is_written] : bound_buffers) {
         const auto dst_stage = is_compute ? vk::PipelineStageFlagBits2::eComputeShader
                                           : vk::PipelineStageFlagBits2::eAllGraphics;
@@ -2475,7 +2491,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 }
             }
 
-            bound_images.emplace_back(image_id);
+            CollectImage(image_id);
 
             auto& image = texture_cache.GetImage(image_id);
             auto& image_view = texture_cache.FindTexture(
@@ -2698,7 +2714,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         texture_cache.MarkFound(entry.id);
         auto& image = texture_cache.GetImage(entry.id);
         image.binding.is_bound = 1u;
-        bound_images.emplace_back(entry.id);
+        CollectImage(entry.id);
         image.usage.texture = 1u;
         if (entry.proxy) {
             image_infos.emplace_back(VK_NULL_HANDLE, entry.view,
@@ -2865,7 +2881,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         auto* image = &texture_cache.GetImage(image_id);
         if (image->binding.needs_rebind) {
             last_targets[cb].generation = ~0ULL; // FindImage may rewrite the description
-            image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
+            image_id = CollectImage(texture_cache.FindImage(desc));
             image = &texture_cache.GetImage(image_id);
         }
         texture_cache.UpdateImage(image_id);

@@ -347,6 +347,13 @@ private:
                                     Shader::NUM_BUFFERS + Shader::NUM_DMA_BUFFERS * 5>
         buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
+    /// bbport: bound_images plus the texture cache's held set, so the collector cannot free an id
+    /// this draw resolved but has not bound yet (pass 2 re-indexes it). See ResetBindings.
+    VideoCore::ImageId CollectImage(VideoCore::ImageId id) {
+        bound_images.push_back(id);
+        texture_cache.HoldCollectedImage(id);
+        return id;
+    }
     struct BoundBuffer {
         const VideoCore::Buffer* buffer;
         u64 offset;

@@ -244,8 +244,33 @@ bool TemporalUpscaler::ReactiveOn() const {
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa;
 }
 
+void TemporalUpscaler::Track(VideoCore::ImageId& slot, u64& slot_uid, VideoCore::ImageId id) {
+    auto* image = id ? texture_cache.TryGetImage(id, 0) : nullptr;
+    slot = image ? id : VideoCore::ImageId{};
+    slot_uid = image ? image->image_uid : 0;
+}
+
+VideoCore::Image* TemporalUpscaler::Lookup(VideoCore::ImageId slot, u64 slot_uid) {
+    auto* image = slot ? texture_cache.TryGetImage(slot, slot_uid) : nullptr;
+    if (image) {
+        // GetImage touched the LRU entry on every read; resolve through TryGetImage (no touch) to
+        // be able to see the uid, so touch here to keep eviction order as it was. Skip when the id
+        // is gone: the caller handles the null.
+        texture_cache.TouchImage(*image);
+    }
+    return image;
+}
+
+VideoCore::Image* TemporalUpscaler::LookupLive(VideoCore::ImageId id) {
+    auto* image = id ? texture_cache.TryGetImage(id, 0) : nullptr;
+    if (image) {
+        texture_cache.TouchImage(*image);
+    }
+    return image;
+}
+
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
-    scene_color = color;
+    Track(scene_color, scene_color_uid, color);
 }
 
 namespace {
@@ -345,7 +370,9 @@ bool TemporalUpscaler::OnFrameStart() {
     frame_gen_captured = false;
     hudless_pending = false;
     ldr_target = {};
+    ldr_target_uid = 0;
     scene_color = {};
+    scene_color_uid = 0;
     snapshot_taken = false;
     opaque_valid = false;
     mask_ready = false;
@@ -931,7 +958,11 @@ void TemporalUpscaler::OnBlendedSceneDraw() {
         return;
     }
     snapshot_taken = true;
-    auto& color = texture_cache.GetImage(scene_color);
+    auto* color_image = Lookup(scene_color, scene_color_uid);
+    if (!color_image) {
+        return; // the scene image was evicted; nothing to snapshot
+    }
+    auto& color = *color_image;
     // With a live preset the scene is in the reduced proxy: the mask and the FSR context
     // must use that size, or each frame would recreate the context (native <-> reduced).
     const bool reduced = ReducedScene(color);
@@ -1002,7 +1033,11 @@ void TemporalUpscaler::OnSceneComposite() {
     if (!opaque_valid || mask_ready || failed || !ReactiveOn()) {
         return;
     }
-    auto& color = texture_cache.GetImage(scene_color);
+    auto* color_image = Lookup(scene_color, scene_color_uid);
+    if (!color_image) {
+        return; // the scene image was evicted
+    }
+    auto& color = *color_image;
     const bool reduced = ReducedScene(color);
     const auto scene = Scaled() ? SceneSize(color.info.size.width, color.info.size.height)
                                 : std::array<u32, 2>{color.info.size.width, color.info.size.height};
@@ -1107,8 +1142,15 @@ void TemporalUpscaler::Run() {
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
     }
-    auto& color = texture_cache.GetImage(scene_color);
-    auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    // bbport: either image may have been evicted since the draw that named it: skip the frame
+    // instead of indexing a freed slot (slot_vector.h ValidateIndex).
+    auto* color_image = Lookup(scene_color, scene_color_uid);
+    auto* depth_image = LookupLive(camera_motion.Depth());
+    if (!color_image || !depth_image) {
+        return;
+    }
+    auto& color = *color_image;
+    auto& depth = *depth_image;
     const u32 ow = color.info.size.width, oh = color.info.size.height;
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
@@ -1344,7 +1386,11 @@ void TemporalUpscaler::CaptureFrameGen() {
     if (!camera_motion.Depth()) {
         return;
     }
-    auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    auto* depth_image = LookupLive(camera_motion.Depth());
+    if (!depth_image) {
+        return; // the depth was evicted (see Lookup)
+    }
+    auto& depth = *depth_image;
     // Where Run and RunScaled read the scene: the reduced proxies (live scene resolution), the
     // top-left of the guest targets (startup resolution patch), or all of them.
     u32 w = depth.info.size.width, h = depth.info.size.height;
@@ -1403,7 +1449,11 @@ void TemporalUpscaler::CaptureHudless(VideoCore::ImageId color) {
     if (!frame_generator || !frame_generator->Wanted() || !HudlessWanted() || !color) {
         return;
     }
-    auto& image = texture_cache.GetImage(color);
+    auto* color_image = LookupLive(color);
+    if (!color_image) {
+        return; // the UI target was evicted before its picture was taken
+    }
+    auto& image = *color_image;
     if (!Rgba8(image.info.pixel_format)) {
         return;
     }
@@ -1509,17 +1559,34 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
     if (ui_phase || !camera_motion.Depth()) {
         return;
     }
-    const auto& image = texture_cache.GetImage(color);
-    const auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    auto* depth_image = LookupLive(camera_motion.Depth());
+    if (!depth_image) {
+        return;
+    }
+    auto* color_image = LookupLive(color);
+    if (!color_image) {
+        return;
+    }
+    const auto& image = *color_image;
+    const auto& depth = *depth_image;
     if (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
-        ldr_target = color;
+        Track(ldr_target, ldr_target_uid, color);
     }
 }
 
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
+    // bbport: these name the draw being recorded, but the texture cache can already have evicted
+    // one of them (memory-pressure GC, UnmapMemory). Drop the stale id so the checks below take the
+    // "no target" path instead of indexing a freed slot.
+    if (color && !LookupLive(color)) {
+        color = {};
+    }
+    if (depth && !LookupLive(depth)) {
+        depth = {};
+    }
     if (!Scaled() && vs_hash == ui_trigger_vs) {
         // The UI starts: its target holds the finished picture without UI (frame generation).
         done_this_frame = true;
@@ -1539,12 +1606,16 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     // (PR #62).
     if (ui_phase && !color && depth && depth != ui_depth && ui_color) {
         const auto& depth_image = texture_cache.GetImage(depth);
-        const auto& ui_target = texture_cache.GetImage(ui_color);
+        auto* ui_target_image = Lookup(ui_color, ui_color_uid);
+        if (!ui_target_image) {
+            return; // the UI target was evicted
+        }
+        const auto& ui_target = *ui_target_image;
         if (depth_image.info.size.width == ui_target.info.size.width &&
             depth_image.info.size.height == ui_target.info.size.height) {
             EnsureUiResources(ui_width, ui_height, ui_format, depth_image.info.pixel_format);
             PrepareUiDepth(depth);
-            ui_depth = depth;
+            Track(ui_depth, ui_depth_uid, depth);
         }
         return;
     }
@@ -1557,7 +1628,7 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
             EnsureUiResources(ui_width, ui_height, ui_format,
                               texture_cache.GetImage(depth).info.pixel_format);
             PrepareUiDepth(depth);
-            ui_depth = depth;
+            Track(ui_depth, ui_depth_uid, depth);
         }
         return;
     }
@@ -1652,10 +1723,13 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
         (ui_depth_format == vk::Format::eD32SfloatS8Uint ? vk::ImageAspectFlagBits::eStencil
                                                       : vk::ImageAspectFlags{});
     // Copy depth if blit is supported; otherwise just clear it (UI depth test still works).
-    const bool copy = depth_id && depth_blit &&
-        texture_cache.GetImage(depth_id).info.pixel_format == ui_depth_format;
+    // bbport: the source depth belongs to the draw that asked for this, but it can already have
+    // been evicted; treat that like "no depth to copy" (the UI depth is cleared instead).
+    auto* source_depth = LookupLive(depth_id);
+    const bool copy = source_depth != nullptr && depth_blit &&
+        source_depth->info.pixel_format == ui_depth_format;
     if (copy) {
-        runtime.Transit(&texture_cache.GetImage(depth_id), vk::ImageLayout::eTransferSrcOptimal,
+        runtime.Transit(source_depth, vk::ImageLayout::eTransferSrcOptimal,
                         vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
         runtime.FlushBarriers();
     }
@@ -1678,7 +1752,7 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
         barrier.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
         barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
         cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
-        const auto& source = texture_cache.GetImage(depth_id);
+        const auto& source = *source_depth; // validated above
         const vk::ImageBlit region{
             .srcSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
             .srcOffsets = std::array{vk::Offset3D{0, 0, 0},
@@ -1708,8 +1782,13 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->Mark(0xF5A1'0000ull, [] { return std::string{"upscaler RunUiOnly"}; });
     }
-    const auto& color = texture_cache.GetImage(color_id);
-    const auto depth_format = depth_id ? texture_cache.GetImage(depth_id).info.pixel_format
+    auto* color_image = LookupLive(color_id);
+    if (!color_image) {
+        return; // evicted: nothing to compose
+    }
+    const auto& color = *color_image;
+    auto* depth_image = LookupLive(depth_id);
+    const auto depth_format = depth_image ? depth_image->info.pixel_format
                                       : vk::Format::eD32SfloatS8Uint;
     EnsureUiResources(target_width, target_height, color.info.pixel_format, depth_format);
     PrepareUiDepth(depth_id);
@@ -1730,7 +1809,7 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
         source_width = render_width;
         source_height = render_height;
     } else {
-        runtime.Transit(&texture_cache.GetImage(color_id), vk::ImageLayout::eTransferSrcOptimal,
+        runtime.Transit(color_image, vk::ImageLayout::eTransferSrcOptimal,
                         vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
         runtime.FlushBarriers();
     }
@@ -1785,8 +1864,8 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
     reset = true; // returning to 3D must not reuse history from before a menu/loading screen
     done_this_frame = ui_phase = true;
-    ui_color = color_id;
-    ui_depth = depth_id;
+    Track(ui_color, ui_color_uid, color_id);
+    Track(ui_depth, ui_depth_uid, depth_id);
 }
 
 void TemporalUpscaler::RunScaled() {
@@ -1796,8 +1875,14 @@ void TemporalUpscaler::RunScaled() {
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
     }
-    auto& color = texture_cache.GetImage(ldr_target);
-    auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    // Named *_target: this function already declares vk::Image color_image/depth_image below.
+    auto* color_target = Lookup(ldr_target, ldr_target_uid);
+    auto* depth_target = LookupLive(camera_motion.Depth());
+    if (!color_target || !depth_target) {
+        return; // an evicted target: skip this frame rather than index a freed slot
+    }
+    auto& color = *color_target;
+    auto& depth = *depth_target;
     // The scene fills the top-left w x h of its targets (iw x ih, aligned by the game).
     const u32 iw = color.info.size.width, ih = color.info.size.height;
     const auto [w, h] = SceneSize(iw, ih);
@@ -1959,7 +2044,9 @@ void TemporalUpscaler::RunScaled() {
         if (ok4) {
             ui_phase = true;
             ui_color = ldr_target;
+            ui_color_uid = ldr_target_uid;
             ui_depth = camera_motion.Depth();
+            ui_depth_uid = 0; // owned by CameraMotion: liveness checked on use
         }
         return;
     }
@@ -2033,7 +2120,9 @@ void TemporalUpscaler::RunScaled() {
     if (ok) {
         ui_phase = true;
         ui_color = ldr_target;
+        ui_color_uid = ldr_target_uid;
         ui_depth = camera_motion.Depth();
+        ui_depth_uid = 0; // owned by CameraMotion: liveness checked on use
     }
 }
 
@@ -2067,7 +2156,11 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
         return true;
     }
-    const auto& image = texture_cache.GetImage(color);
+    auto* color_image = LookupLive(color);
+    if (!color_image) {
+        return false; // evicted: nothing to redirect
+    }
+    const auto& image = *color_image;
     const VAddr address = image.info.guest_address;
     if (!FrameCapture::IsDisplayBuffer(address)) {
         display_redirect = false;

@@ -23,6 +23,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/host_compatibility.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/texture_cache/texture_cache_policy.h"
 #include "video_core/texture_cache/tile_manager.h"
 #include <vk_mem_alloc.h>
 #ifdef BB_UWP
@@ -247,7 +248,7 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     ForEachImageInRegion(cpu_addr, size, [&](ImageId id, Image&) { deleted_images.push_back(id); });
     for (const ImageId id : deleted_images) {
         // TODO: Download image data back to host.
-        FreeImage(id);
+        FreeImage(id, "unmap");
     }
 }
 
@@ -1173,9 +1174,15 @@ void TextureCache::GarbageCollectImages() {
     }();
     const u64 app_budget = test_budget ? std::min(test_budget, bb_uwp_app_memory_limit())
                                        : bb_uwp_app_memory_limit();
-    trigger_gc_memory = app_budget > 1152_MB ? app_budget - 1152_MB : app_budget / 2;
-    pressure_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget * 3 / 4;
-    critical_gc_memory = app_budget > 448_MB ? app_budget - 448_MB : app_budget * 7 / 8;
+    // bbport: headroom kept below the app limit, after GoW3 on the same console family
+    // (-1280 / -1024 / -768 MiB; this port used -1152 / -768 / -448). UWP memory is committed
+    // against one app-wide limit shared by guest pages, image heaps, buffer arenas and the D3D12
+    // driver, and an allocation that pushes the process over the limit is terminated by the
+    // platform rather than failing a vkAllocateMemory: 768 MiB is the room the next area's
+    // textures, render targets and arenas need between the critical mark and that limit.
+    trigger_gc_memory = app_budget > 1280_MB ? app_budget - 1280_MB : app_budget / 2;
+    pressure_gc_memory = app_budget > 1024_MB ? app_budget - 1024_MB : app_budget * 3 / 4;
+    critical_gc_memory = app_budget > 768_MB ? app_budget - 768_MB : app_budget * 7 / 8;
 #else
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
@@ -1289,6 +1296,37 @@ void TextureCache::GarbageCollectImages() {
             return true;
         }
         auto& image = slot_images[image_id];
+        // bbport: a candidate this pass will not free (GoW3's EvictImage returning false: tiled or
+        // protected). Touch its LRU entry before leaving, or the next pass starts on the same
+        // unevictable images and the bounded scan (visited, num_deletions) runs out before it
+        // reaches one that can go - the oldest ten being render targets stopped the collector for
+        // good. Touched, `below_tick` no longer selects them.
+        const auto keep = [&](bool tiled_written_back) {
+            if (tiled_written_back) {
+                ++gc_kept;
+                gc_kept_bytes += image.info.guest_size;
+            }
+            lru_cache.Touch(image.lru_id, gc_tick);
+            return false;
+        };
+        // bbport: never free what something still holds. SlotId has no generation, so the rasterizer
+        // (bound_images / db_desc / last_targets), the presenter (video-out surfaces) and the
+        // upscaler (scene_color / ldr_target / ui_color / ui_depth) would index a freed slot and
+        // trip slot_vector.h ValidateIndex, or read whichever image reused it. ReclaimMemoryFor has
+        // always applied these checks; this pass did not, which is how a bound render target or a
+        // live display surface could be evicted under pressure. Pinned images cost no deletions.
+        {
+            BbGpu::ImagePinState pin;
+            pin.bound = image.binding.is_bound;
+            pin.target = image.binding.is_target;
+            pin.scene_proxy = image.scene_proxy;
+            pin.vo_surface = image.usage.vo_surface;
+            pin.collected = IsImageCollected(image_id);
+            if (!BbGpu::GcMayFreeImage(pin, /*age_allows_free=*/true)) {
+                ++gc_pinned;
+                return keep(/*tiled_written_back=*/false);
+            }
+        }
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
         // bbport: images that cannot go now (GPU-written: their contents exist only here, and
@@ -1298,40 +1336,43 @@ void TextureCache::GarbageCollectImages() {
         // card stayed over its critical mark with 0 evictions until ErrorOutOfDeviceMemory).
         // Past the critical mark, one unused for a minute went all the same, unwritten (render
         // targets of an area left behind).
-        // bbport: not by default any more (BB_GC_DROP_OLD=1): dropped, a render target the game
-        // still read lost its contents (black screen with sound on entering the Hunter's Dream,
-        // 6 GB cards). Kept, an image past the VRAM budget goes to system memory (UniqueImage).
+        // bbport: off by default everywhere, opt in with BB_GC_DROP_OLD=1. Dropped, a render
+        // target the game still read lost its contents (black screen with sound on entering the
+        // Hunter's Dream, 6 GB cards); kept, an image past the VRAM budget goes to system memory
+        // (UniqueImage). UWP used to default it on: GoW3 on the same console family has no
+        // tiled-drop path at all, and on the console a dropped target costs a reload that then
+        // competes for the same app memory limit the drop was meant to relieve.
         static const bool drop_old = [] {
             const char* env = std::getenv("BB_GC_DROP_OLD");
-#ifdef BB_UWP
-            return !env || env[0] != '0';
-#else
             return env && env[0] == '1';
-#endif
         }();
         const bool drop = drop_old && tiled && download && aggresive &&
                           image.lru_touched_tick < minute_tick;
-        if (!drop && ((tiled && download) || (download && !pressured))) {
+        if (!drop) {
             if (tiled && download) {
-                ++gc_kept;
-                gc_kept_bytes += image.info.guest_size;
+                return keep(/*tiled_written_back=*/true);
             }
-            lru_cache.Touch(image.lru_id, gc_tick);
-            return false;
+            if (download && !pressured) {
+                return keep(/*tiled_written_back=*/false);
+            }
         }
         --num_deletions;
         if (drop) {
             ++gc_dropped;
         } else if (download) {
-            // bbport: synchronously, while the image still protects its pages. A deferred
+            // bbport: the readback resolve before the free (GoW3's
+            // ResolveReadbacks(guest_address, guest_size, sync, CacheCleanup) on the image's guest
+            // range). Synchronously, while the image still protects its pages: a deferred
             // write-back landed after FreeImage had unprotected them, over whatever the game
-            // had meanwhile stored there (e.g. its heap after unloading an area).
+            // had meanwhile stored there (e.g. its heap after unloading an area). Never through
+            // the deferred queue: DownloadImageMemory(.., true) finishes the GPU and writes the
+            // guest bytes back itself.
             DownloadImageMemory(image_id, true);
             ++gc_downloads;
         }
         ++gc_evictions;
         evicted_any = true;
-        FreeImage(image_id);
+        FreeImage(image_id, "eviction");
         if (total_used_memory < critical_gc_memory) {
             if (aggresive) {
                 num_deletions >>= 2;
@@ -1368,15 +1409,16 @@ void TextureCache::GarbageCollectImages() {
         if (now - gc_report_time >= std::chrono::seconds(5)) {
             std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
                         "%llu images evicted, %llu written back since the last report; "
-                        "%llu old GPU-written tiled images kept (%llu MiB), %llu dropped\n",
+                        "%llu old GPU-written tiled images kept (%llu MiB), %llu dropped, "
+                        "%llu pinned\n",
                         (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads,
                         (unsigned long long)gc_kept, (unsigned long long)(gc_kept_bytes >> 20),
-                        (unsigned long long)gc_dropped);
+                        (unsigned long long)gc_dropped, (unsigned long long)gc_pinned);
             gc_report_time = now;
-            gc_evictions = gc_downloads = gc_dropped = 0;
+            gc_evictions = gc_downloads = gc_dropped = gc_pinned = 0;
         }
     }
     }
@@ -1453,21 +1495,49 @@ ImageId TextureCache::InsertImage(const ImageInfo& info) {
     // bbport: the GPU has no memory left for it, past the driver's budget too (4 GB cards, on
     // entering a big area or the Hunter's Dream). Unused textures go at once, more each round,
     // before the image is given up on: a moment's stutter instead of the game ending.
+    // Three rounds after GoW3's MakeRoomForImage, each willing to take younger images than the
+    // last (unused 16 s, then 4 s, then 2 s) and more of them; a texture the area just uploaded
+    // is only a candidate in the last round.
+    static constexpr u32 round_unused_seconds[3] = {16, 4, 2};
+    static constexpr u64 round_want_bytes[3] = {u64(64) << 20, u64(256) << 20, u64(1024) << 20};
+    const auto report_made_room = [&](u64 freed, const char* how) {
+        static int reported = 0;
+        if (reported < 8) {
+            ++reported;
+            std::printf("GPU: video memory full: %llu MiB of unused textures freed%s for a "
+                        "new %ux%u image\n",
+                        (unsigned long long)(freed >> 20), how, info.size.width, info.size.height);
+            std::fflush(stdout);
+        }
+    };
     u64 freed = 0;
-    for (u64 want : {u64(64) << 20, u64(256) << 20, u64(1024) << 20}) {
-        want = std::max<u64>(want, u64(info.guest_size) * 2);
-        freed += ReclaimMemoryFor(info.guest_address, info.guest_size, want);
+    for (u32 round = 0; round < 3; ++round) {
+        const u64 want = std::max<u64>(round_want_bytes[round], u64(info.guest_size) * 2);
+        freed += ReclaimMemoryForUnused(info.guest_address, info.guest_size, want,
+                                        round_unused_seconds[round]);
         if (slot_images[image_id].RetryAllocation()) {
-            static int reported = 0;
-            if (reported < 8) {
-                ++reported;
-                std::printf("GPU: video memory full: %llu MiB of unused textures freed for a "
-                            "new %ux%u image\n",
-                            (unsigned long long)(freed >> 20), info.size.width, info.size.height);
-                std::fflush(stdout);
-            }
+            report_made_room(freed, "");
             return image_id;
         }
+    }
+    // Last resort, after GoW3: finish the GPU (every submitted command buffer done, every
+    // deferred operation run) and try once more. Reached only when the alternative below - ending
+    // the game - is the only other option, so a submit from inside a draw's binding pass is the
+    // cheaper risk here.
+    static u32 finish_reports = 0;
+    if (finish_reports < 8) {
+        ++finish_reports;
+        std::printf("GPU: video memory full: three rounds freed %llu MiB, finishing the GPU for a "
+                    "%ux%u image\n",
+                    (unsigned long long)(freed >> 20), info.size.width, info.size.height);
+        std::fflush(stdout);
+    }
+    scheduler.Finish();
+    scheduler.PopPendingOperations();
+    freed += ReclaimMemoryForUnused(info.guest_address, info.guest_size, u64(1024) << 20, 2);
+    if (slot_images[image_id].RetryAllocation()) {
+        report_made_room(freed, " after finishing the GPU");
+        return image_id;
     }
     std::printf("GPU: video memory full: no memory for a %ux%u image after freeing %llu MiB of "
                 "unused textures\n",
@@ -1478,16 +1548,48 @@ ImageId TextureCache::InsertImage(const ImageInfo& info) {
     return image_id;
 }
 
+void TextureCache::RememberFreed(ImageId id, u64 uid, const char* reason) {
+    freed_history[freed_history_head] = {id.index, uid, reason};
+    freed_history_head = (freed_history_head + 1) % FreedHistorySize;
+    if (freed_history_count < FreedHistorySize) {
+        ++freed_history_count;
+    }
+}
+
+void TextureCache::ReportDeadImage(ImageId id, const char* accessor,
+                                   const std::source_location& loc) const {
+    // Printed before the (unmodified) slot_vector.h assertion, which still stops the GPU: this only
+    // says which id was indexed, from where, and what had been freed just before.
+    std::printf("Texture cache: DEAD IMAGE id=%u indexed by %s at %s:%u (%s)\n", id.index,
+                accessor, loc.file_name(), static_cast<unsigned>(loc.line()),
+                loc.function_name());
+    std::printf("Texture cache: last %u frees (oldest first):", freed_history_count);
+    for (u32 i = 0; i < freed_history_count; ++i) {
+        const u32 at = (freed_history_head + FreedHistorySize - freed_history_count + i) %
+                       FreedHistorySize;
+        const FreedImage& freed = freed_history[at];
+        std::printf(" %u(uid %llu,%s)", freed.id, (unsigned long long)freed.uid, freed.reason);
+    }
+    std::printf("\n");
+    std::fflush(stdout);
+}
+
 u64 TextureCache::ReclaimMemoryFor(VAddr addr, size_t size, u64 bytes) {
-    // Unused for 2 s: in no command buffer still being recorded, and with WaitSubmitted in
-    // none the GPU is still running, so destroying it at once is safe. Images holding GPU
-    // results (render targets) stay: writing them back here would stall in the middle of a
-    // draw; textures are uploaded again from guest memory when next used.
+    return ReclaimMemoryForUnused(addr, size, bytes, 2);
+}
+
+u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes,
+                                         u32 unused_seconds) {
+    // Unused for `unused_seconds` (2 s from ReclaimMemory, 16/4/2 from InsertImage's rounds): in
+    // no command buffer still being recorded, and with WaitSubmitted in none the GPU is still
+    // running, so destroying it at once is safe. Images holding GPU results (render targets)
+    // stay: writing them back here would stall in the middle of a draw; textures are uploaded
+    // again from guest memory when next used.
     const u64 second = u64(std::chrono::duration_cast<std::chrono::seconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
                                .count());
-    const u64 unused_tick =
-        std::min(gc_tick, gc_tick_at_second[(second - 2) % gc_tick_at_second.size()]);
+    const u64 unused_tick = std::min(
+        gc_tick, gc_tick_at_second[(second - unused_seconds) % gc_tick_at_second.size()]);
     boost::container::small_vector<ImageId, 64> victims;
     u64 freed = 0;
     lru_cache.ForEachItemBelow(unused_tick, [&](ImageId image_id) {
@@ -1496,10 +1598,14 @@ u64 TextureCache::ReclaimMemoryFor(VAddr addr, size_t size, u64 bytes) {
         }
         const Image& image = slot_images[image_id];
         // No backing (an undefined format): it holds no memory.
+        // bbport: IsImageCollected: the draw being recorded already resolved this id (a colour or
+        // depth target, a texture binding) but has not set its binding flags yet, so the checks
+        // below cannot see it. Freed here, pass 2 re-indexes a dead slot.
         if (!image.backing || image.lru_touched_tick >= unused_tick ||
             True(image.flags & ImageFlagBits::GpuModified) ||
             image.scene_proxy || image.usage.vo_surface || image.binding.is_bound ||
-            image.binding.is_target || image.allocation_failed || image.Overlaps(addr, size)) {
+            image.binding.is_target || image.allocation_failed || IsImageCollected(image_id) ||
+            image.Overlaps(addr, size)) {
             return false;
         }
         victims.push_back(image_id);
@@ -1513,16 +1619,32 @@ u64 TextureCache::ReclaimMemoryFor(VAddr addr, size_t size, u64 bytes) {
     for (const ImageId image_id : victims) {
         UntrackImage(image_id);
         UnregisterImage(image_id);
-        DeleteImage(image_id, true);
+        DeleteImage(image_id, true, "make-room");
         ++gc_evictions;
     }
     return freed;
 }
 
-void TextureCache::DeleteImage(ImageId image_id, bool now) {
+void TextureCache::DeleteImage(ImageId image_id, bool now, const char* reason) {
     Image& image = slot_images[image_id];
     ASSERT_MSG(!image.IsTracked(), "Image was not untracked");
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered), "Image was not unregistered");
+    // bbport: one line per freed image, on UWP only. This is the single point every free passes
+    // through (FreeImage and ReclaimMemoryFor both land here), so a "slot_vector.h ValidateIndex"
+    // stop can be matched against the image that was freed and who freed it. One printf per
+    // freed image - a handful a second on the console - is cheap enough to ship.
+    RememberFreed(image_id, image.image_uid, reason);
+#ifdef BB_UWP
+    std::printf("Texture cache: free id=%u uid=%llu by=%s guest=%#llx size=%llu bound=%u target=%u "
+                "proxy=%u vo=%u tiled=%u gpu_modified=%u deferred=%u\n",
+                image_id.index, (unsigned long long)image.image_uid, reason,
+                (unsigned long long)image.info.guest_address,
+                (unsigned long long)image.info.guest_size, unsigned(image.binding.is_bound),
+                unsigned(image.binding.is_target), unsigned(image.scene_proxy),
+                unsigned(image.usage.vo_surface), unsigned(image.info.IsTiled()),
+                unsigned(True(image.flags & ImageFlagBits::GpuModified)), unsigned(!now));
+    std::fflush(stdout);
+#endif
 
     // Remove any registered meta areas.
     const auto& meta_info = image.info.meta_info;
@@ -1557,19 +1679,25 @@ void TextureCache::DeleteImage(ImageId image_id, bool now) {
         }
         image.backing_images.clear();
         image.backing = nullptr;
-        scheduler.DeferOperation([this, image_id, views = std::move(deferred_views)] {
+        scheduler.DeferOperation([this, image_id, reason, views = std::move(deferred_views)] {
             for (const ImageViewId view_id : views) {
                 slot_image_views.erase(view_id);
             }
-            EraseImage(image_id);
+            EraseImage(image_id, reason);
         });
         return;
     }
-    scheduler.DeferOperation([this, image_id] { EraseImage(image_id); });
+    scheduler.DeferOperation([this, image_id, reason] { EraseImage(image_id, reason); });
 }
 
-void TextureCache::EraseImage(ImageId image_id) {
+void TextureCache::EraseImage(ImageId image_id, const char* reason) {
     Image& image = slot_images[image_id];
+    // The slot really goes away here; DeleteImage logged the decision (and the reason), this marks
+    // the point after which the id is dead, which is what a later stray read trips over.
+#ifdef BB_UWP
+    std::printf("Texture cache: erase id=%u (freed by=%s)\n", image_id.index, reason);
+    std::fflush(stdout);
+#endif
     for (auto& backing : image.backing_images) {
         for (const ImageViewId image_view_id : backing.image_view_ids) {
             slot_image_views.erase(image_view_id);

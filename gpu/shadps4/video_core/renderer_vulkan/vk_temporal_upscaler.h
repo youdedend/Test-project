@@ -145,6 +145,21 @@ private:
     std::array<ViewEntry, 6> view_cache{};
     u64 view_uses = 0;
 
+    /// bbport: the ids below outlive the images they name. Common::SlotId carries no generation, so
+    /// once the texture cache frees an image (eviction under memory pressure, UnmapMemory) the
+    /// stored index either trips slot_vector.h ValidateIndex and stops the GPU, or silently reads
+    /// whichever image reused the slot. Every stored id is therefore paired with the image_uid it
+    /// had when it was stored, and resolved through TryGetImage(id, uid): a mismatch means the
+    /// image is gone and the work for it is skipped.
+    /// Stores `id` in `slot` together with its current uid in `slot_uid` (both cleared when the
+    /// image is not live right now).
+    void Track(VideoCore::ImageId& slot, u64& slot_uid, VideoCore::ImageId id);
+    /// The image `slot` still refers to, or nullptr when it was freed (uid mismatch or erased).
+    [[nodiscard]] VideoCore::Image* Lookup(VideoCore::ImageId slot, u64 slot_uid);
+    /// An id owned by another component (CameraMotion, a draw's parameters): liveness only, since
+    /// its uid is not available here.
+    [[nodiscard]] VideoCore::Image* LookupLive(VideoCore::ImageId id);
+
     void Run();
     /// The scene depth and the motion vectors for frame generation (also with the upscaler off).
     void CaptureFrameGen();
@@ -216,6 +231,7 @@ private:
     bool hudless_pending = false;    ///< the UI started; its picture is taken at its next draw
     u64 trigger_hash = 0x9a9cf8a9;
     VideoCore::ImageId scene_color{};
+    u64 scene_color_uid = 0;
     bool done_this_frame = false;
     u32 preset_file_frames = 0; ///< BB_PRESET_FILE polling
     int applied_output = -1;
@@ -235,6 +251,9 @@ private:
     u64 ui_trigger_vs = 0x34e8a281;
     VideoCore::ImageId ldr_target{};
     VideoCore::ImageId ui_color{}, ui_depth{};
+    /// bbport: the uids of ldr_target / ui_color / ui_depth when they were stored (see Track/Lookup).
+    u64 ldr_target_uid = 0;
+    u64 ui_color_uid = 0, ui_depth_uid = 0;
     bool ui_phase = false;         ///< from the upscale to the next display pass
     bool display_redirect = false; ///< the display pass of an upscaled frame
     bool ui_read_barrier = false;
