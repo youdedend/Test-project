@@ -251,22 +251,13 @@ void TemporalUpscaler::Track(VideoCore::ImageId& slot, u64& slot_uid, VideoCore:
 }
 
 VideoCore::Image* TemporalUpscaler::Lookup(VideoCore::ImageId slot, u64 slot_uid) {
-    auto* image = slot ? texture_cache.TryGetImage(slot, slot_uid) : nullptr;
-    if (image) {
-        // GetImage touched the LRU entry on every read; resolve through TryGetImage (no touch) to
-        // be able to see the uid, so touch here to keep eviction order as it was. Skip when the id
-        // is gone: the caller handles the null.
-        texture_cache.TouchImage(*image);
-    }
-    return image;
+    // TryGetImageTouched, not GetImage: the uid has to be checked as well, and the LRU touch is what
+    // keeps eviction order as it was when this read through GetImage.
+    return slot ? texture_cache.TryGetImageTouched(slot, slot_uid) : nullptr;
 }
 
 VideoCore::Image* TemporalUpscaler::LookupLive(VideoCore::ImageId id) {
-    auto* image = id ? texture_cache.TryGetImage(id, 0) : nullptr;
-    if (image) {
-        texture_cache.TouchImage(*image);
-    }
-    return image;
+    return id ? texture_cache.TryGetImageTouched(id, 0) : nullptr;
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {

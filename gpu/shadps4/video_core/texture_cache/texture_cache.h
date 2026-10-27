@@ -224,6 +224,16 @@ public:
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }
+    /// bbport: TryGetImage plus the LRU touch GetImage does, so a holder that only re-reads an id it
+    /// stored earlier (the upscaler, camera motion) keeps it as fresh as the old GetImage call did.
+    /// Nullptr when the slot is free or its uid no longer matches - the caller skips its work.
+    [[nodiscard]] Image* TryGetImageTouched(ImageId id, u64 uid) {
+        Image* image = TryGetImage(id, uid);
+        if (image != nullptr) {
+            TouchImage(*image);
+        }
+        return image;
+    }
     /// bbport: false once the image's slot has been freed. SlotId is a bare index without a
     /// generation, so a stale id either trips slot_vector.h ValidateIndex ("invalid or freed slot
     /// index", which stops the GPU) or silently aliases whatever image takes the slot next. Callers

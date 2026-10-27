@@ -337,15 +337,13 @@ void CameraMotion::Overlay(VideoCore::ImageId frame) {
     // bbport: depth_id and frame are ids from the G-buffer/display passes; the texture cache can
     // have freed either before this runs. SlotId has no generation, so index only what is live
     // (TryGetImage with uid 0 is a liveness check) instead of tripping slot_vector.h ValidateIndex.
-    auto* depth_image = texture_cache.TryGetImage(depth_id, 0);
-    auto* color_image = texture_cache.TryGetImage(frame, 0);
+    auto* depth_image = texture_cache.TryGetImageTouched(depth_id, 0);
+    auto* color_image = texture_cache.TryGetImageTouched(frame, 0);
     if (depth_image == nullptr || color_image == nullptr) {
         depth_id = {};
         InvalidateHistory();
         return;
     }
-    texture_cache.TouchImage(*depth_image); // GetImage used to keep both LRU entries fresh
-    texture_cache.TouchImage(*color_image);
     auto& depth = *depth_image;
     auto& color = *color_image;
     const auto depth_format = depth.info.pixel_format;
