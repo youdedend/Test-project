@@ -179,7 +179,8 @@ jobs:
         # destroy), the PS4 software-version helpers (CONTENT_ID -> 01.09, APP_TYPE, version
         # ordering), dump layout detection (merged / split / base-only plus the patch folder that
         # gets picked), the bbport.ini round-trip behind "[dump] patch_path" and the update-overlay
-        # path rules decide crash safety and which dump is booted, so they are tested here.
+        # path rules decide crash safety and which dump is booted, and the swap page codec decides
+        # whether a page returns from disk intact, so they are tested here.
         # prepare_game.cpp is pure C++ apart from four file hooks, so the layout test links it
         # against a std::filesystem stand-in and exercises the code that actually ships.
         run: |
@@ -194,7 +195,7 @@ jobs:
             # slot_vector.h ValidateIndex or reads whichever image reused the slot.
             @{ name = 'texture_cache_policy'; include = 'gpu/shadps4/video_core/texture_cache'; sources = @('xbox\tests\texture_cache_policy_test.cpp') },
             # The swap page codec: the console refused further swap pages at 1,171 MiB
-            # (docs/hardware-test-23), so pages are stored compressed. A codec bug would corrupt
+            # (docs/hardware-test-24), so pages are stored compressed. A codec bug would corrupt
             # guest memory, so every shape of page the pager sees is round-tripped here, including
             # the malformed inputs the decoder must refuse rather than overrun.
             @{ name = 'swap_codec'; include = 'xbox/platform'; sources = @('xbox\tests\swap_codec_test.cpp') },

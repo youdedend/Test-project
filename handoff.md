@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `4165722` — *fix(memory): 1.5 GiB swap ceiling, images reclaimed before an allocation fails, pager state in the stall dump* (release target) |
+| HEAD | `690132b` — *feat(swap): store swap pages compressed; a full device no longer disables the pager* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40477469886` — [actions/runs/40477469886](https://github.com/youdedend/Test-project/actions/runs/40477469886), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.908.zip` — 10,221,091 B, sha256 `6488851b4360ce0387fb11d70dfe3cdd6265bb25527ba01e9fb7bedaa066476f` |
-| Version shown by that package | **`1.0.26300.908`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.0908`** — [releases/tag/xbox-alpha-1.0.26300.0908](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.0908), target `4165722` (run `40477469886`): **swap ceiling 1.5 GiB**, **image reclaim before an allocation fails** (when the pager under-delivers), and **the pager state printed into the stall dump** — built on `.823` (the growing budget, **hardware-confirmed: it raised once and paged 62 MiB in 220 ms**, §2o). Previous: `.0823` (§2n), `.0736` (emergency reclaim — **hardware-confirmed: freed 117 MiB**, §2m), `.0717` (§2l), `.0649` (the ladder), `.0623` (§2k), `.0559` (§2j), `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.823` (`docs/hardware-test-23/`, §2o). Three runs in a row have reached the wall **without stopping** (`.736`, `.823`); what still ends a session is the 10 s stall and the suspend that follows it |
-| Open blocker | **the swap ceiling, with the device still willing** (`.823`): `at-budget=234572` pages (916 MiB) refused by the budget alone, `disk=1024/1024 MiB`, `write failures=0`, `full=0`. `.908` takes it to 1.5 GiB and starts reclaiming images before an allocation fails. The 10 s stall at `presents` stuck is **unexplained** — `.908` prints the pager state into that dump (§2o) |
+| Last green CI | run `40494550194` — [actions/runs/40494550194](https://github.com/youdedend/Test-project/actions/runs/40494550194), both jobs green, all tests green (including the new `swap_codec` test), pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26300.1119.zip` — 10,224,790 B, sha256 `d420c339726d2c5b814bafbbc2af40a9a2041a18574d168e6b35b4c212780e4f` |
+| Version shown by that package | **`1.0.26300.1119`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26300.1119`** — [releases/tag/xbox-alpha-1.0.26300.1119](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.1119), target `690132b` (run `40494550194`): **compressed swap pages** (LZ4 per page, all-zero pages elided, packed 4 KiB-aligned arena, real bytes as the budget), **a full device no longer stops the sweep or disables the pager for the session**. Built on `.0908` (ceiling 1.5 GiB + image reclaim before a failure — **hardware-confirmed: the budget was raised twice and bought a 96 MiB allocation in 295 ms**, §2p). Previous: `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623`, `.0559`, `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.908` (`docs/hardware-test-24/`, §2p), which ended in `Fault: exception 0xc00000fd` after the device refused a single write |
+| Open blocker | **the device refuses writes at ~1.17 GiB** (`.908`: one failure at `disk pages=1171 MiB`, `.559` at 1,252). `.1119` answers it by storing pages compressed (expect 2–4×; the console will print the ratio). Unexplained: `Fault: exception 0xc00000fd` (host stack overflow) in the present path at the memory limit — §2p |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -757,6 +757,53 @@ Hardware reproduction (Series S/X): **still required** — `.908` has not run.
 the guest's own direct memory is 4.48 GiB of the 5 GiB app budget and the pager may not touch it
 (POOL_SIZE, the guest's 4.94 GiB direct pool, is the number that would have to move). What is
 pageable is the ~1.2 GiB underneath, and that is exactly what the swap ceiling bounds.
+
+---
+
+## 2p. `.908` run: the device refuses at 1,171 MiB — so the pages get smaller (2026-10-27)
+
+Logs in `docs/hardware-test-24/` (loader 1,117 lines, errors 83). Build identity: pager line ends
+`disk budget=768 MiB (ceiling 1536 MiB)`.
+
+**The growable budget worked, twice, on hardware:**
+
+```
+disk budget raised to 1024 MiB … for a waiting allocation
+disk budget raised to 1280 MiB … for a waiting allocation
+paged out 90 MiB on request … for a 98304 KiB allocation in 295 ms (usage 4928/5120 MiB)
+```
+
+**Then the device said no, once, and that was the end of the pager:**
+
+| Line | Reading |
+|---|---|
+| `disk pages=1171 MiB of a 1280 MiB budget (ceiling 1536 MiB, raised 2); write failures=1 … (device full: private pages stay resident)` | a real `ERROR_DISK_FULL`, not our ceiling. `.559` was refused at 1,252 MiB, this run at 1,171: the console has ~1.2 GiB to give and no budget number changes that |
+| `request 64 MiB got nothing; scanned=0 … at-budget=0 … resident=767 pinned=0` | `if (uwp_swap_disk_full) break;` at the top of the sweep: after that one failure the pager examined no page for the rest of the session |
+| `5111/5120 MiB`, `Frame rate: 5.2 FPS` | 767 MiB still pageable, app 9 MiB from its limit |
+| `Fault: exception 0xc00000fd at bloodborne.exe+0xc50ef7 (thread 3728)` | host stack overflow in the present path — a failure mode this port had not produced before, not investigated |
+
+### Fixes in `.1119`
+
+| What | Where |
+|---|---|
+| **Compressed swap store**: LZ4 block per page (`xbox/platform/swap_codec.h`), packed arena, 2-byte length header per record, 4 KiB-aligned, one 32-bit record per physical page, all-zero pages never written | `guest_swap.inc:70-100, 240-430` |
+| A rewritten page re-uses its record when the payload fits (a view saved twice does not grow the file) | `guest_swap.inc:385-400` |
+| Budget and every report count the bytes the file actually occupies | `guest_swap.inc:737, 974-1000` |
+| `full` is not permanent: re-tried after 10 s | `guest_swap.inc:52-59, 655-670` |
+| A full device does not stop the walk (view pages free RAM without disk) | `guest_swap.inc:700-712` |
+| A record past our own budget reports `ERROR_DISK_QUOTA_EXCEEDED`, never `ERROR_DISK_FULL` | `guest_swap.inc:395-408` |
+| The store's shared buffers take their own innermost lock (`uwp_promote` reaches a transfer without `uwp_commit_lock`) | `guest_swap.inc:336-342, 420-428` |
+| `host_discard` clears the record of a recycled physical frame | `guest_memory.inc:518-528` |
+| `xbox/tests/swap_codec_test.cpp` (zero / random / heap-like / text-like / boundary lengths / malformed input), in the CI test list | `.github/workflows/xbox.yml`, `xbox/tests/swap_codec_test.cpp` |
+
+Host measurement of the codec: heap-like data 3.4 KiB per 16 KiB page (21%), zeros 0.15 KiB, ~10 µs
+per page — about 10 ms of coding per 16 MiB page-out, on top of the ~7 ms of I/O a sweep already
+spends.
+
+Hardware reproduction (Series S/X): **still required** — `.1119` has not run. What the next log
+must show: `… pages stored (N raw, N blank, N MiB of payload, N% of raw)` — that percentage is the
+whole bet. Below ~60% and the same 1.17 GiB covers ~2× the guest memory; near 100% and the codec is
+buying nothing and the next lever is resolution.
 
 ---
 
