@@ -11,3 +11,16 @@
 # Hardware Test #6-#10 crash frames kept for regression tracking.
 0x27222e
 0x272f1c
+
+# Hardware Test #27, `.524` (2026-10-28): STATUS_STACK_OVERFLOW in a guest thread's low stack.
+#   Fault: exception 0xc00000fd at bloodborne.exe+0xc52457 (thread 5104)
+# The six rsp slots below it are the frames the fault handler could see on that stack.
+0xc52457
+0x8c96c
+0x9128c
+0x8d54d
+0x8d167
+0x8cf85
+0x93935
+# Hardware Test #26, `.421`/`.437`: the swap integrity stop (fixed in `.524`, kept for regression).
+# 0x104d3b8000 was the guest address, not an image RVA, so there is nothing to resolve here.
