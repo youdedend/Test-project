@@ -499,7 +499,10 @@ private:
     }
 
     /// Copies image memory back to CPU.
-    void DownloadImageMemory(ImageId image_id, bool sync = false);
+    /// bbport: returns whether the guest bytes were written back. The collector frees an image only
+    /// after a write-back that succeeded - a failed one used to free the image anyway, which loses
+    /// whatever the GPU had written there and, on a UWP run, is how a black screen with sound starts.
+    bool DownloadImageMemory(ImageId image_id, bool sync = false);
 
     /// Thread function for copying downloaded images out to CPU memory.
     void DownloadedImagesThread(const std::stop_token& token);
@@ -587,6 +590,35 @@ private:
     /// bbport: candidates the pin rules kept (bound / render target / scene proxy / video-out).
     u64 gc_pinned = 0;
     u64 gc_kept = 0, gc_kept_bytes = 0; ///< bbport: old images the latest pass could not evict
+    /// bbport (BUILD 2): what one collector pass saw, so "the emergency reclaim found nothing" is
+    /// answered with numbers instead of a guess (`.717`). Reset at the start of every pass.
+    struct GcPassStats {
+        u64 examined = 0;            ///< candidates the LRU walk handed to the rule
+        u64 freed = 0;               ///< images actually freed
+        u64 freed_bytes = 0;
+        u64 blocked_pinned = 0;
+        u64 blocked_tiled = 0;       ///< GPU-written and tiled: retained (see GcBlock)
+        u64 blocked_writeback = 0;   ///< would have been written back, but the pass was out of them
+        u64 blocked_not_pressured = 0; ///< GPU-written, but this pass may not spend a write-back
+        u64 blocked_layout = 0;      ///< the write-back path cannot express it
+        u64 written_back = 0;
+        u64 writeback_failed = 0;    ///< the guarded write-back refused: the image stayed
+        u64 depth_reclaimed = 0;
+        u64 dropped = 0;
+    };
+    GcPassStats gc_pass;
+    /// bbport (BUILD 2): the anti-thrash state. `gc_hysteresis` keeps the collector running until
+    /// usage falls a real distance below the trigger; `gc_last_freed`/`gc_last_usage` are what
+    /// GcShouldBackOff compares so a pass that freed nothing does not run again for free.
+    bool gc_hysteresis = false;
+    u64 gc_last_freed = 0;
+    u64 gc_last_usage = 0;
+    u64 gc_passes = 0, gc_passes_skipped = 0, gc_passes_empty = 0;
+    /// bbport (BUILD 2): evictions and image inserts, per minute, for the evict/re-upload cycle the
+    /// pressure report cannot show (a texture evicted and uploaded again every pass costs bandwidth
+    /// and no memory, so no MiB number moves).
+    u64 gc_evictions_minute = 0, gc_inserts_minute = 0;
+    std::chrono::steady_clock::time_point gc_minute_time{};
     std::chrono::steady_clock::time_point gc_report_time{};
     /// bbport: registered images and their guest size, for the once-a-minute memory line.
     u64 image_count = 0, image_bytes = 0;

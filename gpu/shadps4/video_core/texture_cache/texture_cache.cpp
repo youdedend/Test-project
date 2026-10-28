@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <boost/container/small_vector.hpp>
 #include <xxhash.h>
 
@@ -140,10 +142,10 @@ void TextureCache::ProcessDownloadImages() {
     download_images.clear();
 }
 
-void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
+bool TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     Image& image = IndexImage(image_id);
     if (False(image.flags & ImageFlagBits::GpuModified)) {
-        return;
+        return true; // nothing was written, so nothing was lost
     }
     const u32 download_size = image.info.pitch * image.info.size.height * image.info.size.depth *
                               image.info.resources.layers * (image.info.num_bits / 8);
@@ -166,11 +168,12 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
         .imageExtent = {image.info.size.width, image.info.size.height, image.info.size.depth},
     };
     runtime.DownloadImage(&image, download.buffer, std::span{&image_download, 1});
+    bool written = true;
     if (sync) {
         scheduler.Finish();
         download.Invalidate();
-        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(image.info.guest_address),
-                                                  download.mapped, download_size);
+        written = Core::Memory::Instance()->TryWriteBacking(
+            std::bit_cast<u8*>(image.info.guest_address), download.mapped, download_size);
     } else {
         scheduler.DeferPriorityOperation(
             [this, device_addr = image.info.guest_address, download, download_size] {
@@ -180,6 +183,7 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
                 runtime.GetStagingPool().FreeDeferred(download);
             });
     }
+    return written;
 }
 
 /// bbport: the guest memory a MaybeCpuDirty check compares, the same at marking and at
@@ -1235,9 +1239,48 @@ void TextureCache::GarbageCollectImages() {
         gc_tick_at_second[second % gc_tick_at_second.size()] = gc_tick;
     }
     ReportMemory();
-    if (total_used_memory < trigger_gc_memory) {
+    // bbport (BUILD 2, item 11): hysteresis and back-off, before anything is walked.
+    //
+    // Hysteresis: the collector starts at `trigger` and keeps going until usage is a real distance
+    // below it, because a pass that stops the moment it touches the trigger is a pass that runs
+    // again on the next submission - evicting and re-uploading the same textures. Back-off: a pass
+    // that freed almost nothing is not repeated until usage has actually grown, because walking the
+    // whole cache under the mutex cannot find what it did not find a moment ago.
+    static const BbGpu::GcPassLimits gc_limits = [] {
+        BbGpu::GcPassLimits limits;
+        if (const char* env = std::getenv("BB_GC_HYSTERESIS_MB")) {
+            limits.hysteresis_bytes = std::strtoull(env, nullptr, 10) << 20;
+        }
+        if (const char* env = std::getenv("BB_GC_MAX_WRITEBACKS")) {
+            limits.writebacks = unsigned(std::min<unsigned long long>(
+                std::strtoull(env, nullptr, 10), 32ull));
+        }
+        return limits;
+    }();
+    gc_hysteresis = BbGpu::GcHysteresisActive(total_used_memory, trigger_gc_memory,
+                                            gc_limits.hysteresis_bytes, gc_hysteresis);
+    if (!gc_hysteresis) {
         return;
     }
+    const u64 usage_growth = total_used_memory > gc_last_usage ? total_used_memory - gc_last_usage
+                                                               : 0;
+    if (BbGpu::GcShouldBackOff(gc_last_freed, usage_growth, gc_limits)) {
+        // Rare line: a stuck collector must not become a stuck log.
+        ++gc_passes_skipped;
+        if (gc_passes_skipped % 200 == 1) {
+            std::printf("Texture cache: collector backing off (last pass freed %llu MiB, usage "
+                        "grew %llu MiB; %llu passes skipped since the start)\n",
+                        (unsigned long long)(gc_last_freed >> 20),
+                        (unsigned long long)(usage_growth >> 20),
+                        (unsigned long long)gc_passes_skipped);
+            std::fflush(stdout);
+        }
+        gc_last_usage = total_used_memory;
+        return;
+    }
+    gc_last_usage = total_used_memory;
+    gc_last_freed = 0;
+    gc_pass = GcPassStats{};
     static const u64 idle_seconds = [] {
         const char* env = std::getenv("BB_GC_IDLE_SECONDS");
 #ifdef BB_UWP
@@ -1318,6 +1361,7 @@ void TextureCache::GarbageCollectImages() {
             lru_cache.Touch(image.lru_id, gc_tick);
             return false;
         };
+        ++gc_pass.examined;
         // bbport: never free what something still holds. SlotId has no generation, so the rasterizer
         // (bound_images / db_desc / last_targets), the presenter (video-out surfaces) and the
         // upscaler (scene_color / ldr_target / ui_color / ui_depth) would index a freed slot and
@@ -1333,6 +1377,7 @@ void TextureCache::GarbageCollectImages() {
             pin.collected = IsImageCollected(image_id);
             if (!BbGpu::GcMayFreeImage(pin, /*age_allows_free=*/true)) {
                 ++gc_pinned;
+                ++gc_pass.blocked_pinned;
                 return keep(/*tiled_written_back=*/false);
             }
         }
@@ -1355,15 +1400,18 @@ void TextureCache::GarbageCollectImages() {
             const char* env = std::getenv("BB_GC_DEPTH_RECLAIM");
             return env == nullptr || env[0] != '0';
         }();
+        const bool download = image.SafeToDownload();
+        const bool tiled = image.info.IsTiled();
         if (depth_reclaim && image.info.props.is_depth && (pressured || aggresive)) {
             --num_deletions;
             ++gc_depth;
+            ++gc_pass.depth_reclaimed;
+            ++gc_pass.freed;
+            gc_pass.freed_bytes += image.info.guest_size;
             evicted_any = true;
             FreeImage(image_id, "depth-reclaim");
             return false;
         }
-        const bool download = image.SafeToDownload();
-        const bool tiled = image.info.IsTiled();
         // bbport: images that cannot go now (GPU-written: their contents exist only here, and
         // tiled ones cannot be written back at all) neither use up the deletions nor stay first
         // in line. The oldest ten being such render targets stopped the collector for good, and
@@ -1383,17 +1431,55 @@ void TextureCache::GarbageCollectImages() {
         }();
         const bool drop = drop_old && tiled && download && aggresive &&
                           image.lru_touched_tick < minute_tick;
-        if (!drop) {
-            if (tiled && download) {
+        // bbport (BUILD 2, items 8-11): one decision point, with its reason, instead of four
+        // branches that each returned early and only one of which was ever counted.
+        //
+        //   pinned            -> keep, no deletion spent (the pin gate above already handles it)
+        //   gpu-written+tiled -> keep, no deletion spent; the contents exist only in VRAM and no
+        //                        host write-back can reproduce the guest's tiling. BB_GC_DROP_OLD
+        //                        overrides this at the critical mark (off on the console)
+        //   layout unsupported-> keep: an image the write-back path cannot express is never freed
+        //                        half-written. This is eFMann PR #18's lesson
+        //   write-back budget -> keep until next pass: four synchronous write-backs are a frame or
+        //                        two of stall already, and the tenth frees little more
+        // Nothing except an actual free spends a deletion, so a cache whose oldest entries are all
+        // retained can no longer stop the collector for the session.
+        BbGpu::GcCandidateState candidate;
+        candidate.gpu_written = download;
+        candidate.tiled = tiled;
+        candidate.writebacks_done = unsigned(gc_pass.written_back);
+        // Below the pressure mark a GPU-written image that would have to be copied out is left
+        // alone: the copy costs a GPU finish, and the pass exists to keep the cache under a mark,
+        // not to churn it.
+        candidate.writeback_allowed = pressured || aggresive;
+        // The write-back path expresses linear images; a tiled one is already retained above, so
+        // what is left here is "the format cannot be copied out", which is the case
+        // image.SupportsWriteBack() would cover upstream. There is no such layout in this tree
+        // today, and the flag stays so the rule is visible where it is decided.
+        candidate.layout_supported = true;
+        BbGpu::ImagePinState recount{};
+        const BbGpu::GcBlock block =
+            BbGpu::GcClassifyCandidate(recount, candidate, gc_limits, drop_old);
+        if (block != BbGpu::GcBlock::none) {
+            if (block == BbGpu::GcBlock::gpu_written_tiled) {
+                ++gc_pass.blocked_tiled;
                 return keep(/*tiled_written_back=*/true);
             }
-            if (download && !pressured) {
+            if (block == BbGpu::GcBlock::writeback_budget) {
+                ++gc_pass.blocked_writeback;
                 return keep(/*tiled_written_back=*/false);
             }
+            if (block == BbGpu::GcBlock::not_pressured) {
+                ++gc_pass.blocked_not_pressured;
+                return keep(/*tiled_written_back=*/false);
+            }
+            ++gc_pass.blocked_layout;
+            return keep(/*tiled_written_back=*/false);
         }
         --num_deletions;
         if (drop) {
             ++gc_dropped;
+            ++gc_pass.dropped;
         } else if (download) {
             // bbport: the readback resolve before the free (GoW3's
             // ResolveReadbacks(guest_address, guest_size, sync, CacheCleanup) on the image's guest
@@ -1402,10 +1488,23 @@ void TextureCache::GarbageCollectImages() {
             // had meanwhile stored there (e.g. its heap after unloading an area). Never through
             // the deferred queue: DownloadImageMemory(.., true) finishes the GPU and writes the
             // guest bytes back itself.
-            DownloadImageMemory(image_id, true);
+            //
+            // bbport (item 11): reclaim only after a write-back that succeeded. This used to free
+            // the image whether or not the copy landed, which throws away whatever the GPU wrote
+            // there - the same failure the port sees as a black screen with sound.
+            ++num_deletions; // a refused write-back costs nothing
+            if (!DownloadImageMemory(image_id, true)) {
+                ++gc_pass.writeback_failed;
+                return keep(/*tiled_written_back=*/false);
+            }
+            --num_deletions;
             ++gc_downloads;
+            ++gc_pass.written_back;
         }
         ++gc_evictions;
+        ++gc_evictions_minute;
+        ++gc_pass.freed;
+        gc_pass.freed_bytes += image.info.guest_size;
         evicted_any = true;
         FreeImage(image_id, "eviction");
         if (total_used_memory < critical_gc_memory) {
@@ -1433,10 +1532,65 @@ void TextureCache::GarbageCollectImages() {
         gc_kept = gc_kept_bytes = 0;
         lru_cache.ForEachItemBelow(below_tick, clean_up);
     }
+    bool emergency_empty = false;
     if (total_used_memory >= critical_gc_memory) {
         // Still over it: what was used a moment ago goes too (out of memory otherwise).
         configure(true, true);
+        const u64 before = gc_pass.freed;
         lru_cache.ForEachItemBelow(below_tick, clean_up);
+        emergency_empty = gc_pass.freed == before;
+    }
+    // bbport (BUILD 2, item 8): one line per pass that actually ran, and the answer to `.717`'s
+    // "the emergency reclaim found nothing to free". The reasons are exclusive and exhaustive, so
+    // examined == freed + the blocked columns, and a pass that freed nothing says which rule did it.
+    {
+        static u64 reported = 0;
+        const bool interesting = emergency_empty || gc_pass.examined == 0 || gc_passes % 60 == 0;
+        if (interesting && reported < 400) {
+            ++reported;
+            std::printf("Texture cache: collector pass %llu: examined=%llu freed=%llu (%llu MiB), "
+                        "blocked: pinned=%llu tiled-gpu-written=%llu writeback-budget=%llu "
+                        "not-pressured=%llu layout=%llu; written back=%llu (failed %llu), depth=%llu, "
+                        "dropped=%llu%s\n",
+                        (unsigned long long)gc_passes,
+                        (unsigned long long)gc_pass.examined, (unsigned long long)gc_pass.freed,
+                        (unsigned long long)(gc_pass.freed_bytes >> 20),
+                        (unsigned long long)gc_pass.blocked_pinned,
+                        (unsigned long long)gc_pass.blocked_tiled,
+                        (unsigned long long)gc_pass.blocked_writeback,
+                        (unsigned long long)gc_pass.blocked_not_pressured,
+                        (unsigned long long)gc_pass.blocked_layout,
+                        (unsigned long long)gc_pass.written_back,
+                        (unsigned long long)gc_pass.writeback_failed,
+                        (unsigned long long)gc_pass.depth_reclaimed,
+                        (unsigned long long)gc_pass.dropped,
+                        emergency_empty ? " -- the emergency pass (the one that ignores age) freed "
+                                          "nothing; the columns above are why"
+                                        : "");
+            std::fflush(stdout);
+        }
+    }
+    gc_last_freed = gc_pass.freed_bytes;
+    ++gc_passes;
+    if (gc_pass.examined != 0 && gc_pass.freed == 0) {
+        ++gc_passes_empty;
+    }
+    // bbport (BUILD 2, item 11): evict/re-upload cycles per minute. A texture evicted and uploaded
+    // again every pass moves no MiB number, so it needs its own line: evictions are ours, inserts are
+    // the game's textures arriving (the re-upload side of the cycle).
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (gc_minute_time.time_since_epoch().count() == 0) {
+            gc_minute_time = now;
+        } else if (now - gc_minute_time >= std::chrono::seconds(60)) {
+            std::printf("Texture cache: per minute: %llu image(s) evicted, %llu image(s) inserted "
+                        "(inserts well above evictions means the cycle is eviction, not load)\n",
+                        (unsigned long long)gc_evictions_minute,
+                        (unsigned long long)gc_inserts_minute);
+            std::fflush(stdout);
+            gc_minute_time = now;
+            gc_evictions_minute = gc_inserts_minute = 0;
+        }
     }
     // bbport: evictions under memory pressure, at most every 5 s (BB_FRAME_STATS or not).
     if (pressured || gc_downloads != 0) {
@@ -1530,6 +1684,7 @@ void TextureCache::TouchImage(const Image& image) {
 }
 
 ImageId TextureCache::InsertImage(const ImageInfo& info) {
+    ++gc_inserts_minute;
     const ImageId image_id = slot_images.insert(instance, runtime, slot_image_views, info);
     if (!IndexImage(image_id).allocation_failed) [[likely]] {
         return image_id;

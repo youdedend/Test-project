@@ -170,6 +170,185 @@ void TestLivenessOnlyCheck() {
     Check(!StillOurs(slot, 0), "a freed slot fails the liveness check");
 }
 
+// ---------------------------------------------------------------------------------------------
+// BUILD 2 (items 8-11): the classification that answers "why did the pass free nothing", the
+// write-back budget, the back-off and the hysteresis.
+// ---------------------------------------------------------------------------------------------
+
+BbGpu::GcCandidateState CleanCandidate() {
+    return BbGpu::GcCandidateState{};
+}
+
+void TestClassificationOrder() {
+    const BbGpu::GcPassLimits limits;
+    // Nothing wrong: the candidate may go.
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, CleanCandidate(), limits, false) ==
+              BbGpu::GcBlock::none,
+          "an unused, unwritten image is classified as freeable");
+
+    // A pin outranks every other reason: whatever else is wrong, the answer is "something holds it".
+    FakeSlot pinned;
+    pinned.bound = true;
+    BbGpu::GcCandidateState written_tiled = CleanCandidate();
+    written_tiled.gpu_written = written_tiled.tiled = true;
+    Check(BbGpu::GcClassifyCandidate(pinned.Pin(), written_tiled, limits, false) ==
+              BbGpu::GcBlock::pinned,
+          "a bound image is reported as pinned before any write-back rule");
+
+    // GPU-written and tiled: its contents exist only in VRAM and no host copy can reproduce the
+    // guest's tiling, so it stays. This is the column that explains `.717`.
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, written_tiled, limits, false) ==
+              BbGpu::GcBlock::gpu_written_tiled,
+          "a GPU-written tiled image is retained");
+    // BB_GC_DROP_OLD=1 is the opt-in that lets it go unwritten, and it must not be needed for a
+    // linear image.
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, written_tiled, limits, true) ==
+              BbGpu::GcBlock::none,
+          "with BB_GC_DROP_OLD the old tiled image may be dropped");
+}
+
+void TestUnsupportedLayout() {
+    BbGpu::GcPassLimits limits;
+    BbGpu::GcCandidateState candidate = CleanCandidate();
+    candidate.gpu_written = true;
+    candidate.layout_supported = false;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::unsupported_layout,
+          "an image the write-back path cannot express is kept, never half-written");
+    // eFMann PR #18: dropping it instead of writing it back is the same loss as dropping a tiled
+    // target, so the drop switch must not bypass the layout check on a linear image.
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, true) ==
+              BbGpu::GcBlock::unsupported_layout,
+          "BB_GC_DROP_OLD does not override an unsupported layout");
+}
+
+void TestWritebackBudgetAndPressureGate() {
+    BbGpu::GcPassLimits limits;
+    BbGpu::GcCandidateState candidate = CleanCandidate();
+    candidate.gpu_written = true;
+
+    // Below the pressure mark a write-back costs a GPU finish for no reason: the image is kept and
+    // counted in its own column, not silently treated as a budget failure.
+    candidate.writeback_allowed = false;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::not_pressured,
+          "below the pressure mark a GPU-written image is not copied out");
+    // The pressure gate is checked before the budget: an exhausted budget must not change the answer.
+    candidate.writebacks_done = limits.writebacks + 10;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::not_pressured,
+          "the pressure gate is reported even with the budget spent");
+
+    candidate.writeback_allowed = true;
+    candidate.writebacks_done = 0;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::none,
+          "under pressure with budget left the image may be written back and freed");
+    candidate.writebacks_done = limits.writebacks - 1;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::none,
+          "the last write-back of the budget is still allowed");
+    candidate.writebacks_done = limits.writebacks;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, candidate, limits, false) ==
+              BbGpu::GcBlock::writeback_budget,
+          "a pass never spends more than its four write-backs");
+    // A caller that has spent four write-backs and a positive count must compare, not guess.
+    limits.writebacks = 0;
+    Check(BbGpu::GcClassifyCandidate(BbGpu::ImagePinState{}, CleanCandidate(), limits, false) ==
+              BbGpu::GcBlock::none,
+          "a write-back budget of zero does not block an image nobody has to copy out");
+}
+
+void TestBackOff() {
+    const BbGpu::GcPassLimits limits; // 32 MiB useful, 64 MiB growth
+    const unsigned long long mib = 1ull << 20;
+    Check(BbGpu::GcShouldBackOff(0, 0, limits), "a pass that freed nothing with no growth is skipped");
+    Check(BbGpu::GcShouldBackOff(31 * mib, 63 * mib, limits),
+          "just under both marks still backs off");
+    Check(!BbGpu::GcShouldBackOff(32 * mib, 0, limits),
+          "a pass that freed 32 MiB is worth running again");
+    Check(!BbGpu::GcShouldBackOff(0, 64 * mib, limits),
+          "using 64 MiB more since the last pass earns a new walk");
+    Check(!BbGpu::GcShouldBackOff(200 * mib, 0, limits), "a large reclaim is not backed off");
+}
+
+void TestHysteresis() {
+    const unsigned long long trigger = 2048ull << 20;   // 2 GiB mark
+    const unsigned long long hysteresis = 128ull << 20; // 128 MiB gap
+    const unsigned long long mib = 1ull << 20;
+
+    Check(BbGpu::GcHysteresisActive(trigger, trigger, hysteresis, false),
+          "reaching the trigger starts the collector");
+    Check(!BbGpu::GcHysteresisActive(trigger - 1 * mib, trigger, hysteresis, false),
+          "below the trigger an idle collector stays idle");
+
+    // Once running it keeps going past the trigger, all the way down to trigger - hysteresis.
+    Check(BbGpu::GcHysteresisActive(trigger - 1 * mib, trigger, hysteresis, true),
+          "the collector does not stop the instant it touches the trigger");
+    Check(BbGpu::GcHysteresisActive(trigger - 127 * mib, trigger, hysteresis, true),
+          "one MiB above the target is still collecting");
+    Check(!BbGpu::GcHysteresisActive(trigger - hysteresis, trigger, hysteresis, true),
+          "reaching the target stops the collector");
+    Check(!BbGpu::GcHysteresisActive(trigger - 200 * mib, trigger, hysteresis, true),
+          "well below the target it stays stopped");
+    // The gap is what stops a run sitting on the mark from evicting and re-uploading every pass.
+    Check(!BbGpu::GcHysteresisActive(trigger - 64 * mib, trigger, hysteresis, false),
+          "half-way up the hysteresis band does not restart it");
+    // A trigger below the hysteresis (a very low limit) must not underflow.
+    Check(!BbGpu::GcHysteresisActive(0, 64 * mib, 128 * mib, true),
+          "a trigger smaller than the hysteresis does not wrap around");
+}
+
+void TestPassAccounting() {
+    // Every examined candidate ends in exactly one column, so the report line adds up: a pass that
+    // freed nothing can be read off the blocked columns. This is the check that `.717`'s log lacked.
+    BbGpu::GcPassLimits limits;
+    struct Case {
+        BbGpu::ImagePinState pin;
+        BbGpu::GcCandidateState candidate;
+    };
+    std::vector<Case> cases(10);
+    cases[0].pin.target = true;                                  // pinned
+    cases[1].candidate.gpu_written = cases[1].candidate.tiled = true; // tiled, retained
+    cases[2] = cases[1];                                          // tiled, retained
+    cases[3].candidate.gpu_written = true;                         // freeable
+    cases[4].candidate.gpu_written = true;
+    cases[4].candidate.layout_supported = false;                   // unsupported layout
+    cases[5].candidate.gpu_written = true;
+    cases[5].candidate.writeback_allowed = false;                  // not pressured
+    for (int i = 6; i < 10; ++i) {
+        cases[i].candidate.gpu_written = true;                     // written back until the budget ends
+    }
+    unsigned long long freed = 0, pinned = 0, tiled = 0, budget = 0, none_pressure = 0, layout = 0;
+    unsigned writebacks = 0;
+    for (const Case& c : cases) {
+        switch (BbGpu::GcClassifyCandidate(c.pin, BbGpu::GcCandidateState{c.candidate}, limits,
+                                          false)) {
+        case BbGpu::GcBlock::pinned: ++pinned; break;
+        case BbGpu::GcBlock::gpu_written_tiled: ++tiled; break;
+        case BbGpu::GcBlock::unsupported_layout: ++layout; break;
+        case BbGpu::GcBlock::not_pressured: ++none_pressure; break;
+        case BbGpu::GcBlock::writeback_budget: ++budget; break;
+        case BbGpu::GcBlock::none:
+            // The pass may spend one write-back; when the budget is gone the same image is blocked.
+            if (writebacks < limits.writebacks) {
+                ++writebacks;
+                ++freed;
+            } else {
+                ++budget;
+            }
+            break;
+        case BbGpu::GcBlock::recent: break;
+        }
+    }
+    Check(freed == 4, "four candidates were freed, each by one write-back");
+    Check(pinned == 1 && tiled == 2 && layout == 1 && none_pressure == 1,
+          "each blocked candidate lands in its own column");
+    Check(budget == 1, "the candidate past the write-back budget is reported as such");
+    Check(freed + pinned + tiled + budget + none_pressure + layout == cases.size(),
+          "examined equals freed plus every blocked column");
+}
+
 } // namespace
 
 int main() {
@@ -180,6 +359,13 @@ int main() {
     TestPinnedImageDoesNotConsumeDeletions();
     TestStoredIdDetectsReusedSlot();
     TestLivenessOnlyCheck();
+    // Build 2: why a selected candidate is kept, the write-back budget, back-off and hysteresis.
+    TestClassificationOrder();
+    TestUnsupportedLayout();
+    TestWritebackBudgetAndPressureGate();
+    TestBackOff();
+    TestHysteresis();
+    TestPassAccounting();
     if (failures != 0) {
         std::printf("%d check(s) failed\n", failures);
         return EXIT_FAILURE;
