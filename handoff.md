@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `d99cd96` — *fix(swap): keep a device reserve for the game's own files; a full disk no longer aborts a cache write* (release target) |
+| HEAD | `2b239ea` — *feat(memory): the resolution rung of the ladder, automatic at memory level 2* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40631002261` — [actions/runs/40631002261](https://github.com/youdedend/Test-project/actions/runs/40631002261), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26301.421.zip` — 10,228,148 B, sha256 `c5971dfa5ea4d37b42c17ee9ce988a9fe2dadfc80d9ce820235be35f5c229e9b` |
-| Version shown by that package | **`1.0.26301.421`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26301.0421`** — [releases/tag/xbox-alpha-1.0.26301.0421](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0421), target `d99cd96` (run `40631002261`): **a 384 MiB device reserve for the game's own files** and **a full disk no longer aborts a cache write** — built on `.1119` (compressed swap pages, **hardware-confirmed: 45% of raw, ~2.5 GiB of guest pages in 1,125 MiB, present 941**, §2q). Previous: `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623`, `.0559`, `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.1119` (`docs/hardware-test-25/`, §2q): no pager failure at all, but the swap filled the device and the game's own cache write hit `ENOSPC` and aborted |
-| Open blocker | **the working set, not the pager.** `.1119`: `pageable private=0` (everything pageable was paged out), `lock=sweep held=0 ms` at both 10 s stalls, and the frame rate fell to 0.6 FPS. The swap is no longer the limit of what can be paged; the area is bigger than 5 GiB of RAM. The approved ladder has one rung left — a lower output resolution — which is a settings default and needs a decision |
+| Last green CI | run `40632632339` — [actions/runs/40632632339](https://github.com/youdedend/Test-project/actions/runs/40632632339), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26301.437.zip` — 10,230,584 B, sha256 `f597c10b5119a1a3bd67556dd246cb4ff23c35acd5ca2f6f1dffcdf8dda00e64` |
+| Version shown by that package | **`1.0.26301.437`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26301.0437`** — [releases/tag/xbox-alpha-1.0.26301.0437](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0437), target `2b239ea` (run `40632632339`): **the resolution rung, automatic at memory level 2** (upscaler active: one preset step down; no upscaler: output 1920x1080 → 1280x720 live; both restored after 10 calm seconds, nothing written to bbport.ini), on top of **`.26301.421`** (384 MiB device reserve + cache write no longer aborts on a full disk, §2q). Previous: `.1119` (compressed swap — **hardware-confirmed 45%**, §2q), `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder) |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.1119` (`docs/hardware-test-25/`, §2q): the pager never failed, the device filled up, and the game's own cache write aborted. `.421` and `.437` are both published and unrun |
+| Open blocker | **the working set.** `.1119`: `pageable private=0`, `lock=sweep held=0 ms` at both stalls, 0.6 FPS at the end — the area is bigger than 5 GiB and paging is exhausted. `.26301.421` stops the swap 384 MiB short of a full device; `.26301.437` adds the last rung (lower internal resolution at level 2) |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -852,6 +852,30 @@ writes alive while still reaching the same present count.
    needs the user's decision.
 2. `gpu/shadps4` cache blobs and the dump share that device pool; the reserve is sized for them
    (384 MiB) and can be raised with `BB_UWP_SWAP_RESERVE_MB` without a build.
+
+---
+
+## 2r. The resolution rung (user decision, 2026-10-28)
+
+Chosen by the user in this session: **automatic at memory level 2**, not opt-in and not skipped.
+Implemented in `bbgpu_uwp_pressure_level(int level)` (`gpu/shim/bbgpu.cpp`, called from the 5 s
+telemetry sample in `xbox/platform/main.cpp` just before the `UWP memory telemetry:` line):
+
+| Configuration | What happens at level >= 2 | Restored |
+|---|---|---|
+| upscaler active (FSR/DLSS/TAA) | the preset drops one step per sample, Quality → Balanced → Performance, and no further than Performance (1.7x) | after 10 calm seconds at level < 2 |
+| no upscaler (every log so far) | the output goes to 1280x720 (index 0 of `OutputWidths`), a live change the renderer already supports | same rule |
+
+Both write a log line naming the change (`UWP memory pressure: …`), and **neither writes
+`bbport.ini`**: this is a session measure, so the user's own settings survive the next start. The
+10-second calm window exists because an area load dips the level for a sample and flipping the
+picture back mid-load costs more than it saves.
+
+Known limit, stated plainly: with the upscaler off the saving is host-side only (scene/UI/display
+targets), not the guest's own 1080p surfaces; the guest still renders what the game asks for. If the
+next run shows the level staying at 2 with the output already at 720p, the remaining lever is the
+guest's own resolution — the startup patch (`patches/Bloodborne.xml`), which needs a restart and a
+user decision.
 
 ---
 
