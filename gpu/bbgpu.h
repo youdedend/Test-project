@@ -119,6 +119,10 @@ typedef struct BbGpuMemoryCats {
     uint64_t arena_reserve_used;
     uint64_t fence_submitted;  /* scheduler tick submitted */
     uint64_t fence_completed;  /* tick the GPU has signalled */
+    /* bbport: how long `fence_completed` has stood still while work is outstanding, in ms. 0 when
+     * the GPU is idle. The scheduler keeps no per-tick timestamps, so this is measured by watching
+     * completion: it is the difference between "the GPU is busy" and "the GPU stopped". */
+    uint64_t fence_stalled_ms;
     int32_t available;
 } BbGpuMemoryCats;
 /* Fills `out`; returns 1 when the GPU exists (0 leaves the struct zeroed). */
