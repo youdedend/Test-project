@@ -81,6 +81,11 @@ void Set(Values& v, const std::string& key, const std::string& value, bool* saw_
         }
     } else if (key == "gamma") {
         v.gamma = Clamp(f, 0.60f, 1.40f);
+    } else if (key == "bloom") {
+        // Percent, so bbport.ini stays readable. A value above 1 is taken as a percentage
+        // (`bloom=0.5` and `bloom=50` mean the same thing) because both spellings exist in the wild.
+        v.bloom = f <= 1.0f ? int(Clamp(f, 0.0f, 1.0f) * 100.0f + 0.5f)
+                            : std::clamp(int(f + 0.5f), 0, 100);
     } else if (key == "fps_patch") {
         if (value == "uncap" || value == "0") {
             v.xbox_fps_patch = 0;
@@ -99,7 +104,9 @@ void Set(Values& v, const std::string& key, const std::string& value, bool* saw_
         v.jitter = i != 0;
     } else if (key == "reactive") {
         v.reactive = i != 0;
-    } else if (key == "object_motion") {
+    } else if (key == "object_motion" || key == BbPortEffects::LessGhostingAlias) {
+        // `less_ghosting` is the community port's name for the same toggle (motion vectors on
+        // characters, cloth and weapons). Both are accepted so a PC bbport.ini keeps working.
         v.object_motion = i != 0;
     } else if (key == "fsr411_backend") {
         v.fsr411_backend = value == "dx12" ? Fsr411Dx12 : Fsr411Vulkan;
@@ -389,13 +396,15 @@ void Save() {
                  "# bbport settings (in-game menu: Insert / L3+R3)\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
-                 "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
+                 "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n"
+                 "bloom=%d\n",
                  UpscalerName(v.upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()),
-                 int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
+                 int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()),
+                 v.bloom.load());
     std::fprintf(file, "fsr411_backend=%s\nobject_motion_cache=%d\n",
                  v.fsr411_backend == Fsr411Dx12 ? "dx12" : "vk",
                  int(v.object_motion_cache.load()));
@@ -455,9 +464,10 @@ bool IsXboxSupportedEffect(int effect_index) {
     if (effect_index < 0 || effect_index >= EffectCount) {
         return false;
     }
-    const std::string_view key = Effects[effect_index].key;
-    // Desktop-only script patches / external debug-font patches are not supported on Xbox.
-    return key != "debug_menu" && key != "quit_to_desktop" && key != "rebirth";
+    // Which rows the console offers is a field of the table (bbport_effects.h), not a string
+    // comparison here: the debug menu needs font files that ship separately and crashes without them,
+    // "quit to desktop" has no desktop, and rebirth is not wired on the console.
+    return Effects[effect_index].xbox;
 }
 
 float PresetScale(int preset) {

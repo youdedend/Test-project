@@ -8,6 +8,8 @@
 #include <atomic>
 #include <utility>
 
+#include "bbport_effects.h"
+
 namespace BbSettings {
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
@@ -35,39 +37,12 @@ enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugV
 enum FrameGen : int { FrameGenOff = 0, FrameGenFsr3 = 1, FrameGenDlss = 2, FrameGenFsr401 = 3, FrameGenCount };
 enum Fsr411Backend : int { Fsr411Vulkan = 0, Fsr411Dx12 = 1 };
 
-/// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
-/// menu label, default (the game's own behaviour).
-struct Effect {
-    const char* key;
-    const char* label;
-    bool default_on;
-};
-inline constexpr Effect Effects[] = {
-    {"effect_chromatic_aberration", "Chromatic aberration", true},
-    {"effect_dof", "Depth of field (DoF)", true},
-    {"effect_motion_blur", "Motion blur", true},
-    {"effect_ssao", "Ambient occlusion (SSAO)", true},
-    {"effect_game_aa", "Game anti-aliasing", true},
-    {"effect_dynamic_shadows", "Dynamic shadows", true},
-    {"effect_ssr", "Screen-space reflections (SSR)", false},
-    {"skip_intro", "Skip intro logos and movie", false},
-    {"debug_camera", "Free camera (Cross + L3)", false},
-    {"debug_menu", "Debug menu (requires font files)", false},
-    {"cheat_no_death", "Cheat: never die (minimum 1 HP)", false},
-    {"cheat_stealth", "Cheat: enemies cannot see you", false},
-    {"cheat_silent", "Cheat: enemies cannot hear you", false},
-    {"cheat_rally_no_decay", "Cheat: Rally never decays", false},
-    {"cheat_enemy_control", "Cheat: control targeted enemy (R3 / L3)", false},
-    {"tweak_no_rally", "Disable Rally (health recovery)", false},
-    {"tweak_camera_distance", "Increase camera distance", false},
-    {"tweak_no_camera_rotation", "Disable automatic camera rotation", false},
-    {"tweak_easy_run", "Run with less stick tilt", false},
-    {"tweak_ragdoll", "Dark Souls-style ragdoll physics", false},
-    {"tweak_circle_confirm", "Japanese/Asian buttons (Circle confirms)", false},
-    {"quit_to_desktop", "Quit to Desktop in the title and System menus", true},
-    {"rebirth", "Rebirth at the Doll (5 Insight)", true},
-};
-inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
+/// Game effects switched by the community patches at start (patches.py EFFECTS on the PC side,
+/// xbox/platform/prepare_game.cpp on the console's). The table itself lives in bbport_effects.h so
+/// that the ini, the menu, the console's patch compiler and the test read one list, not three.
+using BbPortEffects::Effect;
+inline constexpr const Effect* Effects = BbPortEffects::Effects;
+inline constexpr int EffectCount = BbPortEffects::EffectCount;
 /// Output resolutions: the upscaler's output and the UI host targets. The 16:9 ones change
 /// live; the ultrawide ones need the startup patch (patches.py ultrawide_writes, run.py).
 inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 2560, 3440, 3840, 5120, 3840, 5120};
@@ -193,6 +168,10 @@ struct Values {
     std::atomic<bool> vsync{true};
     std::atomic<int> fps_cap{60};       ///< 30, 60, 90, 120, or 0 (uncapped)
     std::atomic<float> gamma{1.0f};     ///< post-processing gamma (0.60 .. 1.40)
+    /// Bloom reduction in the final post-process pass, 0 (off, bit-exact) .. 100. 0 is the default:
+    /// a host effect that changes the picture must be opt-in, and this one costs no memory (it is a
+    /// branch and a dot product in a pass that already runs).
+    std::atomic<int> bloom{0};
     std::atomic<int> xbox_fps_patch{60}; ///< 01.09 startup patch: 30, 60, 90, or 0 (uncap)
     bool app_ver_is_0109 = false;
     char app_ver_text[16] = "01.00";

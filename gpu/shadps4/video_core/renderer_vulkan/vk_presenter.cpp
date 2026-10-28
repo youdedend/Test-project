@@ -687,6 +687,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     pp_settings.gamma = BbSettings::Get().gamma.load(std::memory_order_relaxed);
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
+    // bbport: `bloom=` in bbport.ini (menu: "Bloom (highlight rolloff)"), 0..100 percent. Read per
+    // frame so the menu slider is live, and it is one uniform either way.
+    pp_settings.bloom = std::clamp(BbSettings::Get().bloom.load(std::memory_order_relaxed), 0, 100) /
+                        100.0f;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
     // bbport: frame generation: the frames between the previous frame and this one.

@@ -164,6 +164,14 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, changed);
 }
 
+/// Integer slider (Bloom is a percentage, and a float slider for 0..100 shows "0.00" .. "100.00").
+void SliderInt(const char* label, std::atomic<int>& value, int lo, int hi, const char* zero_text) {
+    int v = value;
+    const bool changed =
+        ImGui::SliderInt(label, &v, lo, hi, (v == 0 && zero_text) ? zero_text : "%d");
+    Store(value, v, changed);
+}
+
 [[maybe_unused]] void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -228,7 +236,18 @@ void MenuXbox() {
     }
     ImGui::Text("Active 3D scene: %d x %d   |   HUD & menus: 1920 x 1080",
                 s.active_render_width.load(), s.active_render_height.load());
-    ImGui::TextDisabled("Applies immediately on the next frame (lower scene resolution boosts FPS).");
+    // The truth about this combo depends on how the session started, and the menu used to claim
+    // "applies immediately" in both cases. When the startup patch fixed the guest resolution
+    // (BB_RENDER_RES is set - the default 720p scene), the scene size cannot change until the game
+    // restarts; when it is not set, the scene target really is resized on the next frame.
+    if (BbSettings::FixedRenderSession()) {
+        ImGui::TextDisabled("Applies after restarting the game: this session's 3D scene was patched "
+                            "at startup (%d x %d). Lower scene resolution boosts FPS.",
+                            s.active_render_width.load(), s.active_render_height.load());
+    } else {
+        ImGui::TextDisabled(
+            "Applies immediately on the next frame (lower scene resolution boosts FPS).");
+    }
 
     static const char* xbox_outputs[BbSettings::XboxOutputCount] = {
         "1280 x 720 (720p)",
@@ -272,6 +291,26 @@ void MenuXbox() {
         if (ImGui::Button("Reset###gamma_reset")) {
             Store(s.gamma, 1.0f, true);
         }
+    }
+
+    ImGui::SeparatorText("Post-processing");
+    // Bloom: the game's own bloom is composited before the host sees the frame, so this compresses
+    // the highlights it leaves behind (a rolloff above the knee), which is what the blinding white
+    // core of a lantern or a fire actually is. Live, in the pass that already runs, so it costs
+    // nothing measurable and no memory. 0 is off and bit-exact.
+    SliderInt("Bloom (highlight rolloff)", s.bloom, 0, 100, "Off");
+    Hint("Reduces how far bright emitters (lanterns, fires, spell effects) wash out into white. "
+         "Applied to the final image in the post-process pass: it tames the glow, it does not remove "
+         "the game's bloom, and at Off the picture is unchanged. Applies immediately. HDR output is "
+         "graded by the TV and is left alone.");
+    // The community port calls this toggle "Less ghosting"; it is the object-motion pass, and on
+    // the console it is off by default because it costs a second set of vectors per draw.
+    Checkbox("Less ghosting (object motion vectors)", s.object_motion);
+    Hint("Accurate motion vectors for characters, cloth and weapons, so the upscaler does not leave "
+         "trails behind them. About 5-10% of the frame rate. Off is the console default.");
+    if (s.object_motion != s.startup_object_motion) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                           "Less ghosting applies after restarting the game");
     }
 
     ImGui::SeparatorText("Interface & Audio");
@@ -334,6 +373,10 @@ void MenuXbox() {
                 if (!BbSettings::IsXboxSupportedEffect(e)) continue;
                 Checkbox(BbSettings::Effects[e].label, s.effects[e]);
             }
+            // Not a bug and not a missing feature: the game's ambient occlusion is a constructor the
+            // patch can switch off (patches/Bloodborne.xml, "Disable SSAO"). It has no exposed
+            // strength scalar, so a strength slider here would be a control that moves nothing.
+            ImGui::TextDisabled("Ambient occlusion: on/off only (the game has no AO strength value).");
         }
 
         bool restart_needed = (s.xbox_fps_patch != s.startup_xbox_fps_patch) ||
@@ -563,8 +606,9 @@ void Menu() {
     }
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    Checkbox("Object motion vectors", s.object_motion);
-    Hint("Accurate vectors for animated objects reduce breakup on clothing and weapons during movement. Static geometry receives no extra pass. Changes require a restart.");
+    // The community port sells this as "less ghosting"; it is the same object-motion pass.
+    Checkbox("Object motion vectors (less ghosting)", s.object_motion);
+    Hint("Accurate vectors for animated objects reduce breakup on clothing and weapons during movement. Static geometry receives no extra pass. Changes require a restart. About 5-10% of the frame rate.");
 #ifdef _WIN32
     const bool cache_available = s.object_motion &&
         (s.upscaler == BbSettings::UpscalerFsr3 || BbSettings::IsFsr4(s.upscaler));
@@ -709,6 +753,11 @@ void Menu() {
     Store(s.fov, fov, ImGui::SliderInt("Field of view", &fov, BbSettings::FovMin, BbSettings::FovMax,
                                        fov == BbSettings::FovDefault ? "%d (game)" : "%d"));
     Hint("Vertical field of view in degrees; the game's camera has 43. Every camera is scaled by the same amount (scripts/fov.py).");
+    ImGui::SeparatorText("Post-processing");
+    SliderInt("Bloom (highlight rolloff)", s.bloom, 0, 100, "Off");
+    Hint("Compresses highlights above the knee in the final post-process pass, so lanterns and fires "
+         "lose the white core that washes out what is next to them. It does not remove the game's "
+         "bloom and it changes nothing at Off. Applies immediately; HDR output is left alone.");
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         Checkbox(BbSettings::Effects[e].label, s.effects[e]);
     }

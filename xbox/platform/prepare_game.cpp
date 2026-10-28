@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "prepare_game.h"
 
+// bbport: the one table of graphics/gameplay toggles (key, label, default, patch names). Relative
+// path rather than a new include directory because the layout test compiles this file with only
+// xbox/platform on the search path (see the test step in .github/workflows/xbox.yml).
+#include "../../gpu/shim/bbport_effects.h"
+
 #include "sfo_version.h"
 
 #include <algorithm>
@@ -2078,33 +2083,13 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
     const auto metas = parse_patch_xml(patch_xml);
     const auto segments = eboot_pt_load_segments(eboot_elf);
 
-    struct EffectSpec {
-        const char* key;
-        const char* when_off;
-        const char* when_on;
-    };
-    static constexpr EffectSpec kEffects[] = {
-        {"effect_chromatic_aberration", "Disable Chromatic Aberration", nullptr},
-        {"effect_dof", "Disable DoF", nullptr},
-        {"effect_motion_blur", "Disable Motion Blur (perf increase)", nullptr},
-        {"effect_ssao", "Disable SSAO", nullptr},
-        {"effect_game_aa", "Disable AA", nullptr},
-        {"effect_dynamic_shadows", "Disable Dynamic Light Shadows (perf increase)", nullptr},
-        {"effect_ssr", nullptr, "Enable Screen Space Reflections (READ NOTE)"},
-        {"skip_intro", nullptr, "Skip Intro"},
-        {"debug_camera", nullptr, "Restore Debug Camera"},
-        {"cheat_no_death", nullptr, "Player No Dead (Read note)"},
-        {"cheat_stealth", nullptr, "Player Stealth (Read note)"},
-        {"cheat_silent", nullptr, "Player Silent (Read note)"},
-        {"cheat_rally_no_decay", nullptr, "No Rally Decay"},
-        {"cheat_enemy_control", nullptr, "Enemy Control"},
-        {"tweak_no_rally", nullptr, "Disable Rally (HP Regain)"},
-        {"tweak_camera_distance", nullptr, "Increased camera distance"},
-        {"tweak_no_camera_rotation", nullptr, "Disable Camera Auto Rotation via Movement"},
-        {"tweak_easy_run", nullptr, "Sensitive Analog Input (easier to run)"},
-        {"tweak_ragdoll", nullptr, "DS1-like physics"},
-        {"tweak_circle_confirm", nullptr, "Circle Confirm (Japanese/Asian button layout)"},
-    };
+    // bbport: the key -> patch-name mapping is NOT a local list any more. It lives in
+    // gpu/shim/bbport_effects.h, which the menu and the ini use too, so a toggle can no longer be
+    // present in one place and missing in another (xbox/tests/graphics_toggles_test checks the
+    // names against patches/Bloodborne.xml and against scripts/patches.py).
+    // `runtime` entries have no patch: the game code implements them, or the port does.
+    const auto& kEffects = BbPortEffects::Effects;
+    constexpr int kEffectCount = BbPortEffects::EffectCount;
 
     const std::set<std::string> group_fps = {
         "60 FPS++", "90 FPS++", "Uncap FPS++", "Enemy Control",
@@ -2118,9 +2103,13 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
         "Restore Debug Menu (READ NOTES)",
         "Model LOD -2 (Highest)", "Model LOD 1 (Lower)", "Model LOD 2 (Lowest)",
     };
-    for (const auto& ef : kEffects) {
-        if (ef.when_off && std::string(ef.when_off) != "Enemy Control") group_effects.insert(ef.when_off);
-        if (ef.when_on && std::string(ef.when_on) != "Enemy Control") group_effects.insert(ef.when_on);
+    for (int e = 0; e < kEffectCount; ++e) {
+        const auto& ef = kEffects[e];
+        if (!ef.xbox) continue;
+        if (ef.patch_off && std::string(ef.patch_off) != "Enemy Control") {
+            group_effects.insert(ef.patch_off);
+        }
+        if (ef.patch_on && std::string(ef.patch_on) != "Enemy Control") group_effects.insert(ef.patch_on);
     }
 
     bool ok_fps = force_patches ||
@@ -2145,10 +2134,13 @@ PatchBuildResult BuildPatches(const Bytes& eboot_elf, const std::string& app_ver
         else if (fps_mode == "uncap") names.push_back("Uncap FPS++");
     }
 
-    for (const auto& ef : kEffects) {
+    for (int e = 0; e < kEffectCount; ++e) {
+        const auto& ef = kEffects[e];
+        // Desktop-only rows (debug menu, quit to desktop, rebirth) are ini-only on the console.
+        if (!ef.xbox) continue;
         auto it = settings.find(ef.key);
         if (it == settings.end()) continue;
-        const char* chosen = (it->second == "1") ? ef.when_on : ef.when_off;
+        const char* chosen = (it->second == "1") ? ef.patch_on : ef.patch_off;
         if (!chosen) continue;
         const bool in_fps = (std::string(chosen) == "Enemy Control");
         if ((in_fps && !ok_fps) || (!in_fps && !ok_effects)) continue;
