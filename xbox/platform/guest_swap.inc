@@ -758,20 +758,6 @@ static int uwp_swap_store_pool_locked(uint64_t physical, size_t total) {
     return 1;
 }
 
-/* The page is back in RAM (uwp_swap_bytes): its compressed copy has no reader left, and holding it
- * would cost twice - the 16 KiB in the frame and the ~6 KiB in the pool. */
-static void uwp_swap_drop_pool_record(uint64_t physical) {
-    const size_t key = (size_t)(physical / PAGE);
-    if (!uwp_swap_slot || key >= uwp_swap_slot_count) return;
-    AcquireSRWLockExclusive(&uwp_swap_io_lock);
-    const uint32_t slot = uwp_swap_slot[key];
-    if (uwp_pool_slot(slot)) {
-        uwp_pool_free_blob(slot & ~UWP_SWAP_SLOT_POOL);
-        uwp_swap_slot[key] = 0;
-    }
-    ReleaseSRWLockExclusive(&uwp_swap_io_lock);
-}
-
 /* bbport: the page buffers below (uwp_swap_io, uwp_swap_verify, the LZ table) are shared, and a
  * transfer is reached from the pager, the GPU thread and any guest thread taking a commit fault.
  * Most callers already hold uwp_commit_lock, but not all of them do (uwp_promote from a guest map),
@@ -937,6 +923,20 @@ static void uwp_swap_describe_corruption(uint64_t physical, uint64_t expected, u
             uwp_swap_store_pages, uwp_swap_codec_fallbacks, uwp_swap_write_failures, expected,
             actual);
     fflush(stderr);
+}
+
+/* The page is back in RAM (uwp_swap_bytes): its compressed copy has no reader left, and holding it
+ * would cost twice - the 16 KiB in the frame and the ~6 KiB in the pool. */
+static void uwp_swap_drop_pool_record(uint64_t physical) {
+    const size_t key = (size_t)(physical / PAGE);
+    if (!uwp_swap_slot || key >= uwp_swap_slot_count) return;
+    AcquireSRWLockExclusive(&uwp_swap_io_lock);
+    const uint32_t slot = uwp_swap_slot[key];
+    if (uwp_pool_slot(slot)) {
+        uwp_pool_free_blob(slot & ~UWP_SWAP_SLOT_POOL);
+        uwp_swap_slot[key] = 0;
+    }
+    ReleaseSRWLockExclusive(&uwp_swap_io_lock);
 }
 
 static int uwp_swap_transfer(uint64_t physical, void *data, int write) {
