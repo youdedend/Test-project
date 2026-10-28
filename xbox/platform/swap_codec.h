@@ -152,6 +152,38 @@ static size_t uwp_lz_compress(const unsigned char *source, size_t size, unsigned
     return op;
 }
 
+// One page as the swap file stores it: a 2-byte little-endian length header, then either an LZ4
+// block or the page verbatim.
+//
+// bbport: the rule this enforces is the one the read path depends on. A stored length equal to the
+// page size means "raw", so a *compressed* block of exactly that size is indistinguishable from a
+// raw one - and reading it back as raw hands the guest 16 KiB of LZ4 bytes. That is not a corner
+// case: `uwp_lz_compress` returns exactly `size` for a nearly-incompressible page (measured on the
+// host: 235 of 400,000 page-shaped pages, about 1 in 1,700), and the `.437` console run stopped on
+// `UWP promoted page integrity at 000000104D3B8000` after 65,475 stored pages because of it
+// (docs/hardware-test-26). Anything that does not come out strictly smaller is stored raw here, so
+// the ambiguity cannot reach the file.
+//
+// Returns the bytes written to `dest`; `capacity` must be at least `size` + 2 and `size` must fit
+// in the 16-bit header (both hold for a 16 KiB page). *raw is set to 1 for the raw fallback.
+static size_t uwp_swap_encode_page(const unsigned char *source, size_t size, unsigned char *dest,
+                                   size_t capacity, void *scratch, int *raw) {
+    size_t length = size;
+    int stored_raw = 1;
+    if (size <= UINT16_MAX && capacity >= size + 2) {
+        const size_t packed = uwp_lz_compress(source, size, dest + 2, capacity - 2, scratch);
+        if (packed != 0 && packed < size) {
+            length = packed;
+            stored_raw = 0;
+        }
+    }
+    if (stored_raw) memcpy(dest + 2, source, size);
+    dest[0] = (unsigned char)(length & 0xFF);
+    dest[1] = (unsigned char)((length >> 8) & 0xFF);
+    if (raw) *raw = stored_raw;
+    return length + 2;
+}
+
 // Returns the number of bytes written to `dest` (exactly `capacity` on success) or 0 on malformed
 // input - a length overrun, a back-reference before the start of the block, or a short block.
 static size_t uwp_lz_decompress(const unsigned char *source, size_t size, unsigned char *dest,

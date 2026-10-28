@@ -377,8 +377,11 @@ static int uwp_promote(UwpPhysical *physical, uint64_t offset) {
             }
             if (physical->hash_valid) {
                 ++uwp_swap_hash_checks;
-                if (uwp_swap_hash(alias) != physical->hash) {
+                const uint64_t read = uwp_swap_hash(alias);
+                if (read != physical->hash) {
                     ++uwp_swap_hash_errors;
+                    uwp_swap_describe_corruption((uint64_t)(physical - uwp_physical) * PAGE,
+                                                 physical->hash, read);
                     uwp_fail("promoted page integrity", owner->address);
                 }
             }

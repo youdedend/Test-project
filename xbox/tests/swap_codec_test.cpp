@@ -203,6 +203,94 @@ int main() {
               "the rejected input never wrote past the destination");
     }
 
+    // 9. The raw marker is a length equal to the page size, so a *compressed* block of exactly that
+    //    size is indistinguishable from a raw one on the way back in. This is not hypothetical: the
+    //    `.437` console run stopped on `UWP promoted page integrity at 000000104D3B8000` after
+    //    65,475 stored pages, and the host search below lands on such a page within a few attempts
+    //    (docs/hardware-test-26). The runtime must store it raw, and the reader must get the page
+    //    back unchanged.
+    {
+        std::vector<unsigned char> page(kPage);
+        std::mt19937_64 hazard{0xb100d};
+        bool found = false;
+        for (int attempt = 0; attempt < 4000 && !found; ++attempt) {
+            for (auto& byte : page) {
+                byte = static_cast<unsigned char>(hazard());
+            }
+            const int copies = 14 + static_cast<int>(hazard() % 6);
+            for (int c = 0; c < copies; ++c) {
+                const size_t dst = (hazard() % (kPage - 16)) & ~size_t{7};
+                const size_t from = (hazard() % (kPage - 16)) & ~size_t{7};
+                memcpy(page.data() + dst, page.data() + from, 8);
+            }
+            const size_t packed = uwp_lz_compress(page.data(), kPage, codec.compressed.data() + 2,
+                                                  kPage, codec.scratch.data());
+            if (packed != kPage) {
+                continue;
+            }
+            found = true;
+            // The compressor really did produce a block the size of the page.
+            Check(true, "a nearly-incompressible page compresses to exactly the page size");
+            int raw = 0;
+            const size_t total = uwp_swap_encode_page(page.data(), kPage, codec.compressed.data(),
+                                                      kPage + 2, codec.scratch.data(), &raw);
+            const size_t stored = static_cast<size_t>(codec.compressed[0]) |
+                                  (static_cast<size_t>(codec.compressed[1]) << 8);
+            Check(raw == 1, "a block that is not smaller than the page is stored raw");
+            Check(total == kPage + 2 && stored == kPage,
+                  "the stored record carries the raw marker, not the compressed size");
+            // The runtime's read rule, applied to what was stored.
+            memset(codec.restored.data(), 0xCC, kPage);
+            if (stored == kPage) {
+                memcpy(codec.restored.data(), codec.compressed.data() + 2, kPage);
+            } else {
+                uwp_lz_decompress(codec.compressed.data() + 2, stored, codec.restored.data(),
+                                  kPage);
+            }
+            Check(memcmp(codec.restored.data(), page.data(), kPage) == 0,
+                  "the page comes back unchanged through the stored record");
+        }
+        Check(found, "the host search finds a page that compresses to exactly the page size");
+    }
+
+    // 10. The whole stored format, not just the codec: encode a page the way the pager does, then
+    //     read it back the way the pager does. Every shape, and no page may come back different.
+    {
+        std::mt19937_64 shapes{0x5a1ad};
+        size_t bad = 0;
+        for (int i = 0; i < 2000; ++i) {
+            std::vector<unsigned char> page(kPage);
+            const unsigned kind = static_cast<unsigned>(shapes() % 5);
+            for (size_t at = 0; at < kPage; ++at) {
+                switch (kind) {
+                case 0: page[at] = static_cast<unsigned char>(shapes()); break;
+                case 1: page[at] = 0; break;
+                case 2: page[at] = static_cast<unsigned char>((at / 64) & 0xFF); break;
+                case 3: page[at] = static_cast<unsigned char>(shapes() % 4); break;
+                default: page[at] = static_cast<unsigned char>((at % 13) ? 0 : shapes()); break;
+                }
+            }
+            int raw = 0;
+            const size_t total = uwp_swap_encode_page(page.data(), kPage, codec.compressed.data(),
+                                                      kPage + 2, codec.scratch.data(), &raw);
+            const size_t stored = static_cast<size_t>(codec.compressed[0]) |
+                                  (static_cast<size_t>(codec.compressed[1]) << 8);
+            if (total != stored + 2 || stored == 0 || stored > kPage) {
+                ++bad;
+                continue;
+            }
+            if (stored == kPage) {
+                memcpy(codec.restored.data(), codec.compressed.data() + 2, kPage);
+            } else if (uwp_lz_decompress(codec.compressed.data() + 2, stored, codec.restored.data(),
+                                         kPage) != kPage) {
+                ++bad;
+                continue;
+            }
+            if (memcmp(codec.restored.data(), page.data(), kPage) != 0) ++bad;
+        }
+        Check(bad == 0, "2000 stored records read back byte-identical");
+    }
+
     if (failures != 0) {
         std::printf("swap codec: %d check(s) failed\n", failures);
         return 1;

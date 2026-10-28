@@ -132,7 +132,10 @@ static uint64_t uwp_swap_store_pages, uwp_swap_store_raw, uwp_swap_store_zero;
 static uint64_t uwp_swap_store_payload;
 static int32_t uwp_swap_lz_table[1 << UWP_LZ_HASH_BITS];
 static unsigned char uwp_swap_io[PAGE + 2];
-static unsigned char uwp_swap_lz[PAGE];
+/* bbport: what the record we just encoded decodes back to, compared with the page before the write
+ * (see uwp_swap_verify_payloads below). */
+static unsigned char uwp_swap_verify[PAGE];
+static uint64_t uwp_swap_codec_fallbacks;
 
 /* bbport: why a sweep that was asked for memory took almost nothing. `.717` printed
  * `paged out 0 MiB on request` ten times while the report still claimed 1,534 MiB of `pageable
@@ -358,27 +361,31 @@ static int uwp_swap_blank(const void *data) {
     return 1;
 }
 
-/* Compress `data` into uwp_swap_io (2-byte length header first). Returns the total bytes to write,
- * or 0 when the page will not be stored here (blank / out of budget). */
-static size_t uwp_swap_encode(const void *data) {
-    uint16_t length;
-    const size_t packed = uwp_lz_compress((const unsigned char *)data, PAGE, uwp_swap_lz, PAGE,
-                                          uwp_swap_lz_table);
-    if (packed == 0) {
-        memcpy(uwp_swap_io + 2, data, PAGE);
-        length = (uint16_t)PAGE;
-        ++uwp_swap_store_raw;
-    } else {
-        memcpy(uwp_swap_io + 2, uwp_swap_lz, packed);
-        length = (uint16_t)packed;
-    }
-    uwp_swap_io[0] = (unsigned char)(length & 0xFF);
-    uwp_swap_io[1] = (unsigned char)(length >> 8);
-    uwp_swap_store_payload += length;
-    return (size_t)length + 2;
+/* Compress `data` into uwp_swap_io (2-byte length header first). Returns the total bytes to write.
+ * A block is never stored at exactly the page size - that length is the raw marker - and
+ * `uwp_swap_encode_page` (swap_codec.h) is where that rule lives so the tests can hold it. */
+static size_t uwp_swap_encode(const void *data, int *raw) {
+    return uwp_swap_encode_page((const unsigned char *)data, PAGE, uwp_swap_io,
+                                sizeof(uwp_swap_io), uwp_swap_lz_table, raw);
 }
 
-/* bbport: the page buffers below (uwp_swap_io, uwp_swap_lz, the LZ table) are shared, and a
+/* bbport: verify a payload by decompressing it before it goes to the device. `.437` could only
+ * catch a bad payload on the way back in, when the page is already gone from RAM and the only
+ * option left is the integrity stop (docs/hardware-test-26). Decompressing 16 KiB and comparing it
+ * costs ~10 us against a page-out that already writes to the device, so it is on by default;
+ * BB_UWP_SWAP_VERIFY=0 turns it off for an A/B run. A page that fails is stored raw instead of
+ * compressed: the session keeps its memory, the report counts the fallback, and the codec bug is
+ * a statistic instead of a stop. */
+static int uwp_swap_verify_payloads(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *env = getenv("BB_UWP_SWAP_VERIFY");
+        cached = !(env && *env == '0');
+    }
+    return cached;
+}
+
+/* bbport: the page buffers below (uwp_swap_io, uwp_swap_verify, the LZ table) are shared, and a
  * transfer is reached from the pager, the GPU thread and any guest thread taking a commit fault.
  * Most callers already hold uwp_commit_lock, but not all of them do (uwp_promote from a guest map),
  * so the store keeps its own innermost lock: it is never held while taking uwp_commit_lock, so it
@@ -426,7 +433,21 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
         uwp_swap_slot[key] = UWP_SWAP_SLOT_ZERO;
         return 1;
     }
-    const size_t total = uwp_swap_encode(data);
+    int raw = 0;
+    size_t total = uwp_swap_encode(data, &raw);
+    if (!raw && uwp_swap_verify_payloads()) {
+        if (uwp_lz_decompress(uwp_swap_io + 2, total - 2, uwp_swap_verify, PAGE) != PAGE ||
+            memcmp(uwp_swap_verify, data, PAGE) != 0) {
+            ++uwp_swap_codec_fallbacks;
+            memcpy(uwp_swap_io + 2, data, PAGE);
+            uwp_swap_io[0] = (unsigned char)(PAGE & 0xFF);
+            uwp_swap_io[1] = (unsigned char)((PAGE >> 8) & 0xFF);
+            total = PAGE + 2;
+            raw = 1;
+        }
+    }
+    if (raw) ++uwp_swap_store_raw;
+    uwp_swap_store_payload += total - 2;
     uint64_t offset = 0;
     const uint32_t slot = uwp_swap_slot[key];
     if (slot != 0 && slot != UWP_SWAP_SLOT_ZERO) {
@@ -472,6 +493,35 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
     uwp_swap_slot[key] = (uint32_t)offset + 1;
     ++uwp_swap_store_pages;
     return 1;
+}
+
+/* bbport: one line before the integrity stop. `.437` printed only `UWP promoted page integrity at
+ * 000000104D3B8000` - an address, no record, no shape - and the answer was a compressed block of
+ * exactly 16 KiB that the read path took for a raw one (see swap_codec.h). Print what the stop is
+ * looking at: where the record lives, whether its length means raw or compressed, and both hashes.
+ * Cheap: it runs at most once per run, on the way out. */
+static void uwp_swap_describe_corruption(uint64_t physical, uint64_t expected, uint64_t actual) {
+    const size_t key = (size_t)(physical / PAGE);
+    const uint32_t slot = (uwp_swap_slot && key < uwp_swap_slot_count) ? uwp_swap_slot[key] : 0;
+    size_t length = 0;
+    if (slot != 0 && slot != UWP_SWAP_SLOT_ZERO && uwp_swap_file != INVALID_HANDLE_VALUE) {
+        unsigned char header[2];
+        if (uwp_swap_io_at((uint64_t)slot - 1, header, sizeof(header), 0)) {
+            length = (size_t)header[0] | ((size_t)header[1] << 8);
+        }
+    }
+    fprintf(stderr,
+            "UWP swap: corrupt record physical=%" PRIu64 " key=%zu slot=%u length=%zu (%s)"
+            " stored=%" PRIu64 " pages codec fallbacks=%" PRIu64 " write failures=%" PRIu64
+            " expected=%016" PRIx64 " read=%016" PRIx64 "\n",
+            physical, key, slot, length,
+            slot == UWP_SWAP_SLOT_ZERO ? "blank page"
+            : length == PAGE          ? "raw"
+            : length == 0             ? "missing"
+                                      : "compressed",
+            uwp_swap_store_pages, uwp_swap_codec_fallbacks, uwp_swap_write_failures, expected,
+            actual);
+    fflush(stderr);
 }
 
 static int uwp_swap_transfer(uint64_t physical, void *data, int write) {
@@ -1091,13 +1141,13 @@ static void uwp_swap_report(void) {
     printf("UWP swap: disk pages=%" PRIu64 " MiB of a %" PRIu64 " MiB budget (ceiling %" PRIu64
            " MiB, raised %" PRIu64 "); %" PRIu64 " pages stored (%" PRIu64 " raw, %" PRIu64
            " blank, %" PRIu64 " MiB of payload, %" PRIu64 "%% of raw); write failures=%" PRIu64
-           "; urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
+           "; codec fallbacks=%" PRIu64 "; urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
            (disk * PAGE) >> 20, uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20,
            uwp_swap_disk_raised, uwp_swap_store_pages, uwp_swap_store_raw, uwp_swap_store_zero,
            uwp_swap_store_payload >> 20,
            uwp_swap_store_pages ? (uwp_swap_store_payload * 100) / (uwp_swap_store_pages * PAGE)
                                 : UINT64_C(0),
-           uwp_swap_write_failures,
+           uwp_swap_write_failures, uwp_swap_codec_fallbacks,
            uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
     // How much of the device is left, so the next log answers "could we have taken more?" without a
@@ -1158,9 +1208,14 @@ void runtime_memory_start_paging(void) {
             uwp_swap_disk_budget = mb << 20;
             uwp_swap_disk_ceiling = uwp_swap_disk_budget;
         }
+        // bbport: only an explicit value overrides the default. `.421` read the variable as 0 when
+        // it was unset and then assigned that 0 over the 384 MiB default - every `.437` run
+        // reported `reserve 0 MiB ... 0 record(s) refused by it`, so the reserve was never in force.
         const char *reserve = getenv("BB_UWP_SWAP_RESERVE_MB");
-        const unsigned long long reserve_mb = reserve ? strtoull(reserve, NULL, 10) : 0;
-        if (reserve_mb <= 4096) uwp_swap_reserve = reserve_mb << 20;
+        if (reserve && *reserve) {
+            const unsigned long long reserve_mb = strtoull(reserve, NULL, 10);
+            if (reserve_mb <= 4096) uwp_swap_reserve = reserve_mb << 20;
+        }
     }
     const char *enabled = getenv("BB_UWP_SWAP");
     if (enabled && *enabled == '0') {
