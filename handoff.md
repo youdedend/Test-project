@@ -6,7 +6,7 @@ unproven. Sections 1–9 are the current, authoritative state. Section 10 is an 
 kept word for word from earlier rounds (it explains how the current state was reached; its branch
 names, PR numbers and "current" claims are historical and superseded).
 
-Last updated: after commit `03b74ac` (CI run `40432005224`, green). Console-tested: **no**.
+Last updated: after commit `d4f18dd` (CI run `40637003055`, green, published as `1.0.26301.524`). Console-tested: **no** — that build has not run on hardware.
 
 ---
 
@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `2b239ea` — *feat(memory): the resolution rung of the ladder, automatic at memory level 2* (release target) |
+| HEAD | `d4f18dd` — *fix(swap): a compressed page of exactly 16 KiB was read back as raw* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40632632339` — [actions/runs/40632632339](https://github.com/youdedend/Test-project/actions/runs/40632632339), both jobs green, all tests green, pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26301.437.zip` — 10,230,584 B, sha256 `f597c10b5119a1a3bd67556dd246cb4ff23c35acd5ca2f6f1dffcdf8dda00e64` |
-| Version shown by that package | **`1.0.26301.437`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26301.0437`** — [releases/tag/xbox-alpha-1.0.26301.0437](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0437), target `2b239ea` (run `40632632339`): **the resolution rung, automatic at memory level 2** (upscaler active: one preset step down; no upscaler: output 1920x1080 → 1280x720 live; both restored after 10 calm seconds, nothing written to bbport.ini), on top of **`.26301.421`** (384 MiB device reserve + cache write no longer aborts on a full disk, §2q). Previous: `.1119` (compressed swap — **hardware-confirmed 45%**, §2q), `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder) |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.1119` (`docs/hardware-test-25/`, §2q): the pager never failed, the device filled up, and the game's own cache write aborted. `.421` and `.437` are both published and unrun |
-| Open blocker | **the working set.** `.1119`: `pageable private=0`, `lock=sweep held=0 ms` at both stalls, 0.6 FPS at the end — the area is bigger than 5 GiB and paging is exhausted. `.26301.421` stops the swap 384 MiB short of a full device; `.26301.437` adds the last rung (lower internal resolution at level 2) |
+| Last green CI | run `40637003055` — [actions/runs/40637003055](https://github.com/youdedend/Test-project/actions/runs/40637003055), both jobs green, all unit suites green (including the two new codec checks), pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26301.524.zip` — 10,233,506 B, sha256 `689ede92ef11c76e0dd49ea62756771c34542e688bf91c6c47db3e618731cba7` |
+| Version shown by that package | **`1.0.26301.524`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26301.0524`** — [releases/tag/xbox-alpha-1.0.26301.0524](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0524), target `d4f18dd` (run `40637003055`): **a compressed page of exactly 16 KiB is stored raw instead of being read back as raw** — the `.437` integrity stop, found and reproduced on the host (§2s) — plus store-time payload verification and the `reserve 0 MiB` bug that had disabled `.421`'s device reserve. On top of `.26301.437` (the resolution rung, §2r), `.26301.421` (device reserve, §2q) and `.1119` (compressed swap, 45% hardware-confirmed). Previous: `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder)
+| Console validation of this build | **not installed yet** — the newest hardware run is the one in `docs/hardware-test-26/` (§2s), on `.26301.421`/`.437`: 65,475 pages stored (27% of raw), `device free=770 MiB (reserve 0 MiB …)`, `lock=sweep held=0 ms` at the one stall, and the stop on `UWP promoted page integrity` after 500 successful checks. `.26301.524` is published and unrun |
+| Open blocker | **two separate things, and only one is fixed.** (1) *Solved this round*: a compressed page of exactly 16 KiB collided with the "stored raw" length marker and was handed back as LZ4 bytes; that was the `.437` stop (§2s), not memory. (2) *Still open*: the working set — `lock=sweep held=0 ms` at every stall recorded so far (`.823`, `.908`, `.1119`, this run), 0.6–6 FPS at the end, `pageable private` falling to ~900 MiB while the area needs more than 5 GiB |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -876,6 +876,68 @@ targets), not the guest's own 1080p surfaces; the guest still renders what the g
 next run shows the level staying at 2 with the output already at 720p, the remaining lever is the
 guest's own resolution — the startup patch (`patches/Bloodborne.xml`), which needs a restart and a
 user decision.
+
+---
+
+## 2s. The `.421`/`.437` run: a compressed page of exactly 16 KiB came back as raw (2026-10-28)
+
+Logs and the full write-up: `docs/hardware-test-26/`.
+
+**The run.** 65,475 pages stored (319 raw, 19,783 blank, 276 MiB payload, 27% of raw), 396 MiB of a
+768 MiB budget, `write failures=0`, 398 sweeps with none dry, presents frozen at 844, 6.2 FPS, and
+then
+
+```
+STOP: UWP promoted page integrity at 000000104D3B8000, error 0
+```
+
+after `checks=499 corrupt=0` — the 500th verified page read back from the swap record with
+different bytes than were stored. Not a memory limit, not the disk (1,096 MiB free for the first
+half of the run, 770 MiB at the end), not the pager (the one stall printed `lock=sweep held=0 ms
+sweeps=397 request=64 MiB finished 16 ms ago`).
+
+**Root cause.** The record header is a 2-byte length and **a length equal to the page size means
+"stored raw"**. `uwp_swap_encode` wrote `length = packed` for every compressed block, and
+`uwp_lz_compress` can return **exactly 16,384** for a nearly-incompressible page — reproduced on the
+host: 235 of 400,000 page-shaped pages, about **1 in 1,700**. Read back, `uwp_swap_transfer_locked`
+sees `length == PAGE`, takes the block for a raw page and memcpys 16 KiB of LZ4 bytes into the guest
+page. At tens of thousands of stores per session and a verify on every promote, this was arithmetic,
+not bad luck. The integrity check is the only thing that noticed it — which is what it is for.
+
+**Fix (`.26301.524`).**
+
+| Piece | Where | What it does |
+|---|---|---|
+| The format rule, in one place | `swap_codec.h:155-190` `uwp_swap_encode_page` | anything that does not come out **strictly smaller** than the page is stored raw, so a compressed length can never collide with the raw marker |
+| The pager uses it | `guest_swap.inc:364-369` `uwp_swap_encode` | no local copy of the rule to drift |
+| Store-time verification | `guest_swap.inc:373-391, 437-452` | a compressed payload is decompressed and compared with the page **before** the write; a mismatch stores the page raw and counts `codec fallbacks=N` in the report (~10 µs/store, `BB_UWP_SWAP_VERIFY=0` off) |
+| Diagnostics before the stop | `guest_swap.inc:499-527`, called at `guest_memory.inc:383` | one line: physical page, key, slot, record length and what it means (raw/compressed/blank/missing), both hashes, store counters |
+| Tests | `swap_codec_test.cpp` sections 9–10 | a page the compressor really turns into 16,384 bytes must be stored raw and read back identical; 2,000 stored records read back through the runtime's own reader |
+
+Why verify at store time rather than trust the fix: the integrity check can only fire on the way
+**back in**, when the page is already gone from RAM and the only remaining option is a stopped
+process. Decompressing 16 KiB before the write turns any future codec bug into an uncompressed page
+and a counter, at a cost that does not show against a page-out that already writes to the device.
+
+**A second bug, from the same log.** Every report line read `UWP swap: device free=770 MiB
+(reserve 0 MiB kept for the game's own writes, 0 record(s) refused by it)`. The default is 384 MiB;
+`runtime_memory_start_paging` read `BB_UWP_SWAP_RESERVE_MB` as 0 when the variable was unset and
+then assigned that 0 over the default (`guest_swap.inc:1206-1217` before this round). `.421`'s
+device reserve was compiled in and **never in force**, so a `.421`/`.437` session could still have
+hit the `.1119` `ENOSPC` abort. Only an explicit value overrides the default now, and the banner
+prints the real number.
+
+**Not fixed, still the wall.** The freeze: `lock=sweep held=0 ms` for the third run running, so the
+pager is not holding anything at the stall; the guest's working set is larger than the budget.
+`.437`'s resolution rung never fired in this run because the session was already at 1280x720
+(`CoreWindow presentation bridge: 1280x720`, `Scene resolution: raster 1280x720 … (live)`), so it had
+nothing to lower — the guest's own 1080p surfaces are the next lever, and that needs a restart and a
+decision.
+
+**Hardware validation required for `.26301.524`**: not run. What the next log should show —
+`reserve 384 MiB` in the `device free=` line, `codec fallbacks` present in the `disk pages=` line,
+and no `corrupt record` in `errors.log.txt`. A `corrupt record` line would name the record and its
+shape, which is the whole point of adding it.
 
 ---
 
