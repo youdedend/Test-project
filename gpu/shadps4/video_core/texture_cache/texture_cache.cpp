@@ -1458,8 +1458,13 @@ void TextureCache::GarbageCollectImages() {
         // today, and the flag stays so the rule is visible where it is decided.
         candidate.layout_supported = true;
         BbGpu::ImagePinState recount{};
+        // bbport: `drop`, the decision for *this* candidate, not the BB_GC_DROP_OLD switch. The
+        // switch alone would let a tiled GPU-written image the age/aggression rules do not select
+        // fall through to the write-back below, and DownloadImageMemory copies linearly - it would
+        // write a linear layout into the guest's tiled surface. Only an image being dropped
+        // unwritten bypasses the tiled rule.
         const BbGpu::GcBlock block =
-            BbGpu::GcClassifyCandidate(recount, candidate, gc_limits, drop_old);
+            BbGpu::GcClassifyCandidate(recount, candidate, gc_limits, drop);
         if (block != BbGpu::GcBlock::none) {
             if (block == BbGpu::GcBlock::gpu_written_tiled) {
                 ++gc_pass.blocked_tiled;
