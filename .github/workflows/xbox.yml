@@ -248,6 +248,19 @@ jobs:
             python xbox/scripts/symbolicate.py --map $map --rvas xbox/scripts/crash-rvas.txt |
               Tee-Object -FilePath "$env:RUNNER_TEMP/symbols.txt"
             Get-Content "$env:RUNNER_TEMP/symbols.txt" -Raw | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            # bbport: one annotation per resolved crash address. The step summary and the artifact
+            # are both unreachable from the agent sandbox (the artifact download and the log export
+            # both redirect to a host it cannot reach), but the check-run annotations are readable
+            # through the API - so the resolved symbol for each RVA in crash-rvas.txt is surfaced
+            # here as a notice, one line each, capped at the API's ten.
+            $notices = 0
+            foreach ($line in Get-Content "$env:RUNNER_TEMP/symbols.txt") {
+              if ($line -notmatch '^\s*\+0x') { continue }
+              if ($notices -ge 10) { break }
+              $clean = $line.Trim() -replace '%', '%25' -replace "`r", '' -replace "`n", ''
+              Write-Output "::notice title=Crash symbol::$clean"
+              ++$notices
+            }
           } catch {
             $msg = "$_" -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A'
             Write-Output "::warning title=Symbolication failed::$msg"
