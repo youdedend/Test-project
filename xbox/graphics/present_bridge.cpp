@@ -19,6 +19,15 @@ static void Check(HRESULT result, const char* operation) {
         throw std::runtime_error(operation);
     }
 }
+// bbport: the UWP log's own device-lost report (xbox/platform/main.cpp), which prints what the app
+// was holding and dumps the breadcrumb ring. C linkage: main.cpp is C++ with an extern "C" hook.
+extern "C" void bb_uwp_note_device_lost(const char* where);
+
+static void NoteDeviceLost(const char* where) {
+    std::fprintf(stderr, "Device lost: %s\n", where);
+    bb_uwp_note_device_lost(where);
+}
+
 static void Check(vk::Result result, const char* operation) {
     if (result != vk::Result::eSuccess) {
         std::fprintf(stderr, "%s: Vulkan %d\n", operation, static_cast<int>(result));
@@ -169,7 +178,17 @@ struct Presenter::Impl {
             .pSignalSemaphores = signals.data(),
         };
         Check(queue.submit(submit, *vk_fence), "Submit presentation bridge");
-        Check(device.waitForFences(*vk_fence, true, 10'000'000'000ULL), "Wait presentation bridge");
+        // bbport: a lost device used to reach the log as the bare line `Wait presentation bridge:
+        // Vulkan -4`. vk::Result -4 is eErrorDeviceLost, and by the time the exception is caught the
+        // interesting state is gone, so record it here, where it happens.
+        const vk::Result waited =
+            device.waitForFences(*vk_fence, true, 10'000'000'000ULL);
+        if (waited == vk::Result::eErrorDeviceLost) {
+            NoteDeviceLost("presentation bridge fence wait");
+        } else if (waited == vk::Result::eTimeout) {
+            NoteDeviceLost("presentation bridge fence timeout (10 s)");
+        }
+        Check(waited, "Wait presentation bridge");
     }
 
     ~Impl() {

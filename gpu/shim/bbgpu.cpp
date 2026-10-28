@@ -378,8 +378,22 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 ///
 /// Deliberately not done here: writing the setting to bbport.ini (the user's choice survives a
 /// restart; this one does not) and touching the output resolution (a restart-level change).
+/* bbport: the breadcrumb ring (xbox/platform/main.cpp). A resolution change is exactly the kind of
+ * event a crash report cannot reconstruct afterwards. */
+extern "C" void bb_uwp_breadcrumb(const char *text);
+
 extern "C" void bbgpu_uwp_pressure_level(int level) {
     auto& s = BbSettings::Get();
+    /* One line when the level changes, not one per sample: this is called every heartbeat. */
+    {
+        static int last_level = -1;
+        if (level != last_level) {
+            last_level = level;
+            char line[96];
+            std::snprintf(line, sizeof(line), "memory pressure level -> %d", level);
+            bb_uwp_breadcrumb(line);
+        }
+    }
     static int saved_preset = -1;
     static int saved_output = -1;
     static std::chrono::steady_clock::time_point calm_since{};
@@ -457,10 +471,41 @@ extern "C" void bbgpu_uwp_pressure_level(int level) {
 }
 
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
-    if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
-        return r->GetTextureCache().EmergencyReclaim(need);
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r) {
+        return 0;
     }
-    return 0;
+    // bbport: B9's "retired-arena release" half, which until now only ever happened from
+    // Rasterizer::OnSubmit. `.819` sat at `arena: live=912 retired=448 MiB` while the app was at its
+    // ceiling and the texture cache was being emptied - 448 MiB of replaced arenas waiting for a
+    // release that the submit path defers whenever a draw-prep producer is in flight (which, at
+    // world load, is always).
+    //
+    // ReleaseRetiredArenas only frees an arena whose replacement tick the GPU has already signalled
+    // and which no DMA view still hands to a descriptor set, so this cannot free memory that is in
+    // use; it just asks again, now, because an allocation is waiting.
+    uint64_t freed = 0;
+    auto& buffers = r->GetBufferCache();
+    const uint64_t retired_before = buffers.RetiredArenaBytes();
+    if (retired_before != 0 && need != 0) {
+        buffers.ReleaseRetiredArenas();
+        const uint64_t retired_after = buffers.RetiredArenaBytes();
+        if (retired_after < retired_before) {
+            freed = retired_before - retired_after;
+            std::printf("UWP emergency reclaim: released %llu MiB of retired dense arenas "
+                        "(%llu MiB still retired)\n",
+                        static_cast<unsigned long long>(freed >> 20),
+                        static_cast<unsigned long long>(retired_after >> 20));
+            std::fflush(stdout);
+            bb_uwp_breadcrumb("emergency reclaim: retired arenas released");
+        }
+    }
+    // `need - freed`, never 0: EmergencyReclaim's argument is a byte budget, and asking it for zero
+    // bytes is not a way of asking for nothing.
+    if (need > freed) {
+        freed += r->GetTextureCache().EmergencyReclaim(need - freed);
+    }
+    return freed;
 }
 
 /// bbport: the memory categories and the fence position, for the UWP heartbeat (main.cpp).

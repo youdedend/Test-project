@@ -46,8 +46,12 @@
 extern "C" void bbgpu_flush_caches(void);
 
 // B10: the breadcrumb ring (definition further down, next to the fault handler that dumps it).
-void bb_uwp_breadcrumb(const char* text);
-void bb_uwp_breadcrumb_dump(const char* why);
+// C linkage because the pager (guest_swap.inc, a C translation unit) writes to it too.
+extern "C" void bb_uwp_breadcrumb(const char* text);
+extern "C" void bb_uwp_breadcrumb_dump(const char* why);
+// Called from the presentation bridge when the Vulkan device goes away, so the log says what the
+// app was holding when it did.
+extern "C" void bb_uwp_note_device_lost(const char* where);
 
 #ifndef BB_PREPARED_FORMAT
 #define BB_PREPARED_FORMAT "1"
@@ -100,6 +104,7 @@ struct BbSwapStats {
 };
 void runtime_memory_swap_stats(void* out);
 uint64_t runtime_memory_resident_bytes(void);
+void runtime_memory_resident_breakdown(uint64_t* out, size_t count);
 }
 
 static std::atomic<bool> g_finished{false};
@@ -1457,7 +1462,7 @@ static unsigned long long breadcrumb_ms() {
     return GetTickCount64() - base;
 }
 
-void bb_uwp_breadcrumb(const char* text) {
+extern "C" void bb_uwp_breadcrumb(const char* text) {
     if (!text) {
         return;
     }
@@ -1467,7 +1472,7 @@ void bb_uwp_breadcrumb(const char* text) {
                   static_cast<unsigned long long>(breadcrumb_ms()), text);
 }
 
-void bb_uwp_breadcrumb_dump(const char* why) {
+extern "C" void bb_uwp_breadcrumb_dump(const char* why) {
     const unsigned at = g_breadcrumb_at.load(std::memory_order_relaxed);
     const unsigned count = at < BB_BREADCRUMB_LINES ? at : BB_BREADCRUMB_LINES;
     std::printf("UWP breadcrumbs (%s), last %u of %u entries:\n", why ? why : "dump", count, at);
@@ -1477,6 +1482,41 @@ void bb_uwp_breadcrumb_dump(const char* why) {
     std::fflush(stdout);
 }
 
+
+/// The device being lost (vk::Result -4) is the failure `.819` ended in, and the log said only
+/// `Wait presentation bridge: Vulkan -4`. Everything needed to explain it was already being
+/// collected; this prints it at the moment it happens, once, before the exception unwinds.
+extern "C" void bb_uwp_note_device_lost(const char* where) {
+    static std::atomic<int> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) > 0) {
+        return;
+    }
+    BbSwapStats swap{};
+    runtime_memory_swap_stats(&swap);
+    BbGpuMemoryCats gpu{};
+    const bool have_gpu = bbgpu_uwp_memory_cats(&gpu) != 0;
+    std::printf("UWP DEVICE LOST at %s: app=%llu/%llu MiB, guest resident=%llu MiB, "
+                "swap=%llu/%llu MiB (%llu pages, %llu write failures), "
+                "gpu device=%llu MiB, textures=%llu MiB in %llu images, "
+                "arena live=%llu retired=%llu MiB, fences %llu/%llu\n",
+                where ? where : "unknown",
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                static_cast<unsigned long long>(runtime_memory_resident_bytes() >> 20),
+                static_cast<unsigned long long>(swap.disk_used >> 20),
+                static_cast<unsigned long long>(swap.disk_budget >> 20),
+                static_cast<unsigned long long>(swap.pages),
+                static_cast<unsigned long long>(swap.write_failures),
+                static_cast<unsigned long long>(have_gpu ? gpu.device_used >> 20 : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.texture_bytes >> 20 : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.texture_count : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.dense_live >> 20 : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.dense_retired >> 20 : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.fence_submitted : 0),
+                static_cast<unsigned long long>(have_gpu ? gpu.fence_completed : 0));
+    std::fflush(stdout);
+    bb_uwp_breadcrumb_dump("device lost");
+}
 
 static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
     if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) {
@@ -1706,6 +1746,10 @@ static void log_memory_table(uint64_t presents) {
     std::printf(" guest resident=%llu MiB (pinned %llu MiB)",
                 static_cast<unsigned long long>(resident >> 20),
                 static_cast<unsigned long long>(pinned >> 20));
+    // `parked` is the guest memory the file is holding, `used` what that cost on disk, and the two
+    // together are the A3 measurement: `.819` parked 1,149 MiB in 483 MiB, so 666 MiB that would
+    // otherwise have been resident stayed out of RAM.
+    const uint64_t parked = swap.pages * 16384;
     std::printf("\n  swap: used=%llu budget=%llu payload=%llu MiB, pages=%llu (blank %llu), "
                 "blank=%llu raw=%llu compressed=%llu MiB\n",
                 static_cast<unsigned long long>(swap.disk_used >> 20),
@@ -1716,6 +1760,25 @@ static void log_memory_table(uint64_t presents) {
                 static_cast<unsigned long long>(swap.blank_bytes >> 20),
                 static_cast<unsigned long long>(swap.raw_bytes >> 20),
                 static_cast<unsigned long long>(swap.compressed_bytes >> 20));
+    {
+        // Where the resident guest memory actually is, and how much of it the pager may touch.
+        uint64_t parts[6] = {};
+        runtime_memory_resident_breakdown(parts, 6);
+        std::printf("  resident: private=%llu MiB (pageable %llu, not pageable %llu), section=%llu, "
+                    "views=%llu, disk-backed=%llu MiB\n",
+                    static_cast<unsigned long long>(parts[0] >> 20),
+                    static_cast<unsigned long long>(parts[1] >> 20),
+                    static_cast<unsigned long long>(parts[2] >> 20),
+                    static_cast<unsigned long long>(parts[3] >> 20),
+                    static_cast<unsigned long long>(parts[4] >> 20),
+                    static_cast<unsigned long long>(parts[5] >> 20));
+    }
+    std::printf("  swap keeps out of RAM: %llu MiB of guest pages (blank %llu + compression) "
+                "in %llu MiB of file\n",
+                static_cast<unsigned long long>((parked > swap.disk_used ? (parked - swap.disk_used)
+                                                                        : 0) >> 20),
+                static_cast<unsigned long long>(swap.blank_bytes >> 20),
+                static_cast<unsigned long long>(swap.disk_used >> 20));
     std::printf("  swap io: out=%llu in=%llu pages, copy-in failures=%llu, write failures=%llu, "
                 "at-budget=%llu MiB, write-failed=%llu MiB\n",
                 static_cast<unsigned long long>(swap.copy_out_pages),
@@ -1756,14 +1819,35 @@ static void log_memory_table(uint64_t presents) {
                     static_cast<unsigned long long>(presents));
     }
 
-    // The accounting line. Only the categories that are supposed to add up are in the sum: guest
-    // resident plus what the pager parked on disk plus the GPU's own allocations. Everything the
-    // runtime maps for itself (audio, save data, prepared files, the JIT's own heap) lands in
-    // `unaccounted` by design - it is a residual, not a defect counter.
-    const uint64_t known = resident + swap.disk_used + (have_gpu ? gpu.device_used : 0);
+    // The accounting line, second attempt.
+    //
+    // The first one added guest resident + swap + device and was wrong twice over: swap bytes are
+    // on the device's *disk*, not in RAM, and on a console the GPU's memory comes out of the same
+    // pool as the guest's, so `device` already contains the guest pages the GPU maps. `.819` printed
+    // `accounted=8163 MiB` against an app of 5,055 - a sum that cannot exist, which is exactly what
+    // a diagnostics line must never do.
+    //
+    // What is left is honest. Guest resident is unambiguous. The driver's `device` total is an
+    // overlapping view, so the part of it that is not guest pages is `device - resident` (clamped at
+    // 0), and what is left after both is the number worth acting on.
+    const uint64_t gpu_only = have_gpu && gpu.device_used > resident ? gpu.device_used - resident : 0;
+    const uint64_t known = resident + gpu_only;
     const long long unaccounted = static_cast<long long>(usage) - static_cast<long long>(known);
-    std::printf("  accounted=%llu MiB, unaccounted=%+lld MiB (app - guest resident - swap - device)\n",
+    std::printf("  accounted: guest resident=%llu + gpu-only=%llu = %llu MiB; "
+                "unaccounted=%+lld MiB (app - resident - (device - resident))\n",
+                static_cast<unsigned long long>(resident >> 20),
+                static_cast<unsigned long long>(gpu_only >> 20),
                 static_cast<unsigned long long>(known >> 20), unaccounted / 1024 / 1024);
+    // One breadcrumb per sample: the ring keeps the last 200, so it holds ~16 minutes of the climb.
+    // `.819`'s ring contained a single entry when the device was lost.
+    {
+        char line[128];
+        std::snprintf(line, sizeof(line), "heartbeat: app=%llu MiB level=%u resident=%llu MiB",
+                      static_cast<unsigned long long>(usage >> 20),
+                      unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
+                      static_cast<unsigned long long>(resident >> 20));
+        bb_uwp_breadcrumb(line);
+    }
     std::fflush(stdout);
 }
 

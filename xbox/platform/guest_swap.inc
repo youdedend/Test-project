@@ -158,6 +158,9 @@ static uint64_t uwp_scan_atbudget_bytes, uwp_scan_write_failed_bytes;
  * stall report says "guest memory pager, sweeping for N MiB" instead of only showing a stack. */
 extern void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
 extern void bbgpu_thread_op_done(void);
+/* bbport: the breadcrumb ring lives in main.cpp (B10). The pager is where the run gets into
+ * trouble, so it is the part that most needs to leave a trail. */
+extern void bb_uwp_breadcrumb(const char *text);
 /* bbport: a sweep is not allowed to run forever. `.736` froze for 10 s inside one sweep at
  * 5,116/5,120 MiB and the allocation waiting for it had no answer either way; the ladder must end
  * in a decision (degrade, or stop with a reason), never in an unbounded wait. */
@@ -182,6 +185,12 @@ static void uwp_swap_scan_reset(void) {
     uwp_scan_uncommitted = uwp_scan_noview = uwp_scan_pinned = uwp_scan_shared = 0;
     uwp_scan_section = uwp_scan_atbudget = uwp_scan_unreadable = uwp_scan_recent_cleared = 0;
     uwp_scan_viewguard = uwp_scan_write_failed = 0;
+    // bbport: the two byte counters belong to the same pass as the page counters above. They were
+    // added without this line and the first console run (`.819`) printed
+    // `at-budget=206460 (164162 MiB)` - 206,460 pages are 3,226 MiB, so the MiB figure had been
+    // accumulating since the run started while the page count was reset every request. A counter
+    // that does not reset with its own denominator is worse than no counter.
+    uwp_scan_atbudget_bytes = uwp_scan_write_failed_bytes = 0;
 }
 /* bbport: what the pager was doing when the console froze. `.717` and `.823` both end in
  * `UWP STALL DETECTED (presents stuck for 10 s)` with nothing else in the log to blame, and a page
@@ -872,10 +881,39 @@ static int uwp_swap_protect(UwpPage *page, unsigned index, int prot) {
     return 1;
 }
 
+/* bbport: is there anywhere to put a private page right now? `.819` is the answer to why the
+ * console stalled: the swap file reached its 483 MiB cap, so `uwp_swap_page_out` scanned the whole
+ * page table (1.25 M entries, twice when views are included), skipped every private page as
+ * at-budget, released nothing, and repeated that on every allocation - 722 passes, 251 of them
+ * releasing nothing, one PM4 submission taking 2.3 s and the presentation fence timing out.
+ *
+ * A page that cannot be written must not be walked to. Views (kind 3) are still worth walking,
+ * because releasing one frees RAM without touching the disk, so `include_views` bypasses this. */
+static int uwp_swap_disk_blocked(void) {
+    return uwp_swap_disk_full || uwp_swap_store_next >= uwp_swap_disk_budget;
+}
+
 static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int include_views,
                                         int ignore_recent) {
     if (!uwp_swap_open()) return 0;
     if (bytes) ++uwp_swap_passes;
+    // One line, once a second, so a log says "the swap is full and the sweeps are no-ops" instead of
+    // leaving it to be inferred from a 2.3 s PM4 submission and a lost device.
+    if (uwp_swap_disk_blocked() && !include_views &&
+        !(uwp_swap_disk_growable && !uwp_swap_disk_full &&
+          uwp_swap_disk_budget < uwp_swap_disk_ceiling)) {
+        const uint64_t now = GetTickCount64();
+        static uint64_t last_blocked_report;
+        if (now - last_blocked_report >= 1000) {
+            last_blocked_report = now;
+            printf("UWP swap: nothing can be written (file %" PRIu64 " MiB of %" PRIu64
+                   " MiB budget, full=%d); sweeping for views only\n",
+                   uwp_swap_store_next >> 20, uwp_swap_disk_budget >> 20,
+                   (int)uwp_swap_disk_full);
+            bb_uwp_breadcrumb("swap: disk full, private pages cannot be paged out");
+        }
+        return 0;
+    }
     // bbport: one refused write is not a verdict for the rest of the session (see uwp_swap_full_tick).
     if (uwp_swap_disk_full && GetTickCount64() - uwp_swap_full_tick > UINT64_C(10000)) {
         uwp_swap_disk_full = 0;
@@ -901,6 +939,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             // Out of time, not out of pages: report what this sweep already freed and let the
             // caller decide (see runtime_memory_page_out). Bounded and one line, once per sweep.
             ++uwp_swap_sweep_timeouts;
+            bb_uwp_breadcrumb("swap: sweep hit its timeout");
             printf("UWP swap: sweep stopped at its %" PRIu64 " ms timeout (released %" PRIu64
                    " MiB of the %" PRIu64 " MiB asked; budget=%" PRIu64 "/%" PRIu64 " MiB)\n",
                    uwp_swap_sweep_timeout_ms(), released >> 20, bytes >> 20,
@@ -1237,6 +1276,41 @@ void runtime_memory_swap_stats(RuntimeSwapStats *out) {
     out->copy_in_pages = uwp_swap_copy_in_pages;
     out->copy_in_failures = uwp_swap_copy_in_failures;
     out->write_failures = uwp_swap_write_failures;
+}
+
+/* bbport: resident guest memory, split by what the pager can do about it. `.819` ended with
+ * `guest resident=2688 MiB` and `pageable private=806 MiB`, i.e. ~1.9 GiB of guest pages the pager
+ * never even considers, and the log could not say which kind they were. This walk can:
+ *   [0] private, committed          (the pager's own kind == 1)
+ *   [1]   of which pageable         (what a sweep may write out)
+ *   [2]   of which NOT pageable     (WB_ONION / audio / rings / heaps: see host_map)
+ *   [3] section-backed              (kind 2, shared with the GPU by design)
+ *   [4] mapped views                (kind 3)
+ *   [5] disk-backed                 (kind 4, already in the swap file)
+ * One page walk, heartbeat cadence, same cost as runtime_memory_resident_bytes. */
+void runtime_memory_resident_breakdown(uint64_t *out, size_t count) {
+    if (!out) return;
+    for (size_t i = 0; i < count; ++i) out[i] = 0;
+    read_lock();
+    AcquireSRWLockExclusive(&uwp_commit_lock);
+    for (size_t i = 0; i < uwp_count; ++i) {
+        const UwpPage *page = &uwp_pages[i];
+        if (!page->mapped) continue;
+        switch (page->kind) {
+        case 1:
+            if (!page->committed) break;
+            out[0] += PAGE;
+            if (page->pageable) out[1] += PAGE;
+            else out[2] += PAGE;
+            break;
+        case 2: out[3] += PAGE; break;
+        case 3: out[4] += PAGE; break;
+        case 4: out[5] += PAGE; break;
+        default: break;
+        }
+    }
+    ReleaseSRWLockExclusive(&uwp_commit_lock);
+    read_unlock();
 }
 
 /* Resident guest memory: every mapped page that is not paged out. This is the "guest private

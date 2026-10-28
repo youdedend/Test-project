@@ -116,6 +116,9 @@ uint64_t runtime_memory_page_out(uint64_t need);
 uint64_t runtime_memory_pinned_bytes(void);
 /* Resident guest memory (mapped and not paged out). One page walk: heartbeat cadence only. */
 uint64_t runtime_memory_resident_bytes(void);
+/* Resident guest memory by category (private pageable / private not pageable / section / view /
+ * disk-backed), six entries; see guest_swap.inc. */
+void runtime_memory_resident_breakdown(uint64_t *out, size_t count);
 /* The pager's own counters, for the 5 s memory table. All bytes; `pages` are counts. */
 typedef struct RuntimeSwapStats {
     uint64_t disk_used, disk_budget, payload;   /* file size, what it may grow to, payload in it */
