@@ -537,6 +537,23 @@ extern "C" int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats *out) {
     auto &scheduler = r->GetScheduler();
     out->fence_submitted = scheduler.CurrentTick();
     out->fence_completed = scheduler.GetWorkSemaphore()->KnownGpuTick();
+    // bbport (B5): a fence age, without asking the scheduler for tick timestamps it does not keep.
+    // "Completed has not moved while submitted is ahead of it" is the stall this is for; the clock
+    // is the same one the heartbeat runs on, so the two lines can be read together.
+    {
+        static uint64_t last_completed = 0, last_change_ms = 0;
+        const uint64_t now_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        if (out->fence_completed != last_completed || last_change_ms == 0) {
+            last_completed = out->fence_completed;
+            last_change_ms = now_ms;
+        }
+        out->fence_stalled_ms = out->fence_submitted > out->fence_completed && now_ms > last_change_ms
+                                    ? now_ms - last_change_ms
+                                    : 0;
+    }
     out->available = 1;
     return 1;
 }

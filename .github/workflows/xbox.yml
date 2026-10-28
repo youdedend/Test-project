@@ -211,6 +211,11 @@ jobs:
             # the push constant that carries it to the post-process shader. A toggle that is visible
             # but wired to nothing is the failure mode; it does not crash, so nothing else catches it.
             @{ name = 'graphics_toggles'; include = 'gpu/shim'; sources = @('xbox\tests\graphics_toggles_test.cpp') },
+            # BUILD 1: the storage report's rules. `.819` was capped to a 483 MiB swap file because
+            # the LocalState volume had 867 MiB free while the console had 30 GB elsewhere; the
+            # verdict that warns a player, the "biggest *writable* volume" rule and the folder walk
+            # (including that a capped walk says it is capped) are what that run needed.
+            @{ name = 'storage_report'; include = 'xbox/platform'; sources = @('xbox\tests\storage_report_test.cpp') },
             @{ name = 'overlay_index'; include = 'xbox/platform'; sources = @('xbox\tests\overlay_index_test.cpp') }
           )
           # Compiler and test output is echoed and (on failure) annotated: the job log is not always

@@ -127,6 +127,13 @@ typedef struct RuntimeSwapStats {
     uint64_t device_free, reserve;              /* free space, and what stays for the game's files */
     uint64_t atbudget_bytes, write_failed_bytes;/* resident because the budget/device refused it */
     uint64_t copy_out_pages, copy_in_pages, copy_in_failures, write_failures;
+    /* Two counters that answer "what did the pager do when the disk said no". `zero_paged` is guest
+     * memory released without writing anything (an all-zero page needs no record); the pool fields
+     * are the in-memory tier: `pool_page_bytes` of guest memory held in `pool_committed` bytes, so
+     * `pool_saved` is what the app budget got back. */
+    uint64_t zero_paged_bytes;
+    uint64_t pool_capacity, pool_committed, pool_peak_committed;
+    uint64_t pool_pages, pool_page_bytes, pool_saved, pool_pages_in, pool_refused;
 } RuntimeSwapStats;
 void runtime_memory_swap_stats(RuntimeSwapStats *out);
 void runtime_memory_start_paging(void);

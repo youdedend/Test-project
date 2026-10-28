@@ -41,6 +41,7 @@
 #include "dump_panel.h"
 #include "ini_file.h"
 #include "prepare_game.h"
+#include "storage_report.h"
 #include "sfo_version.h"
 
 extern "C" void bbgpu_flush_caches(void);
@@ -87,10 +88,15 @@ typedef struct BbGpuMemoryCats {
     uint64_t device_used, texture_bytes, texture_count;
     uint64_t dense_live, dense_retired, arena_reserve_used;
     uint64_t fence_submitted, fence_completed;
+    /* bbport (B5): how long the completed fence has been standing still while work is outstanding.
+     * 0 when the GPU is idle. This is the difference between "the GPU is busy" and "the GPU stopped",
+     * and it is the number the stall reports never had. */
+    uint64_t fence_stalled_ms;
     int32_t available;
 } BbGpuMemoryCats;
 int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats* out);
 void bbgpu_thread_op_dump(void);
+extern "C" void bbgpu_thread_op(const char* tag, uint64_t arg0, uint64_t arg1);
 /* guest_swap.inc: the pager's own counters and the resident guest total. The parameter is
  * `void *` because this file is C++ and src/runtime.h is C (`__thread`, no extern "C" guard); the
  * struct below must stay field-for-field identical to RuntimeSwapStats there. */
@@ -101,6 +107,9 @@ struct BbSwapStats {
     uint64_t device_free, reserve;
     uint64_t atbudget_bytes, write_failed_bytes;
     uint64_t copy_out_pages, copy_in_pages, copy_in_failures, write_failures;
+    uint64_t zero_paged_bytes;
+    uint64_t pool_capacity, pool_committed, pool_peak_committed;
+    uint64_t pool_pages, pool_page_bytes, pool_saved, pool_pages_in, pool_refused;
 };
 void runtime_memory_swap_stats(void* out);
 uint64_t runtime_memory_resident_bytes(void);
@@ -108,6 +117,10 @@ void runtime_memory_resident_breakdown(uint64_t* out, size_t count);
 }
 
 static std::atomic<bool> g_finished{false};
+/// bbport: set by the storage report when the LocalState volume has less than the headroom this port
+/// wants. Read by the telemetry loop (one line the first time it goes low) and by the visible warning.
+static std::atomic<bool> g_storage_low{false};
+static std::atomic<bool> g_storage_low_shown{false};
 static std::atomic<bool> g_game_mode{false};
 static std::atomic<bool> g_window_closed{false};
 static std::atomic<bool> g_app_visible{true};
@@ -1687,8 +1700,12 @@ static void log_run_header(const std::string& local_dir) {
 
     // Flags that change behaviour at run time, printed even when unset, so a log reader does not
     // have to guess which A/B switches were in play.
+    // BUILD 1's switches are in here too, so a console run says which of the new tiers was armed:
+    // the in-memory pool (item 3), the all-zero-page exemption (item 2) and the storage warning
+    // (item 1) can each be turned off without a rebuild, which is what makes an A/B measurement of
+    // them possible.
     std::printf("UWP flags: swap=%s verify=%s blank=%s compress=%s pin_private=%s "
-                "timeout_ms=%s toggles=%s\n",
+                "timeout_ms=%s toggles=%s pool_mb=%s storage_dialog=%s\n",
                 std::getenv("BB_UWP_SWAP") ? std::getenv("BB_UWP_SWAP") : "1",
                 std::getenv("BB_UWP_SWAP_VERIFY") ? std::getenv("BB_UWP_SWAP_VERIFY") : "1",
                 std::getenv("BB_UWP_SWAP_BLANK") ? std::getenv("BB_UWP_SWAP_BLANK") : "1",
@@ -1696,7 +1713,10 @@ static void log_run_header(const std::string& local_dir) {
                 std::getenv("BB_UWP_PIN_PRIVATE") ? std::getenv("BB_UWP_PIN_PRIVATE") : "0",
                 std::getenv("BB_UWP_SWAP_TIMEOUT_MS") ? std::getenv("BB_UWP_SWAP_TIMEOUT_MS")
                                                       : "2000",
-                std::getenv("BB_TOGGLE_FILE") ? std::getenv("BB_TOGGLE_FILE") : "none");
+                std::getenv("BB_TOGGLE_FILE") ? std::getenv("BB_TOGGLE_FILE") : "none",
+                std::getenv("BB_UWP_SWAP_POOL_MB") ? std::getenv("BB_UWP_SWAP_POOL_MB")
+                                                   : "192 (default)",
+                std::getenv("BB_UWP_STORAGE_DIALOG") ? std::getenv("BB_UWP_STORAGE_DIALOG") : "1");
     std::fflush(stdout);
 }
 
@@ -1819,25 +1839,50 @@ static void log_memory_table(uint64_t presents) {
                     static_cast<unsigned long long>(presents));
     }
 
-    // The accounting line, second attempt.
+    // The accounting line, third attempt - and the first one that does not subtract overlapping
+    // numbers from each other.
     //
-    // The first one added guest resident + swap + device and was wrong twice over: swap bytes are
-    // on the device's *disk*, not in RAM, and on a console the GPU's memory comes out of the same
-    // pool as the guest's, so `device` already contains the guest pages the GPU maps. `.819` printed
-    // `accounted=8163 MiB` against an app of 5,055 - a sum that cannot exist, which is exactly what
-    // a diagnostics line must never do.
+    // History, because the line kept lying in a way that looked like arithmetic:
+    //   * attempt 1 added guest resident + swap + device. Two of those cannot be added: swap bytes
+    //     are on the device's disk, not in RAM, and on a console the GPU's memory comes out of the
+    //     same pool as the guest's. `.819` printed `accounted=8163 MiB` against an app of 5,055.
+    //   * attempt 2 used `resident + (device - resident)`. That is `device` whenever the driver's
+    //     total is the larger of the two - and on this console it always is, because it covers
+    //     roughly the whole app. So `unaccounted` came out at or below zero: the line was
+    //     subtracting the app from itself and calling the remainder a mystery.
     //
-    // What is left is honest. Guest resident is unambiguous. The driver's `device` total is an
-    // overlapping view, so the part of it that is not guest pages is `device - resident` (clamped at
-    // 0), and what is left after both is the number worth acting on.
-    const uint64_t gpu_only = have_gpu && gpu.device_used > resident ? gpu.device_used - resident : 0;
-    const uint64_t known = resident + gpu_only;
-    const long long unaccounted = static_cast<long long>(usage) - static_cast<long long>(known);
-    std::printf("  accounted: guest resident=%llu + gpu-only=%llu = %llu MiB; "
-                "unaccounted=%+lld MiB (app - resident - (device - resident))\n",
+    // What is actually true: `guest resident` is a subset of the app's memory, and `device` is a
+    // second view that overlaps it. Neither is disjoint from the other, so the honest floor is the
+    // larger of the two, not their sum, and what is left over is `usage - max(resident, device)`.
+    // The overlap is printed instead of being quietly absorbed: a reader can then tell "the GPU is
+    // holding X MiB the guest does not see" from "X MiB is neither of ours".
+    const uint64_t winner = have_gpu && gpu.device_used > resident ? gpu.device_used : resident;
+    const uint64_t overlap = have_gpu && gpu.device_used < resident ? resident - gpu.device_used
+                                                                   : 0;
+    const long long unaccounted = static_cast<long long>(usage) - static_cast<long long>(winner);
+    std::printf("  accounted: max(guest resident=%llu, device=%llu) = %llu MiB; "
+                "unaccounted=%+lld MiB (app - the larger view; %llu MiB of guest memory is outside "
+                "the driver's total)\n",
                 static_cast<unsigned long long>(resident >> 20),
-                static_cast<unsigned long long>(gpu_only >> 20),
-                static_cast<unsigned long long>(known >> 20), unaccounted / 1024 / 1024);
+                static_cast<unsigned long long>(have_gpu ? gpu.device_used >> 20 : 0),
+                static_cast<unsigned long long>(winner >> 20), unaccounted / 1024 / 1024,
+                static_cast<unsigned long long>(overlap >> 20));
+    // The two tiers of "the disk said no", as their own line: `at-budget` alone never said whether
+    // the page stayed resident or went somewhere else.
+    std::printf("  pager at-budget: %llu MiB stayed resident (both tiers full); zero pages paged "
+                "out with no record=%llu MiB; pool: %llu pages = %llu MiB of guest memory in %llu "
+                "MiB committed (capacity %llu, peak %llu), saved %llu MiB, %llu page-ins, %llu "
+                "refused\n",
+                static_cast<unsigned long long>(swap.atbudget_bytes >> 20),
+                static_cast<unsigned long long>(swap.zero_paged_bytes >> 20),
+                static_cast<unsigned long long>(swap.pool_pages),
+                static_cast<unsigned long long>(swap.pool_page_bytes >> 20),
+                static_cast<unsigned long long>(swap.pool_committed >> 20),
+                static_cast<unsigned long long>(swap.pool_capacity >> 20),
+                static_cast<unsigned long long>(swap.pool_peak_committed >> 20),
+                static_cast<unsigned long long>(swap.pool_saved >> 20),
+                static_cast<unsigned long long>(swap.pool_pages_in),
+                static_cast<unsigned long long>(swap.pool_refused));
     // One breadcrumb per sample: the ring keeps the last 200, so it holds ~16 minutes of the climb.
     // `.819`'s ring contained a single entry when the device was lost.
     {
@@ -1957,6 +2002,21 @@ static void run_loader() {
                 static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
                 winrt::Windows::Gaming::Input::Gamepad::Gamepads().Size());
     log_run_header(local_str);
+
+    // bbport: what the volume looks like before the pager is capped to it. The result decides the
+    // visible warning below, so a run that is going to be storage-limited says so at the start
+    // rather than at 5,116 MiB.
+    g_storage_low.store(BbStorage::Report(local_str.c_str()) != 0);
+    if (g_storage_low.load()) {
+        bb_uwp_breadcrumb("storage warning: LocalState volume is low");
+        // Visible, not only in the log: a player whose console needs 2 GB freed cannot be expected
+        // to read loader.log.txt. Asked once, before the game starts, and skippable for an A/B run
+        // (BB_UWP_STORAGE_DIALOG=0) or for an automated one.
+        const char* dialog = std::getenv("BB_UWP_STORAGE_DIALOG");
+        if (!(dialog && *dialog == '0') && !g_storage_low_shown.exchange(true)) {
+            ask_player(BbStorage::WarningText(), {"OK"});
+        }
+    }
 
     // Verify dynamic code generation + System V AMD64 ABI invocation inside AppContainer.
     void* smoke_page = VirtualAllocFromApp(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -2218,6 +2278,9 @@ static void run_loader() {
 }
 
 static unsigned __stdcall loader_thread_entry(void*) {
+    // B7: the guest's main thread names itself in the per-thread operation table, so a stall dump
+    // says "guest main" instead of showing a stack inside a WinRT wait with no owner.
+    bbgpu_thread_op("guest main: running the game", 0, 0);
     try {
         run_loader();
     } catch (const winrt::hresult_error& err) {
@@ -2367,17 +2430,50 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     // back after ten calm seconds (bbgpu.cpp). Reads the same level printed below.
                     bbgpu_uwp_pressure_level(
                         int(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
+                    // B5: the fence age is the number that separates "the GPU is behind" from
+                    // "the presenter stopped": outstanding work is normal, work that has been
+                    // outstanding for seconds is the stall the log keeps showing without a cause.
+                    BbGpuMemoryCats gpu{};
+                    const bool have_gpu = bbgpu_uwp_memory_cats(&gpu) != 0;
+                    const unsigned long long fence_age =
+                        have_gpu ? static_cast<unsigned long long>(gpu.fence_stalled_ms) : 0ULL;
                     std::printf(
                         "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu, "
-                        "guest pinned=%llu MiB, %+lld MiB since the last sample)\n",
+                        "guest pinned=%llu MiB, %+lld MiB since the last sample, "
+                        "gpu fence submitted=%llu completed=%llu age=%llu ms)\n",
                         static_cast<unsigned long long>(usage >> 20),
                         static_cast<unsigned long long>(limit >> 20),
                         unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
                         static_cast<unsigned long long>(presents),
                         static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20),
-                        delta / 1024 / 1024);
+                        delta / 1024 / 1024,
+                        static_cast<unsigned long long>(have_gpu ? gpu.fence_submitted : 0),
+                        static_cast<unsigned long long>(have_gpu ? gpu.fence_completed : 0),
+                        fence_age);
                     // A4: the same heartbeat, broken down into categories.
                     log_memory_table(presents);
+                }
+                // bbport: storage can fill up during a session (the swap file itself does it), so
+                // the warning is re-evaluated on the same heartbeat. One line, the first time it
+                // goes low; then the memory table carries the current free space every sample.
+                {
+                    static uint64_t last_free_mib = 0;
+                    const std::uint64_t free_now = BbStorage::LocalStateFreeBytes();
+                    const std::uint64_t free_mib = free_now >> 20;
+                    if (free_mib != last_free_mib) {
+                        last_free_mib = free_mib;
+                        if (BbStorage::LowStorage(free_now)) {
+                            std::printf("UWP STORAGE: LocalState volume free=%llu MiB, below the "
+                                        "%llu MiB this port keeps for paging and the game's own "
+                                        "writes\n",
+                                        static_cast<unsigned long long>(free_mib),
+                                        static_cast<unsigned long long>(BbStorage::kLowStorageBytes >> 20));
+                            char line[128];
+                            std::snprintf(line, sizeof(line), "storage low: %llu MiB free",
+                                          static_cast<unsigned long long>(free_mib));
+                            bb_uwp_breadcrumb(line);
+                        }
+                    }
                 }
                 if (runtime_entered_game()) {
                     if (!auto_sampled && ++entered_ticks >= 6) {

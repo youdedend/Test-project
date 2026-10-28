@@ -62,6 +62,7 @@ list(TRANSFORM BB_RUNTIME_SOURCES APPEND ".c")
 
 add_executable(bloodborne WIN32
   platform/main.cpp
+  platform/storage_report.cpp
   platform/prepare_game.cpp
   platform/runtime_compat.c
   platform/audio.cpp

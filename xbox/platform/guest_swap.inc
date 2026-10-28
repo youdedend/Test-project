@@ -69,15 +69,27 @@ static uint64_t uwp_swap_urgent_pages, uwp_swap_urgent_sweeps;
  * 767 MiB of guest memory was still pageable and the app was 780 MiB from its limit: the room on
  * that device is what it is, so the pages are stored compressed instead.
  *
- *   uwp_swap_slot[physical / PAGE] -> (byte offset in the file) + 1, or UWP_SWAP_SLOT_ZERO, or 0
+ *   uwp_swap_slot[physical / PAGE] -> (byte offset in the file) + 1, or UWP_SWAP_SLOT_ZERO, or
+ *                                    UWP_SWAP_SLOT_POOL | index into the in-memory pool, or 0
  *   each record: 2-byte little-endian payload length, then the payload
  *   payload length == PAGE means the page was stored raw (the codec refused it)
+ *
+ * The memory pool (`.819`: the device gave 483 MiB, the volume filled, 6,828 writes were refused and
+ * 1,171 MiB of pageable memory stayed resident) is the second tier: when the disk cannot take a
+ * record, the same compressed payload goes into RAM instead. A 16 KiB page is released and ~6 KiB
+ * of committed memory holds its copy, so the net saving is the difference and the disk is not
+ * needed at all. It is bounded by BB_UWP_SWAP_POOL_MB (192 by default, 0 turns it off), because
+ * unlike the file this memory cannot be handed back while a page needs it.
  *
  * Records are 4 KiB-aligned so what the sparse file actually allocates is what the budget counts.
  * A page that is entirely zero is not written at all. Nothing is freed (the disk copy is the
  * backing store for a page that is out of RAM), so the arena only ever grows - which is exactly
  * what the budget and the device's free space bound. */
 #define UWP_SWAP_SLOT_ZERO UINT32_C(0xFFFFFFFF)
+/* bbport: the memory pool's tag. A disk record can never be mistaken for one: the store refuses an
+ * offset at or above this value (below), so the top bit means "in the pool", always. */
+#define UWP_SWAP_SLOT_POOL UINT32_C(0x80000000)
+#define UWP_SWAP_SLOT_OFFSET_MAX UINT32_C(0x7FFF0000)
 #define UWP_SWAP_RECORD_ALIGN UINT64_C(4096)
 /* bbport: the device has one shared pool of free space, and the game's own files need some of it.
  * `.1119` ran with zero write failures and the store at 1,125 MiB - and then the game's next write
@@ -180,11 +192,16 @@ static uint64_t uwp_scan_pages, uwp_scan_unmapped, uwp_scan_unpageable, uwp_scan
     uwp_scan_uncommitted, uwp_scan_noview, uwp_scan_pinned, uwp_scan_shared, uwp_scan_section,
     uwp_scan_atbudget, uwp_scan_unreadable, uwp_scan_recent_cleared, uwp_scan_viewguard,
     uwp_scan_write_failed;
+/* bbport: zero pages released while the disk was at its budget. Separate from `uwp_scan_atbudget`
+ * because the two are the answer to different questions: at-budget is memory the disk cannot take,
+ * zero-paged is memory that turned out not to need the disk. `.819` reported only the first. */
+static uint64_t uwp_scan_zero_paged, uwp_swap_zero_paged;
+static uint64_t uwp_scan_pool_fallback;
 static void uwp_swap_scan_reset(void) {
     uwp_scan_pages = uwp_scan_unmapped = uwp_scan_unpageable = uwp_scan_kind = 0;
     uwp_scan_uncommitted = uwp_scan_noview = uwp_scan_pinned = uwp_scan_shared = 0;
     uwp_scan_section = uwp_scan_atbudget = uwp_scan_unreadable = uwp_scan_recent_cleared = 0;
-    uwp_scan_viewguard = uwp_scan_write_failed = 0;
+    uwp_scan_viewguard = uwp_scan_write_failed = uwp_scan_zero_paged = uwp_scan_pool_fallback = 0;
     // bbport: the two byte counters belong to the same pass as the page counters above. They were
     // added without this line and the first console run (`.819`) printed
     // `at-budget=206460 (164162 MiB)` - 206,460 pages are 3,226 MiB, so the MiB figure had been
@@ -484,6 +501,277 @@ static int uwp_swap_verify_payloads(void) {
     return cached;
 }
 
+/* ============================ the in-memory page pool ============================
+ *
+ * `.819` is the case this exists for: the LocalState volume had 867 MiB free, so the swap budget was
+ * capped to 483 MiB, the volume filled, 6,828 writes were refused, and 1,171 MiB of guest memory
+ * that the pager *could* have been holding stayed resident until the app hit 5,116/5,120 MiB. The
+ * console has 30 GB free elsewhere, but a UWP app cannot be given another volume - so the second
+ * tier lives in the one resource the app is allowed to spend a little more of: its own RAM.
+ *
+ * A 16 KiB page compressed into this pool costs ~6 KiB of committed memory instead of 16. The net
+ * saving is therefore the difference, not the page: a 192 MiB pool holds roughly 512 MiB of guest
+ * pages, and the ~320 MiB difference is what the app budget gets back. Unlike the file, a blob can
+ * never be dropped to make room - it IS the page's only copy - so the pool is a fixed reservation,
+ * committed as blobs arrive and decommitted as they are read back, and once it is full the pager
+ * behaves exactly as before (pages stay resident).
+ *
+ * Layout: one contiguous reservation, first-fit extents with coalescing, both guarded by
+ * uwp_swap_io_lock (the same lock that already serialises the shared payload buffer, and the only
+ * path in is uwp_swap_transfer_locked). The descriptors are a flat array, so nothing allocates on
+ * the page-out or page-in path. */
+#define UWP_POOL_BLOB_MAX 32768u   /* 32768 blobs x ~6 KiB ~ 192 MiB of pages; 384 KiB of table */
+#define UWP_POOL_EXTENT_MAX 1024u
+#define UWP_POOL_ALIGN UINT64_C(4096)
+
+typedef struct {
+    uint64_t offset;
+    uint32_t length; /* 0 = descriptor free */
+} UwpPoolBlob;
+
+typedef struct {
+    uint64_t offset, length;
+} UwpPoolExtent;
+
+static unsigned char *uwp_pool_base;
+static uint64_t uwp_pool_size, uwp_pool_commit;
+static UwpPoolBlob *uwp_pool_blobs;
+static size_t uwp_pool_blob_used;
+static UwpPoolExtent uwp_pool_free[UWP_POOL_EXTENT_MAX];
+static size_t uwp_pool_free_count;
+static uint64_t uwp_pool_pages, uwp_pool_bytes, uwp_pool_pages_in, uwp_pool_refused;
+static uint64_t uwp_pool_decommit_failures, uwp_pool_peak_commit;
+static int uwp_pool_off, uwp_pool_unavailable;
+
+static uint64_t uwp_pool_limit(void) {
+    static int cached = -1;
+    static uint64_t bytes;
+    if (cached < 0) {
+        bytes = UINT64_C(192) << 20;
+        const char *env = getenv("BB_UWP_SWAP_POOL_MB");
+        if (env && *env) {
+            const unsigned long long mb = strtoull(env, NULL, 10);
+            bytes = (mb <= 2048) ? (uint64_t)mb << 20 : UINT64_C(2048) << 20;
+        }
+        cached = 1;
+    }
+    return bytes;
+}
+
+static int uwp_pool_init(void) {
+    if (uwp_pool_blobs) return 1;
+    if (uwp_pool_unavailable) return 0;
+    const uint64_t limit = uwp_pool_limit();
+    if (limit < (UINT64_C(16) << 20)) {
+        uwp_pool_off = 1;
+        return 0;
+    }
+    uwp_pool_blobs = calloc(UWP_POOL_BLOB_MAX, sizeof(*uwp_pool_blobs));
+    if (!uwp_pool_blobs) {
+        uwp_pool_unavailable = 1;
+        return 0;
+    }
+    uwp_pool_base = VirtualAllocFromApp(NULL, (SIZE_T)limit, MEM_RESERVE, PAGE_NOACCESS);
+    if (!uwp_pool_base) {
+        free(uwp_pool_blobs);
+        uwp_pool_blobs = NULL;
+        uwp_pool_unavailable = 1;
+        printf("UWP swap pool: reservation of %" PRIu64 " MiB failed (error %lu); disk only\n",
+               limit >> 20, GetLastError());
+        return 0;
+    }
+    uwp_pool_size = limit;
+    uwp_pool_free_count = 1;
+    uwp_pool_free[0].offset = 0;
+    uwp_pool_free[0].length = limit;
+    printf("UWP swap pool: %" PRIu64 " MiB reserved for pages the disk cannot take "
+           "(BB_UWP_SWAP_POOL_MB, 0 disables)\n", limit >> 20);
+    return 1;
+}
+
+static void uwp_pool_insert_extent(uint64_t offset, uint64_t length);
+
+/* First fit. Splitting the tail is free; the extent table is small and only grows when a blob in the
+ * middle of the arena is freed, which is rare enough that 1024 extents is not a real bound. */
+static uint32_t uwp_pool_alloc(size_t need) {
+    if (need == 0) return UINT32_C(0);
+    const uint64_t want = (need + UWP_POOL_ALIGN - 1) / UWP_POOL_ALIGN * UWP_POOL_ALIGN;
+    if (want > uwp_pool_size) return UINT32_C(0);
+    for (size_t i = 0; i < uwp_pool_free_count; ++i) {
+        if (uwp_pool_free[i].length < want) continue;
+        const uint64_t offset = uwp_pool_free[i].offset;
+        if (uwp_pool_free[i].length == want) {
+            memmove(&uwp_pool_free[i], &uwp_pool_free[i + 1],
+                    (uwp_pool_free_count - i - 1) * sizeof(*uwp_pool_free));
+            --uwp_pool_free_count;
+        } else {
+            uwp_pool_free[i].offset += want;
+            uwp_pool_free[i].length -= want;
+        }
+        /* Commit exactly the blob: commit-on-touch would work too, but the payload arrives as one
+         * memcpy and the saving is only real if the untouched tail stays uncommitted. */
+        if (!VirtualAllocFromApp(uwp_pool_base + offset, (SIZE_T)want, MEM_COMMIT,
+                                 PAGE_READWRITE)) {
+            // Put the carried-over extent back instead of rebuilding the map: rebuild would forget
+            // every blob still allocated and hand its space out twice.
+            uwp_pool_insert_extent(offset, want);
+            ++uwp_pool_refused;
+            return UINT32_C(0);
+        }
+        uwp_pool_commit += want;
+        if (uwp_pool_commit > uwp_pool_peak_commit) uwp_pool_peak_commit = uwp_pool_commit;
+        /* Descriptor index 0 is stored as 0 and means "no blob", so index 0 is never handed out. */
+        size_t index = 1;
+        while (index < UWP_POOL_BLOB_MAX && uwp_pool_blobs[index].length) ++index;
+        if (index >= UWP_POOL_BLOB_MAX) {
+            VirtualAllocFromApp(uwp_pool_base + offset, (SIZE_T)want, MEM_DECOMMIT, PAGE_NOACCESS);
+            uwp_pool_commit -= want;
+            uwp_pool_insert_extent(offset, want);
+            ++uwp_pool_refused;
+            return UINT32_C(0);
+        }
+        uwp_pool_blobs[index].offset = offset;
+        uwp_pool_blobs[index].length = (uint32_t)want;
+        if (index + 1 > uwp_pool_blob_used) uwp_pool_blob_used = index + 1;
+        return (uint32_t)index;
+    }
+    return UINT32_C(0);
+}
+
+static void uwp_pool_insert_extent(uint64_t offset, uint64_t length) {
+    size_t at = 0;
+    while (at < uwp_pool_free_count && uwp_pool_free[at].offset < offset) ++at;
+    if (at == uwp_pool_free_count) {
+        if (uwp_pool_free_count == UWP_POOL_EXTENT_MAX) return; /* leaked extent, still reserved */
+        uwp_pool_free[uwp_pool_free_count].offset = offset;
+        uwp_pool_free[uwp_pool_free_count].length = length;
+        ++uwp_pool_free_count;
+    } else {
+        if (uwp_pool_free_count == UWP_POOL_EXTENT_MAX) return;
+        memmove(&uwp_pool_free[at + 1], &uwp_pool_free[at],
+                (uwp_pool_free_count - at) * sizeof(*uwp_pool_free));
+        uwp_pool_free[at].offset = offset;
+        uwp_pool_free[at].length = length;
+        ++uwp_pool_free_count;
+    }
+    /* Coalesce with the neighbour(s). */
+    for (size_t i = 0; i + 1 < uwp_pool_free_count;) {
+        if (uwp_pool_free[i].offset + uwp_pool_free[i].length == uwp_pool_free[i + 1].offset) {
+            uwp_pool_free[i].length += uwp_pool_free[i + 1].length;
+            memmove(&uwp_pool_free[i + 1], &uwp_pool_free[i + 2],
+                    (uwp_pool_free_count - i - 2) * sizeof(*uwp_pool_free));
+            --uwp_pool_free_count;
+        } else {
+            ++i;
+        }
+    }
+}
+
+static void uwp_pool_free_blob(uint32_t index) {
+    if (index == 0 || index >= UWP_POOL_BLOB_MAX || !uwp_pool_blobs[index].length) return;
+    const uint64_t offset = uwp_pool_blobs[index].offset;
+    const uint64_t length = uwp_pool_blobs[index].length;
+    uwp_pool_blobs[index].offset = 0;
+    uwp_pool_blobs[index].length = 0;
+    /* The blob's bytes are the page's only copy, so the decommit must not happen until the caller
+     * has copied them out - it has: every caller copies to uwp_swap_io first. Decommitting returns
+     * the RAM to the app budget, which is the whole point; if the API refuses, the memory stays
+     * committed and the pool simply holds a little more than its live blobs. */
+    if (VirtualAllocFromApp(uwp_pool_base + offset, (SIZE_T)length, MEM_DECOMMIT, PAGE_NOACCESS)) {
+        uwp_pool_commit = uwp_pool_commit > length ? uwp_pool_commit - length : 0;
+    } else {
+        ++uwp_pool_decommit_failures;
+    }
+    uwp_pool_insert_extent(offset, length);
+    uwp_pool_bytes = uwp_pool_bytes > length ? uwp_pool_bytes - length : 0;
+}
+
+/* Store the record already encoded in uwp_swap_io - both its 2-byte length header and its payload,
+ * so the blob describes itself exactly as a file record does and the read path cannot disagree with
+ * the write path about where the payload starts. `total` is the encoded size including the header.
+ * Returns the tagged slot value, or 0 when the pool is off, full or refused. */
+static uint32_t uwp_pool_store(size_t total) {
+    if (uwp_pool_off || !uwp_pool_init()) return 0;
+    const uint32_t index = uwp_pool_alloc(total);
+    if (index == 0) {
+        ++uwp_pool_refused;
+        return 0;
+    }
+    memcpy(uwp_pool_base + uwp_pool_blobs[index].offset, uwp_swap_io, total);
+    uwp_pool_bytes += uwp_pool_blobs[index].length;
+    ++uwp_pool_pages;
+    return UWP_SWAP_SLOT_POOL | index;
+}
+
+/* Read a blob back into `data`. Returns 1 on success; a decode failure is a hard error for the
+ * caller (it never gets a half-decoded page). */
+static int uwp_pool_load(uint32_t index, void *data) {
+    if (index == 0 || index >= UWP_POOL_BLOB_MAX || !uwp_pool_blobs[index].length) {
+        uwp_swap_transfer_error = ERROR_NOT_FOUND;
+        return 0;
+    }
+    const unsigned char *blob = uwp_pool_base + uwp_pool_blobs[index].offset;
+    const size_t stored = uwp_pool_blobs[index].length;
+    /* The length header is inside the blob: 2-byte little-endian, == PAGE for a raw block. */
+    const size_t length = (size_t)blob[0] | ((size_t)blob[1] << 8);
+    if (length == 0 || length > stored - 2) {
+        uwp_swap_transfer_error = ERROR_INVALID_DATA;
+        return 0;
+    }
+    if (length == PAGE) {
+        memcpy(data, blob + 2, PAGE);
+    } else if (uwp_lz_decompress(blob + 2, length, data, PAGE) != PAGE) {
+        uwp_swap_transfer_error = ERROR_INVALID_DATA;
+        return 0;
+    }
+    ++uwp_pool_pages_in;
+    return 1;
+}
+
+static int uwp_pool_slot(uint32_t slot) {
+    return (slot & UWP_SWAP_SLOT_POOL) != 0;
+}
+
+/* Is the pool worth walking to? True when it is enabled and has room for at least one blob. The
+ * check is deliberately cheap: it runs per page in the sweep that is already under the commit lock,
+ * and the exact fit is decided by the transfer. */
+static int uwp_pool_available(void) {
+    if (uwp_pool_off) return 0;
+    if (!uwp_pool_blobs) return !uwp_pool_unavailable && uwp_pool_limit() >= (UINT64_C(16) << 20);
+    for (size_t i = 0; i < uwp_pool_free_count; ++i) {
+        if (uwp_pool_free[i].length >= UWP_POOL_ALIGN) return 1;
+    }
+    return 0;
+}
+
+/* Second tier: the payload in uwp_swap_io (+2, `length` bytes) goes into RAM instead of the file.
+ * Called from the write path, with uwp_swap_io_lock held, only after the disk refused the record. */
+static int uwp_swap_store_pool_locked(uint64_t physical, size_t total) {
+    const size_t key = (size_t)(physical / PAGE);
+    if (!uwp_swap_slot || key >= uwp_swap_slot_count) return 0;
+    const uint32_t pooled = uwp_pool_store(total);
+    if (!pooled) return 0;
+    const uint32_t previous = uwp_swap_slot[key];
+    if (uwp_pool_slot(previous)) uwp_pool_free_blob(previous & ~UWP_SWAP_SLOT_POOL);
+    uwp_swap_slot[key] = pooled;
+    ++uwp_swap_store_pages;
+    return 1;
+}
+
+/* The page is back in RAM (uwp_swap_bytes): its compressed copy has no reader left, and holding it
+ * would cost twice - the 16 KiB in the frame and the ~6 KiB in the pool. */
+static void uwp_swap_drop_pool_record(uint64_t physical) {
+    const size_t key = (size_t)(physical / PAGE);
+    if (!uwp_swap_slot || key >= uwp_swap_slot_count) return;
+    AcquireSRWLockExclusive(&uwp_swap_io_lock);
+    const uint32_t slot = uwp_swap_slot[key];
+    if (uwp_pool_slot(slot)) {
+        uwp_pool_free_blob(slot & ~UWP_SWAP_SLOT_POOL);
+        uwp_swap_slot[key] = 0;
+    }
+    ReleaseSRWLockExclusive(&uwp_swap_io_lock);
+}
+
 /* bbport: the page buffers below (uwp_swap_io, uwp_swap_verify, the LZ table) are shared, and a
  * transfer is reached from the pager, the GPU thread and any guest thread taking a commit fault.
  * Most callers already hold uwp_commit_lock, but not all of them do (uwp_promote from a guest map),
@@ -506,6 +794,9 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
         if (slot == UWP_SWAP_SLOT_ZERO) {
             memset(data, 0, PAGE);
             return 1;
+        }
+        if (uwp_pool_slot(slot)) {
+            return uwp_pool_load(slot & ~UWP_SWAP_SLOT_POOL, data);
         }
         if (!uwp_swap_io_at((uint64_t)slot - 1, uwp_swap_io, 2, 0)) return 0;
         const size_t length = (size_t)uwp_swap_io[0] | ((size_t)uwp_swap_io[1] << 8);
@@ -566,7 +857,7 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
     uwp_swap_store_payload += total - 2;
     uint64_t offset = 0;
     const uint32_t slot = uwp_swap_slot[key];
-    if (slot != 0 && slot != UWP_SWAP_SLOT_ZERO) {
+    if (slot != 0 && slot != UWP_SWAP_SLOT_ZERO && !uwp_pool_slot(slot)) {
         // Rewriting a page that is already stored (a view saved twice): reuse its record when the
         // new payload fits, which keeps a session from growing the file on every cycle.
         unsigned char header[2];
@@ -583,18 +874,23 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
         const uint64_t free_bytes = uwp_swap_free_space();
         if (free_bytes != 0 && free_bytes < need + uwp_swap_reserve) {
             // The game's own writes come first: a cache blob or a save that cannot be written stops
-            // the process, a page that stays resident does not.
+            // the process, a page that stays resident does not. The pool is tried below: it needs
+            // no device space at all.
             ++uwp_swap_reserve_hits;
             uwp_swap_transfer_error = ERROR_DISK_FULL;
+            if (uwp_swap_store_pool_locked(physical, total)) return 1;
             return 0;
         }
         if (uwp_swap_store_next + need > uwp_swap_disk_budget) {
             // Our own budget, not the device's answer: ERROR_DISK_QUOTA_EXCEEDED so a full *budget*
             // is never mistaken for a full disk (the sweep checks it before getting here anyway).
+            // The pool still takes the page: the budget is about the device, not about RAM.
             uwp_swap_transfer_error = ERROR_DISK_QUOTA_EXCEEDED;
+            if (uwp_swap_store_pool_locked(physical, total)) return 1;
             return 0;
         }
-        if (offset + need > UINT32_MAX) {
+        if (offset + need >= UWP_SWAP_SLOT_OFFSET_MAX) {
+            // Past the pool tag: the store cannot address it, so it is a budget answer too.
             uwp_swap_transfer_error = ERROR_DISK_QUOTA_EXCEEDED;
             return 0;
         }
@@ -606,6 +902,9 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
         return 0;
     }
     if (!uwp_swap_io_at(offset, uwp_swap_io, total, 1)) return 0;
+    // The record is on the device now; a blob it used to live in has no reader left. (Pool -> file
+    // happens when the budget is raised or the device frees space mid-session.)
+    if (uwp_pool_slot(slot)) uwp_pool_free_blob(slot & ~UWP_SWAP_SLOT_POOL);
     uwp_swap_slot[key] = (uint32_t)offset + 1;
     ++uwp_swap_store_pages;
     return 1;
@@ -776,6 +1075,8 @@ static unsigned char *uwp_swap_bytes(uint64_t offset) {
         ++uwp_swap_frame_count;
         physical->frame = (unsigned)frame + 1;
         uwp_swap_in += PAGE;
+        // The frame is the page's copy now; a pooled record would be a second one.
+        uwp_swap_drop_pool_record(offset);
     }
     return uwp_swap_alias + (physical->frame - 1) * PAGE;
 }
@@ -899,7 +1200,10 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
     if (bytes) ++uwp_swap_passes;
     // One line, once a second, so a log says "the swap is full and the sweeps are no-ops" instead of
     // leaving it to be inferred from a 2.3 s PM4 submission and a lost device.
-    if (uwp_swap_disk_blocked() && !include_views &&
+    // bbport: the early return is what made `.819`'s sweeps free nothing, so it now also requires
+    // that the second tier is full. A sweep with disk blocked but pool room is a sweep that can
+    // still release memory.
+    if (uwp_swap_disk_blocked() && !include_views && !uwp_pool_available() &&
         !(uwp_swap_disk_growable && !uwp_swap_disk_full &&
           uwp_swap_disk_budget < uwp_swap_disk_ceiling)) {
         const uint64_t now = GetTickCount64();
@@ -1013,9 +1317,49 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             // is worth another step, because the alternative is a stop.
             if (uwp_swap_disk_full || !uwp_swap_disk_growable ||
                 uwp_swap_disk_budget >= uwp_swap_disk_ceiling || uwp_scan_write_failed) {
-                ++uwp_scan_atbudget;
-                uwp_scan_atbudget_bytes += PAGE;
-                continue;
+                // bbport: an all-zero page needs no budget. No record is written - the slot is the
+                // ZERO sentinel, which the reader turns into a memset - so "the disk is full" is not
+                // a reason to keep one resident. `.819` kept every zero page in RAM for exactly that
+                // reason: the branch below ran first. Same protection rule as the write path: only
+                // a page the CPU may read (and not execute) is touched.
+                int blank = uwp_swap_blank_enabled();
+                for (unsigned i = 0; i < 4 && blank; ++i) {
+                    if (!(page->protection[i] & PROT_READ) || (page->protection[i] & PROT_EXEC)) {
+                        blank = 0;
+                    }
+                }
+                const size_t zero_key = (size_t)(page->physical / PAGE);
+                if (blank && uwp_swap_slot && zero_key < uwp_swap_slot_count &&
+                    uwp_swap_blank((void *)page->address)) {
+                    if (uwp_swap_slot[zero_key] != UWP_SWAP_SLOT_ZERO) ++uwp_swap_store_zero;
+                    uwp_swap_slot[zero_key] = UWP_SWAP_SLOT_ZERO;
+                    ++uwp_swap_store_pages;
+                    uwp_swap_blank_bytes += PAGE;
+                    ++uwp_scan_zero_paged;
+                    ++uwp_swap_zero_paged;
+                    if (!VirtualFree((void *)page->address, PAGE,
+                                     MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+                        uwp_fail("swap private page release", page->address);
+                    }
+                    page->placed = 0;
+                    page->kind = 4;
+                    page->committed = 0;
+                    uwp_swap_split(page);
+                    physical->disk = 1; // it has a backing record; it just costs no disk
+                    released += PAGE;
+                    uwp_swap_out += PAGE;
+                    continue;
+                }
+                // The pool is the second tier: if it has room, the normal write path below runs and
+                // its transfer falls back to RAM instead of refusing. Only when both tiers are full
+                // does the page stay resident, and that is the number the report calls at-budget.
+                if (!uwp_pool_available()) {
+                    ++uwp_scan_atbudget;
+                    uwp_scan_atbudget_bytes += PAGE;
+                    continue;
+                }
+                ++uwp_scan_pool_fallback;
+                goto write_private_page;
             }
             uwp_swap_disk_budget += uwp_swap_disk_step;
             if (uwp_swap_disk_budget > uwp_swap_disk_ceiling) {
@@ -1028,6 +1372,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
                        uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20);
             }
         }
+    write_private_page:;
         int readable = 1;
         for (unsigned i = 0; i < 4; ++i) {
             if (!(page->protection[i] & PROT_READ) || (page->protection[i] & PROT_EXEC)) {
@@ -1078,7 +1423,11 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         uwp_swap_split(page);
         if (!physical->disk) {
             physical->disk = 1;
-            ++uwp_swap_disk_pages;
+            // A blank page has a record (the ZERO sentinel) but takes no space: counting it as a
+            // disk page is what made the report's "disk pages" disagree with its own file size.
+            if (uwp_swap_slot[(size_t)(page->physical / PAGE)] != UWP_SWAP_SLOT_ZERO) {
+                ++uwp_swap_disk_pages;
+            }
         }
         released += PAGE;
         uwp_swap_out += PAGE;
@@ -1276,6 +1625,17 @@ void runtime_memory_swap_stats(RuntimeSwapStats *out) {
     out->copy_in_pages = uwp_swap_copy_in_pages;
     out->copy_in_failures = uwp_swap_copy_in_failures;
     out->write_failures = uwp_swap_write_failures;
+    out->zero_paged_bytes = uwp_swap_zero_paged * PAGE;
+    out->pool_capacity = uwp_pool_size;
+    out->pool_committed = uwp_pool_commit;
+    out->pool_peak_committed = uwp_pool_peak_commit;
+    out->pool_pages = uwp_pool_pages;
+    out->pool_page_bytes = uwp_pool_pages * PAGE;
+    // What the app budget keeps because those pages are compressed in RAM instead of resident.
+    out->pool_saved = out->pool_page_bytes > uwp_pool_bytes ? out->pool_page_bytes - uwp_pool_bytes
+                                                            : 0;
+    out->pool_pages_in = uwp_pool_pages_in;
+    out->pool_refused = uwp_pool_refused;
 }
 
 /* bbport: resident guest memory, split by what the pager can do about it. `.819` ended with
@@ -1410,6 +1770,18 @@ static void uwp_swap_report(void) {
            uwp_swap_copy_in_pages, uwp_swap_copy_in_failures,
            uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
+    // The second tier, on the same 5 s cadence: pages the device could not take and RAM could.
+    if (uwp_pool_blobs) {
+        const uint64_t held = uwp_pool_pages * PAGE;
+        printf("UWP swap pool: %" PRIu64 " pages = %" PRIu64 " MiB of guest memory in %" PRIu64
+               " MiB committed (capacity %" PRIu64 " MiB, peak %" PRIu64 " MiB) = %" PRIu64
+               " MiB kept out of the app budget; %" PRIu64 " page-ins, %" PRIu64
+               " refused, %" PRIu64 " decommit failures\n",
+               uwp_pool_pages, held >> 20, uwp_pool_commit >> 20, uwp_pool_size >> 20,
+               uwp_pool_peak_commit >> 20,
+               (held > uwp_pool_bytes ? (held - uwp_pool_bytes) : 0) >> 20, uwp_pool_pages_in,
+               uwp_pool_refused, uwp_pool_decommit_failures);
+    }
     // How much of the device is left, so the next log answers "could we have taken more?" without a
     // second run: `free` already excludes the reserve this port keeps for the game's own files.
     const uint64_t free_now = uwp_swap_free_space();
