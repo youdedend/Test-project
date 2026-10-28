@@ -359,6 +359,95 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 /// bbport: last-resort reclaim for a failed allocation (handoff §10). The buffer path asks for it
 /// after the guest pages have been paged out; it returns what the texture cache could still free.
+/// bbport: the last rung of the memory ladder, taken automatically at memory level 2 (the console's
+/// own "critical" mark) and released when the pressure is gone for a while.
+///
+/// What it lowers is the *internal* render resolution, and only through a mechanism that already
+/// exists and is reversible: the upscaler's preset, one step at a time (1080p -> 1.5x -> 1.7x of
+/// the output). With no upscaler active the scene is the guest's own surfaces, so there is nothing
+/// here to scale - `.1119` ran with the upscaler off, which is why this logs that fact once per
+/// excursion instead of pretending to act.
+///
+/// Deliberately not done here: writing the setting to bbport.ini (the user's choice survives a
+/// restart; this one does not) and touching the output resolution (a restart-level change).
+extern "C" void bbgpu_uwp_pressure_level(int level) {
+    auto& s = BbSettings::Get();
+    static int saved_preset = -1;
+    static int saved_output = -1;
+    static std::chrono::steady_clock::time_point calm_since{};
+    const int upscaler = s.upscaler.load(std::memory_order_relaxed);
+    if (upscaler == BbSettings::UpscalerOff) {
+        // No upscaler: the host renders the guest's surfaces at the output size, so the internal
+        // resolution is the *output* one. 1280x720 there is a real saving in host targets (and the
+        // text the GPU already prints recommends it) and it is a live change, unlike the startup
+        // patch. Restored by the same ten-calm-seconds rule below.
+        if (level >= 2) {
+            calm_since = {};
+            const int current = s.output_res.load(std::memory_order_relaxed);
+            if (saved_output < 0 && current != 0) {
+                saved_output = current;
+                s.output_res.store(0, std::memory_order_relaxed);
+                std::printf("UWP memory pressure: level %d, no upscaler - output %dx%d -> %dx%d "
+                            "(live, restored when the pressure is gone)\n",
+                            level, BbSettings::OutputWidths[saved_output],
+                            BbSettings::OutputHeights[saved_output], BbSettings::OutputWidths[0],
+                            BbSettings::OutputHeights[0]);
+                std::fflush(stdout);
+            }
+            return;
+        }
+        if (saved_output < 0) return;
+        const auto calm = std::chrono::steady_clock::now();
+        if (calm_since.time_since_epoch().count() == 0) {
+            calm_since = calm;
+            return;
+        }
+        if (calm - calm_since < std::chrono::seconds(10)) return;
+        std::printf("UWP memory pressure: level %d again, output restored to %dx%d\n", level,
+                    BbSettings::OutputWidths[saved_output], BbSettings::OutputHeights[saved_output]);
+        s.output_res.store(saved_output, std::memory_order_relaxed);
+        saved_output = -1;
+        calm_since = {};
+        std::fflush(stdout);
+        return;
+    }
+    if (level >= 2) {
+        calm_since = {};
+        if (saved_preset < 0) saved_preset = s.preset.load(std::memory_order_relaxed);
+        const int preset = s.preset.load(std::memory_order_relaxed);
+        // One step per sample, and no further than Performance (1.7x): past that the guest is
+        // rendering 720p-class pixels and the saving is small next to the picture.
+        if (preset < BbSettings::Performance) {
+            const int next = preset + 1;
+            s.preset.store(next, std::memory_order_relaxed);
+            std::printf("UWP memory pressure: level %d, internal render resolution %s -> %s "
+                        "(upscaler %s)\n",
+                        level, BbSettings::PresetName(preset), BbSettings::PresetName(next),
+                        BbSettings::UpscalerName(upscaler));
+            std::fflush(stdout);
+        }
+        return;
+    }
+    if (saved_preset < 0 || saved_preset == s.preset.load(std::memory_order_relaxed)) {
+        saved_preset = -1;
+        return;
+    }
+    // Restore only after ten calm seconds: paging out of an area load dips the level for a moment,
+    // and flipping the resolution back mid-load costs more than it saves.
+    const auto now = std::chrono::steady_clock::now();
+    if (calm_since.time_since_epoch().count() == 0) {
+        calm_since = now;
+        return;
+    }
+    if (now - calm_since < std::chrono::seconds(10)) return;
+    std::printf("UWP memory pressure: level %d again, internal render resolution restored to %s\n",
+                level, BbSettings::PresetName(saved_preset));
+    s.preset.store(saved_preset, std::memory_order_relaxed);
+    saved_preset = -1;
+    calm_since = {};
+    std::fflush(stdout);
+}
+
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
     if (auto* r = Core::Memory::Instance()->GetRasterizer()) {
         return r->GetTextureCache().EmergencyReclaim(need);

@@ -56,6 +56,8 @@ BOOL bb_uwp_find_next(HANDLE handle, WIN32_FIND_DATAA* out);
 void runtime_memory_start_paging(void);
 void runtime_memory_report(void);
 void runtime_memory_pager_state(void);
+uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+void bbgpu_uwp_pressure_level(int level);
 uint64_t runtime_memory_pinned_bytes(void);
 void runtime_file_report(void);
 void runtime_audio_report(void);
@@ -1863,6 +1865,11 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     // explains a usage line sitting at the limit while the texture cache is
                     // evicting. `since the last sample`: how fast it is climbing, which is what
                     // says whether an allocation failure is a second away or a minute.
+                    // bbport: the approved ladder's last rung, automatic: at the console's own
+                    // critical level the internal render resolution goes down a step, and comes
+                    // back after ten calm seconds (bbgpu.cpp). Reads the same level printed below.
+                    bbgpu_uwp_pressure_level(
+                        int(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
                     std::printf(
                         "UWP memory telemetry: %llu/%llu MiB (level=%u, presents=%llu, "
                         "guest pinned=%llu MiB, %+lld MiB since the last sample)\n",
