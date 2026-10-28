@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <span>
 #include <type_traits>
@@ -183,8 +185,27 @@ public:
         }
 
         u64 written = std::fwrite(data.data(), sizeof(T), data.size(), file);
-        ASSERT_MSG(std::ferror(file) == 0, "Failed to write to file, error = {}",
-                   std::strerror(errno));
+        // bbport: a device that is out of space is an environment condition, not a bug in this
+        // process, and a cache blob is optional data: the portable swap pager shares one pool of
+        // free space with these files, and `.1119` ended with
+        //     WriteSpan: Assertion Failed! Failed to write to file, error = No space left on device
+        // which aborted the game for a pipeline cache it could have recompiled. Report the short
+        // write to the caller instead (cache_storage.cpp already checks written != size and removes
+        // the partial file), and keep the assertion for every other error.
+        const int write_error = std::ferror(file) ? errno : 0;
+#ifdef EDQUOT
+        const bool out_of_space = write_error == ENOSPC || write_error == EDQUOT;
+#else
+        const bool out_of_space = write_error == ENOSPC;
+#endif
+        if (out_of_space) {
+            // (fprintf rather than the logging macros: this header is included before them.)
+            std::fprintf(stderr,
+                         "bbport: out of space writing a cache file, write dropped (%s)\n",
+                         std::strerror(write_error));
+            return written;
+        }
+        ASSERT_MSG(write_error == 0, "Failed to write to file, error = {}", std::strerror(errno));
         std::fflush(file);
         return written;
     }

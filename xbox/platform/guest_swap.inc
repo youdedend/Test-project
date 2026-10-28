@@ -79,6 +79,52 @@ static uint64_t uwp_swap_urgent_pages, uwp_swap_urgent_sweeps;
  * what the budget and the device's free space bound. */
 #define UWP_SWAP_SLOT_ZERO UINT32_C(0xFFFFFFFF)
 #define UWP_SWAP_RECORD_ALIGN UINT64_C(4096)
+/* bbport: the device has one shared pool of free space, and the game's own files need some of it.
+ * `.1119` ran with zero write failures and the store at 1,125 MiB - and then the game's next write
+ * failed with ENOSPC and aborted the process:
+ *     io_file.h:187 WriteSpan: Assertion Failed! Failed to write to file, error = No space left on device
+ * Filling the device was never the goal; paging is. So the store asks how much space is left before
+ * it takes a new record and keeps a reserve (BB_UWP_SWAP_RESERVE_MB, 384 MiB by default) for
+ * everything that is not us - saves, the pipeline cache, the dump. A refused record is
+ * ERROR_DISK_FULL and is handled like any other full-disk answer: the page stays resident.
+ * GetDiskFreeSpaceExFromApp is not in the UWP subset; the plain call is allowed for the app's own
+ * package paths, and if it fails the reserve is skipped (the budget still bounds the file). */
+static uint64_t uwp_swap_free_checked_tick, uwp_swap_free_bytes;
+static uint64_t uwp_swap_reserve = UINT64_C(384) << 20;
+static uint64_t uwp_swap_reserve_hits;
+
+static uint64_t uwp_swap_free_space(void) {
+    // Once a second is plenty: the pager writes at most a few MiB per pass and a stale answer only
+    // means one record is taken slightly early (- it is bounded by the reserve, not by this).
+    const uint64_t now = GetTickCount64();
+    if (uwp_swap_free_checked_tick && now - uwp_swap_free_checked_tick < UINT64_C(1000)) {
+        return uwp_swap_free_bytes;
+    }
+    uwp_swap_free_checked_tick = now;
+    uwp_swap_free_bytes = 0;
+    const char *path = getenv("BB_UWP_SWAP_FILE");
+    if (path && *path) {
+        char dir[1024];
+        size_t length = strlen(path);
+        if (length >= sizeof(dir)) length = sizeof(dir) - 1;
+        memcpy(dir, path, length);
+        dir[length] = 0;
+        for (size_t i = length; i > 0; --i) {
+            if (dir[i - 1] == '\\' || dir[i - 1] == '/') {
+                dir[i] = 0;
+                break;
+            }
+        }
+        wchar_t wide[1024];
+        ULARGE_INTEGER available;
+        if (MultiByteToWideChar(CP_UTF8, 0, dir, -1, wide, 1024) &&
+            GetDiskFreeSpaceExW(wide, &available, NULL, NULL)) {
+            uwp_swap_free_bytes = available.QuadPart;
+        }
+    }
+    return uwp_swap_free_bytes;
+}
+
 static uint32_t *uwp_swap_slot;
 static size_t uwp_swap_slot_count;
 static uint64_t uwp_swap_store_next;
@@ -397,6 +443,14 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
     if (offset == 0) {
         const uint64_t need =
             (total + UWP_SWAP_RECORD_ALIGN - 1) / UWP_SWAP_RECORD_ALIGN * UWP_SWAP_RECORD_ALIGN;
+        const uint64_t free_bytes = uwp_swap_free_space();
+        if (free_bytes != 0 && free_bytes < need + uwp_swap_reserve) {
+            // The game's own writes come first: a cache blob or a save that cannot be written stops
+            // the process, a page that stays resident does not.
+            ++uwp_swap_reserve_hits;
+            uwp_swap_transfer_error = ERROR_DISK_FULL;
+            return 0;
+        }
         if (uwp_swap_store_next + need > uwp_swap_disk_budget) {
             // Our own budget, not the device's answer: ERROR_DISK_QUOTA_EXCEEDED so a full *budget*
             // is never mistaken for a full disk (the sweep checks it before getting here anyway).
@@ -1046,6 +1100,14 @@ static void uwp_swap_report(void) {
            uwp_swap_write_failures,
            uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
+    // How much of the device is left, so the next log answers "could we have taken more?" without a
+    // second run: `free` already excludes the reserve this port keeps for the game's own files.
+    const uint64_t free_now = uwp_swap_free_space();
+    if (free_now != 0 || uwp_swap_reserve_hits) {
+        printf("UWP swap: device free=%" PRIu64 " MiB (reserve %" PRIu64
+               " MiB kept for the game's own writes, %" PRIu64 " record(s) refused by it)\n",
+               free_now >> 20, uwp_swap_reserve >> 20, uwp_swap_reserve_hits);
+    }
 }
 
 static void *uwp_pager(void *unused) {
@@ -1096,6 +1158,9 @@ void runtime_memory_start_paging(void) {
             uwp_swap_disk_budget = mb << 20;
             uwp_swap_disk_ceiling = uwp_swap_disk_budget;
         }
+        const char *reserve = getenv("BB_UWP_SWAP_RESERVE_MB");
+        const unsigned long long reserve_mb = reserve ? strtoull(reserve, NULL, 10) : 0;
+        if (reserve_mb <= 4096) uwp_swap_reserve = reserve_mb << 20;
     }
     const char *enabled = getenv("BB_UWP_SWAP");
     if (enabled && *enabled == '0') {
@@ -1113,8 +1178,9 @@ void runtime_memory_start_paging(void) {
     pthread_detach(thread);
     uwp_swap_started = 1;
     printf("UWP swap: pager active, app budget=%" PRIu64 " MiB, pressure headroom=640 MiB; "
-           "private pages %s; disk budget=%" PRIu64 " MiB (ceiling %" PRIu64 " MiB)\n",
+           "private pages %s; disk budget=%" PRIu64 " MiB (ceiling %" PRIu64 " MiB, reserve %"
+           PRIu64 " MiB for the game's own writes)\n",
            bb_uwp_app_memory_limit() >> 20,
            uwp_pin_private_pages() ? "pinned by BB_UWP_PIN_PRIVATE" : "pageable",
-           uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20);
+           uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20, uwp_swap_reserve >> 20);
 }

@@ -1,0 +1,1283 @@
+Bloodborne Xbox Series X|S UWP loader started
+Device model: 0x1d27fabb; app memory budget: 5120 MiB; gamepads: 0
+AppContainer codeGeneration + sysv_abi smoke: PASS (42)
+USB dump found: E:\dumps\Bloodborne
+Picked Bloodborne folder: E:\dumps\Bloodborne (USB drive)
+Prepare: param.sfo E:\dumps\Bloodborne\sce_sys\param.sfo app_ver=01.00 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\Bloodborne-patch\sce_sys\param.sfo app_ver=01.09 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\GodOfWar3\sce_sys\param.sfo app_ver=01.01 app_type=? title_id=CUSA01623 content_id=UP9000-CUSA01623_00-0000GODOFWAR3PS4
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: ignoring patch candidate E:\dumps\GodOfWar3 (different TITLE_ID (CUSA01623))
+DumpLayout: kind=split; base_ver=01.00; patch_ver=01.09; effective=01.09; base=E:\dumps\Bloodborne; patch=E:\dumps\Bloodborne-patch
+Launcher dump layout:
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 CUSA03173
+Patch dump: E:\dumps\Bloodborne-patch - app_ver=01.09 CUSA03173 (in use)
+Effective version: 01.09
+Launcher panel: split dump (effective=01.09)
+Player dialog: Bloodborne dump
+
+Base dump:  E:\dumps\Bloodborne - app_ver=01.00 CUSA03173
+Patch dump: E:\dumps\Bloodborne-patch - app_ver=01.09 CUSA03173 (in use)
+Effective version: 01.09
+
+The update is merged over the game dump inside the app's LocalState; your USB folder is never modified.
+
+Intro: skipped (logos and title movie). Change it in the in-game menu.
+Player choice: 0
+Launch target: base=E:\dumps\Bloodborne; patch=E:\dumps\Bloodborne-patch; effective=01.09; patches=required
+Active Bloodborne dump: E:\dumps\Bloodborne (USB drive)
+DLC root configured: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\dlc
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP memory telemetry: 84/5120 MiB (level=0, presents=0, guest pinned=0 MiB, +84 MiB since the last sample)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+UWP file warning: CreateDirectoryFromAppW('Q:') failed (Win32=5, errno=13)
+Prepare: param.sfo E:\dumps\Bloodborne\sce_sys\param.sfo app_ver=01.00 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Prepare: param.sfo E:\dumps\Bloodborne-patch\sce_sys\param.sfo app_ver=01.09 app_type=? title_id=CUSA03173 content_id=EP9000-CUSA03173_00-BLOODBORNE0000EU
+Prepare: param.sfo kind=base (app_type=unknown)
+Overlay: E:\dumps\Bloodborne + E:\dumps\Bloodborne-patch -> Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\Prepared\overlay (436 files from the update, 38 copied, 436 redirected, digest ee93feb5f771)
+Update overlay: 436 paths from E:\dumps\Bloodborne-patch over E:\dumps\Bloodborne
+Prepare: base_app_ver=01.00; patch_app_ver=01.09; effective=01.09; patches=required
+Prepared boot image cached: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\Prepared (app_ver=01.09)
+Compiled startup patches: FPS=30, scene=1920x1080, UI=1920x1080, writes=9 (196 bytes)
+UWP memory: reserving guest windows on demand; 16 KiB commit-on-touch pages
+UWP swap: compressed sparse backing ready; 64 MiB mapped-window limit, 389120 page records
+UWP swap: pager active, app budget=5120 MiB, pressure headroom=640 MiB; private pages pageable; disk budget=768 MiB (ceiling 1536 MiB)
+Handing off to Bloodborne sysv_abi loader + shadPS4/Dozen GPU runtime...
+Runtime: Bloodborne sound flag set in Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\user/savedata/1/CUSA00207/SPRJ0005/userdata0010 (was 0)
+Online: Xbox UWP offline profile (CUSA03173 Bloodborne™ 01.09)
+Settings: Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\bbport.ini
+[uwp-vk] Upgraded UMA VkMemoryHeap[0] size from 1280 MiB -> 5120 MiB (Xbox AppMemoryUsageLimit)
+GPU: Microsoft Direct3D12 (SraKmd_arden) (integrated), 5120 MiB VRAM, driver Dozen 26.2.99 (Mesa 26.3.0-devel (git-a76cd3caa2)), Vulkan 1.2.363
+UWP host push bindings: ordinary descriptor sets, fence-safe command-buffer pools
+CoreWindow presentation bridge: 1280x720, shared image 3904 KiB
+UWP buffer cache: ordinary buffers, 16 MiB pages, 176 logical DMA views
+GPU: driver.vkcache identity: file vendor=0x1414 device=0xd000 uuid=a056fc7597a71f30425674b1fa4e7591 | current vendor=0x1414 device=0xd000 uuid=c822ed991be4baccf8aefc44ba3ff0c6
+GPU: discarding stale driver.vkcache (174387 KiB, pipeline cache UUID changed (Mesa or GPU driver update))
+GPU: draw preparation workers: 0 (+1 scanner, 8 hardware threads)
+Object motion: off (enable in menu or BB_OBJECT_MOTION=1)
+Scene resolution: raster 640x360, half-resolution targets 320x180, UI 1920x1080 (live)
+Xbox scene resolution: live 640x360 ready (HUD 1920x1080)
+UWP presentation: native resolution; FSR1 and RCAS disabled
+UWP memory telemetry: 1000/5120 MiB (level=0, presents=0, guest pinned=0 MiB, +915 MiB since the last sample)
+Overlay: menu ready (Insert or L3+R3)
+CoreWindow first frame presented
+UWP memory telemetry: 1003/5120 MiB (level=0, presents=0, guest pinned=0 MiB, +3 MiB since the last sample)
+GPU: imported 1 portable shader/pipeline cache files into Q:\Users\UserMgr1\AppData\Local\Packages\BloodborneLauncher_5c4hjcx6a8gg4\LocalState\user\cache\CUSA03173
+UWP memory telemetry: 1039/5120 MiB (level=0, presents=0, guest pinned=0 MiB, +36 MiB since the last sample)
+GPU: WarmUp preloaded 214 / 214 pipelines (VK_KHR_pipeline_binary hits=0, saved=0)
+GPU: UWP presenter ready (backend=2); SDK 0x02000071, 327 HLE symbols
+VideoOut: vblank 60 Hz, frame limit 30 FPS
+Patches: 9 writes, 28 bytes applied, 0 pointers rebased
+Guest TCB loads redirected to the TEB TLS slot: 17127
+Mapped 93634560 bytes, 7 segments; applied 237298 relocations
+Starting linked module 0 at image offset 0x56e0000; native bindings=238
+Runtime: application heap API registered
+Module 0 initializer returned 0
+Starting linked module 1 at image offset 0x57c0000; native bindings=238
+Module 1 initializer returned 0
+Entering original x86-64 code at guest offset 0xa0 (image=0000000800020000, self=0000000805CAFC40, main_stack=0000000805D00000)
+Runtime: _init_env returned (verified libc implementation: RET)
+Runtime: direct allocation offset=0x0, size=121634816 bytes, type=0
+Runtime: mapped direct memory 0000001000000000, size=121634816, prot=0x3
+Runtime: semaphore id=1 (), attr=2, initial=0, max=1
+Runtime: semaphore id=2 (), attr=2, initial=0, max=1
+Runtime: semaphore id=3 (), attr=2, initial=0, max=1
+Runtime: semaphore id=4 (), attr=2, initial=0, max=1
+Runtime: semaphore id=5 (), attr=2, initial=0, max=1
+Runtime: semaphore id=6 (), attr=2, initial=0, max=1
+Runtime: semaphore id=7 (), attr=2, initial=0, max=1
+Runtime: semaphore id=8 (), attr=2, initial=0, max=1
+Runtime: semaphore id=9 (), attr=2, initial=0, max=1
+Runtime: semaphore id=10 (), attr=2, initial=0, max=1
+Runtime: semaphore id=11 (), attr=2, initial=0, max=1
+Runtime: semaphore id=12 (), attr=2, initial=0, max=1
+Runtime: semaphore id=13 (), attr=2, initial=0, max=1
+Runtime: semaphore id=14 (), attr=2, initial=0, max=1
+Runtime: semaphore id=15 (), attr=2, initial=0, max=1
+Runtime: semaphore id=16 (), attr=2, initial=0, max=1
+Runtime: semaphore id=17 (), attr=2, initial=0, max=1
+Runtime: AppContent host provider loaded; references=1
+Runtime: AppContent initialized; offline base-game profile, no mounted add-ons
+Runtime: AppContent parameter 0 = 3
+Runtime: AppContent parameter 1 = 13
+Runtime: AppContent parameter 2 = 0
+Runtime: AppContent parameter 3 = 0
+Runtime: AppContent parameter 4 = 0
+Runtime: semaphore id=18 (), attr=1, initial=1, max=1
+Runtime: guest thread 'Core.Logging.BackgroundStrategy' created (handle=0000000805CAFA00, stack=65536, prio=700)
+Runtime: UserService initialized (user 1 logged in)
+Runtime: direct allocation offset=0x7400000, size=549453824 bytes, type=0
+Runtime: mapped direct memory 0000001007400000, size=549453824, prot=0x3
+Runtime: direct allocation offset=0x28000000, size=289406976 bytes, type=0
+Runtime: mapped direct memory 0000001028000000, size=289406976, prot=0x3
+Runtime: direct allocation offset=0x39400000, size=159383552 bytes, type=0
+Runtime: mapped direct memory 0000001039400000, size=159383552, prot=0x33
+Runtime: direct allocation offset=0x42c00000, size=2398093312 bytes, type=3
+Runtime: mapped direct memory 0000001042C00000, size=2398093312, prot=0x33
+Runtime: direct allocation offset=0xd1b00000, size=929038336 bytes, type=3
+Runtime: mapped direct memory 00000010D1B00000, size=929038336, prot=0x33
+Runtime: direct allocation offset=0x109100000, size=10485760 bytes, type=0
+Runtime: mapped direct memory 0000001109100000, size=10485760, prot=0x3
+Runtime: direct allocation offset=0x109b00000, size=6291456 bytes, type=0
+Runtime: mapped direct memory 0000001109B00000, size=6291456, prot=0x3
+Runtime: mapped flexible memory 000000110A100000, size=50331648, prot=0x3
+Runtime: direct allocation offset=0x10a100000, size=14680064 bytes, type=0
+Runtime: mapped direct memory 000000110D100000, size=14680064, prot=0x3
+Runtime: mapped flexible memory 000000110DF00000, size=85983232, prot=0x3
+Runtime: direct allocation offset=0x10af00000, size=5242880 bytes, type=0
+Runtime: mapped direct memory 0000001113100000, size=5242880, prot=0x33
+Runtime: direct allocation offset=0x10b400000, size=8388608 bytes, type=3
+Runtime: mapped direct memory 0000001113600000, size=8388608, prot=0x33
+Runtime: direct allocation offset=0x10bc00000, size=9437184 bytes, type=0
+Runtime: mapped direct memory 0000001113E00000, size=9437184, prot=0x3
+Runtime: direct allocation offset=0x10c500000, size=310378496 bytes, type=0
+Runtime: mapped direct memory 0000001114700000, size=310378496, prot=0x3
+Runtime: mapped flexible memory 0000001126F00000, size=33554432, prot=0x3
+Runtime: mapped flexible memory 0000001128F00000, size=100663296, prot=0x3
+Runtime: mapped flexible memory 000000112EF00000, size=33554432, prot=0x3
+Runtime: mapped flexible memory 0000001130F00000, size=33554432, prot=0x3
+Runtime: semaphore id=19 (), attr=1, initial=1, max=1
+Runtime: guest thread 'FD4JobWorker:0' created (handle=0000000805CAF7C0, stack=131072, prio=700)
+Runtime: semaphore id=20 (), attr=2, initial=0, max=1
+Runtime: semaphore id=21 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeA0' created (handle=0000000805CAF580, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA1' created (handle=0000000805CAF340, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA2' created (handle=0000000805CAF100, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeA3' created (handle=0000000805CAEEC0, stack=65536, prio=700)
+Runtime: semaphore id=22 (), attr=2, initial=0, max=1
+Runtime: semaphore id=23 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeB1' created (handle=0000000805CAEC80, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeB2' created (handle=0000000805CAEA40, stack=65536, prio=700)
+Runtime: guest thread 'EzWorkPool_TypeB3' created (handle=0000000805CAE800, stack=65536, prio=700)
+Runtime: semaphore id=24 (), attr=2, initial=0, max=1
+Runtime: semaphore id=25 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeC4' created (handle=0000000805CAE5C0, stack=65536, prio=700)
+Runtime: semaphore id=26 (), attr=2, initial=0, max=1
+Runtime: semaphore id=27 (), attr=2, initial=0, max=1
+Runtime: guest thread 'EzWorkPool_TypeD1' created (handle=0000000805CAE380, stack=65536, prio=700)
+Runtime: semaphore id=28 (), attr=2, initial=0, max=1
+Runtime: guest thread 'MOMainThread' created (handle=0000000805CAE140, stack=65536, prio=700)
+Runtime: Ajm context initialized (ATRAC9 via LibAtrac9)
+Runtime: audio backend XAudio2.9 (UWP)
+Audio: XAudio2 mastering voice ready (2 channels)
+Runtime: audio device 2 ch, gain 1.00
+Runtime: audio port 0 opened (type 0, 8 ch -> 2 ch, float, 256 frames)
+Runtime: audio port 8 opened (type 1, 8 ch -> 2 ch, float, 256 frames)
+Runtime: semaphore id=29 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: semaphore id=30 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD mixer thread' created (handle=0000000805CADF00, stack=65536, prio=257)
+Runtime: semaphore id=31 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD AudioOut thread' created (handle=0000000805CADCC0, stack=65536, prio=256)
+Runtime: semaphore id=32 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD stream thread' created (handle=0000000805CADA80, stack=65536, prio=260)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_mixer.fev -> fd 3 (5644 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multirpc.rpc -> fd 3 (253 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multimix.mix -> fd 3 (628 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/sound/sprj_multich.mch -> fd 3 (96 bytes)
+Runtime: guest thread 'GXRenderThread' created (handle=0000000805CAD840, stack=131072, prio=700)
+Runtime: direct allocation offset=0x11ed00000, size=131072 bytes, type=3
+Runtime: mapped direct memory 0000001132F00000, size=131072, prot=0x33
+Runtime: semaphore id=33 (), attr=1, initial=0, max=5
+Runtime: guest thread 'GXWorker:1' created (handle=0000000805CAD600, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:2' created (handle=0000000805CAD3C0, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:3' created (handle=0000000805CAD180, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:4' created (handle=0000000805CACF40, stack=131072, prio=700)
+Runtime: guest thread 'GXWorker:5' created (handle=0000000805CACD00, stack=131072, prio=700)
+Runtime: semaphore id=34 (), attr=1, initial=232, max=232
+Runtime: guest thread 'Core.Res.PostProcessor_0' created (handle=0000000805CACAC0, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.PostProcessor_1' created (handle=0000000805CAC880, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.PostProcessor_2' created (handle=0000000805CAC640, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.CacheableFileLoader' created (handle=0000000805CAC400, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.FileLoader' created (handle=0000000805CAC1C0, stack=65536, prio=700)
+Runtime: guest thread 'Core.Res.TaskManager' created (handle=0000000805CABF80, stack=65536, prio=700)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxshader.shaderbnd.dcx -> fd 4 (3496 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/other/systex.tpf.dcx -> fd 5 (19414 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/other/movtaesprj.movtae.dcx -> fd 6 (489 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/eventnameid.txt -> fd 4 (50711 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/variablenameid.txt -> fd 7 (2950 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/action/statenameid.txt -> fd 8 (23974 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxgui.shaderbnd.dcx -> fd 4 (2737 bytes)
+Runtime: opened game asset /app0/dvdroot_ps4/shader/gxrenderershader.shaderbnd.dcx -> fd 4 (84064 bytes)
+UWP memory telemetry: 1363/5120 MiB (level=0, presents=37, guest pinned=0 MiB, +324 MiB since the last sample)
+UWP dense GPU arena: 0x1039000000, 16 MiB (retired 0 MiB, live 16 MiB), 1/176 DMA views
+UWP dense GPU arena: 0x104e000000, 32 MiB (retired 0 MiB, live 48 MiB), 3/176 DMA views
+Runtime: semaphore id=35 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=36 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=37 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=38 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=39 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=40 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=41 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=42 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=43 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=44 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=45 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=46 (hkSemaphore), attr=1, initial=0, max=1
+Runtime: semaphore id=47 (hkSemaphore), attr=1, initial=0, max=12
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CABD40, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CABB00, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB8C0, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB680, stack=131072, prio=700)
+Runtime: guest thread 'HavokWorkerThread' created (handle=0000000805CAB440, stack=131072, prio=700)
+Runtime: semaphore id=48 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=49 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=50 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=51 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=52 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=53 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=54 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=55 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=56 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=57 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=58 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: semaphore id=59 (hkSemaphore), attr=1, initial=0, max=1000
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAB200, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAFC0, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAD80, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAAB40, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAA900, stack=65536, prio=700)
+Runtime: guest thread 'SpClothVertexUpdate' created (handle=0000000805CAA6C0, stack=65536, prio=700)
+Runtime: guest thread 'FaceGenMan' created (handle=0000000805CAA480, stack=65536, prio=700)
+Runtime: system module 0xad loaded (host implementation)
+Runtime: system module 0x83 loaded (host implementation)
+Runtime: PlayGo initialized; 3 chunks, all installed locally
+Runtime: guest thread 'DLUserPreferenceNotifyServiceIm' created (handle=0000000805CAA240, stack=65536, prio=700)
+Runtime: pad opened for user 1 (SDL gamepad or keyboard)
+UWP dense GPU arena: 0x104d000000, 16 MiB (retired 0 MiB, live 64 MiB), 4/176 DMA views
+UWP dense GPU arena: 0x10d1000000, 16 MiB (retired 0 MiB, live 80 MiB), 5/176 DMA views
+Runtime: open(/app0/dvdroot_ps4/menu/logo.tpf.dcx) -> not found
+Runtime: system module 0x9d loaded (host implementation)
+Runtime: system module 0x1c loaded (host implementation)
+Runtime: system module 0xb5 loaded (host implementation)
+Runtime: system module 0x19 loaded (host implementation)
+Runtime: system module 0xb2 loaded (host implementation)
+Runtime: guest thread 'NexusRevolution Event' created (handle=0000000805CAA000, stack=65536, prio=700)
+Runtime: UserService initialized (user 1 logged in)
+Runtime: guest thread 'NexusRevolution Socket' created (handle=0000000805CA9DC0, stack=65536, prio=700)
+Runtime: system module 0x1e loaded (host implementation)
+Runtime: guest thread 'NexusRevolution Main' created (handle=0000000805CA9B80, stack=65536, prio=700)
+Runtime: guest thread 'FrpgSaveLoadMan' created (handle=0000000805CA9940, stack=65536, prio=700)
+Runtime: semaphore id=60 (), attr=1, initial=1, max=1
+Runtime: guest thread 'SLSession' created (handle=0000000805CA9700, stack=65536, prio=700)
+Runtime: guest thread 'CSTrophy::AsyncUpdateThread' created (handle=0000000805CA94C0, stack=65536, prio=700)
+Runtime: SystemService: splash screen hidden
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing, read-only)
+Frame rate: 21.6 FPS, slowest frame 305.5 ms
+UWP memory telemetry: 2036/5120 MiB (level=0, presents=140, guest pinned=0 MiB, +672 MiB since the last sample)
+Frame generation pacing: 24.9 game frames/s, 0 generated, 0 shown, Present 1.34 ms/frame (last image 1.34 ms), interval 34.16 ms
+Runtime: open(/app0/dvdroot_ps4/parts/wp_a_6010.partsbnd.dcx) -> not found
+Runtime: open(/app0/dvdroot_ps4/parts/lg_a_9700.partsbnd.dcx) -> not found
+Runtime: open(/app0/dvdroot_ps4/parts/lg_a_9700_l.partsbnd.dcx) -> not found
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: open(/app0/dvdroot_ps4/menu/.gfx) -> not found
+Runtime: semaphore id=61 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: semaphore id=62 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD nonblocking thread (0)' created (handle=0000000805CA9280, stack=65536, prio=265)
+Runtime: semaphore id=63 (FMOD Semaphore), attr=1, initial=0, max=65535
+Runtime: guest thread 'FMOD file thread' created (handle=0000000805CA9040, stack=65536, prio=265)
+Frame rate: 28.1 FPS, slowest frame 145.9 ms
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing, read-only)
+UWP memory telemetry: 2288/5120 MiB (level=0, presents=284, guest pinned=0 MiB, +251 MiB since the last sample)
+Frame generation pacing: 28.8 game frames/s, 0 generated, 0 shown, Present 1.12 ms/frame (last image 1.12 ms), interval 33.35 ms
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing, read-only)
+Frame rate: 29.9 FPS, slowest frame 41.2 ms
+Runtime: semaphore id=64 (), attr=2, initial=0, max=1
+Runtime: semaphore id=65 (), attr=2, initial=0, max=1
+Runtime: guest thread 'CSChrThread0' created (handle=0000000805CA8E00, stack=65536, prio=700)
+Runtime: guest thread 'CSChrThread1' created (handle=0000000805CA8BC0, stack=65536, prio=700)
+Runtime: guest thread 'CSChrThread2' created (handle=0000000805CA8980, stack=65536, prio=700)
+Runtime: guest thread 'CSChrThread3' created (handle=0000000805CA8740, stack=65536, prio=700)
+Runtime: guest thread 'CSChrThread4' created (handle=0000000805CA8500, stack=65536, prio=700)
+Runtime: guest thread 'CSChrThread5' created (handle=0000000805CA82C0, stack=65536, prio=700)
+Runtime: semaphore id=66 (), attr=2, initial=0, max=1
+Runtime: semaphore id=67 (), attr=2, initial=0, max=1
+Runtime: guest thread 'CSChrBackInitialize1' created (handle=0000000805CA8080, stack=65536, prio=700)
+Runtime: semaphore id=68 (), attr=2, initial=0, max=1
+Runtime: semaphore id=69 (), attr=2, initial=0, max=1
+Runtime: guest thread 'CSClothThread0' created (handle=0000000805CA7E40, stack=65536, prio=700)
+Runtime: guest thread 'CSClothThread1' created (handle=0000000805CA7C00, stack=65536, prio=700)
+Runtime: guest thread 'CSClothThread2' created (handle=0000000805CA79C0, stack=65536, prio=700)
+Runtime: guest thread 'CSClothThread3' created (handle=0000000805CA7780, stack=65536, prio=700)
+Runtime: guest thread 'CSClothThread4' created (handle=0000000805CA7540, stack=65536, prio=700)
+Runtime: guest thread 'CSClothThread5' created (handle=0000000805CA7300, stack=65536, prio=700)
+UWP dense GPU arena: 0x10df000000, 16 MiB (retired 0 MiB, live 96 MiB), 6/176 DMA views
+UWP dense GPU arena: 0x10de000000, 16 MiB (retired 0 MiB, live 112 MiB), 7/176 DMA views
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=1 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=2 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=70 uid=70 by=other guest=0x10d1d50000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=2 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=3 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=71 uid=71 by=other guest=0x10d1d50000 size=131072 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=3 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=4 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=72 uid=72 by=other guest=0x10d1d50000 size=196608 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=4 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=5 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=73 uid=73 by=other guest=0x10d1d50000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+GPU: copy layer mismatch: source D16Unorm 1x1x1 layers=5 addr=0x10d1d50000 | destination D16Unorm 1x1x1 layers=6 addr=0x10d1d50000; skipping the copy
+Texture cache: free id=74 uid=74 by=other guest=0x10d1d50000 size=327680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+UWP dense GPU arena: 0x1080000000, 16 MiB (retired 0 MiB, live 128 MiB), 8/176 DMA views
+UWP dense GPU arena: 0x106e000000, 16 MiB (retired 0 MiB, live 144 MiB), 9/176 DMA views
+UWP dense GPU arena: 0x106f000000, 16 MiB (retired 0 MiB, live 160 MiB), 10/176 DMA views
+UWP dense GPU arena: 0x106a000000, 32 MiB (retired 0 MiB, live 192 MiB), 12/176 DMA views
+UWP dense GPU arena: 0x1070000000, 16 MiB (retired 0 MiB, live 208 MiB), 13/176 DMA views
+UWP dense GPU arena: 0x1073000000, 16 MiB (retired 0 MiB, live 224 MiB), 14/176 DMA views
+UWP dense GPU arena: 0x1075000000, 32 MiB (retired 0 MiB, live 256 MiB), 16/176 DMA views
+UWP dense GPU arena: 0x1074000000, 16 MiB (retired 0 MiB, live 272 MiB), 17/176 DMA views
+UWP dense GPU arena: 0x1074000000, 48 MiB (retired 48 MiB, live 272 MiB), 17/176 DMA views
+UWP dense GPU arena: 0x1071000000, 32 MiB (retired 0 MiB, live 304 MiB), 19/176 DMA views
+UWP dense GPU arena: 0x1043000000, 16 MiB (retired 0 MiB, live 320 MiB), 20/176 DMA views
+UWP dense GPU arena: 0x106e000000, 32 MiB (retired 32 MiB, live 320 MiB), 20/176 DMA views
+UWP dense GPU arena: 0x1071000000, 48 MiB (retired 48 MiB, live 320 MiB), 20/176 DMA views
+UWP dense GPU arena: 0x1069000000, 48 MiB (retired 32 MiB, live 336 MiB), 21/176 DMA views
+UWP dense GPU arena: 0x106d000000, 16 MiB (retired 0 MiB, live 352 MiB), 22/176 DMA views
+UWP dense GPU arena: 0x1080000000, 32 MiB (retired 16 MiB, live 368 MiB), 23/176 DMA views
+UWP dense GPU arena: 0x10e0000000, 16 MiB (retired 0 MiB, live 384 MiB), 24/176 DMA views
+UWP dense GPU arena: 0x1069000000, 64 MiB (retired 48 MiB, live 400 MiB), 25/176 DMA views
+UWP memory telemetry: 3971/5120 MiB (level=1, presents=404, guest pinned=0 MiB, +1682 MiB since the last sample)
+Texture cache: free id=101 uid=99 by=other guest=0x1056ec0100 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=103 uid=101 by=other guest=0x1056ec0100 size=327680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=105 uid=103 by=other guest=0x1056ec0100 size=344064 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=107 uid=105 by=other guest=0x1056ec0100 size=348160 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=109 uid=107 by=other guest=0x1056ec0100 size=349184 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=111 uid=109 by=other guest=0x1056ec0100 size=349440 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=113 uid=111 by=other guest=0x1056ec0100 size=349696 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=115 uid=113 by=other guest=0x1056ec0100 size=349952 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=119 uid=117 by=other guest=0x1056f69d00 size=8192 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=121 uid=119 by=other guest=0x1056f69d00 size=12288 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=123 uid=121 by=other guest=0x1056f69d00 size=14336 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=125 uid=123 by=other guest=0x1056f69d00 size=15360 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=127 uid=125 by=other guest=0x1056f69d00 size=15872 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=129 uid=127 by=other guest=0x1056f69d00 size=16128 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=131 uid=129 by=other guest=0x1056f69d00 size=16384 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=133 uid=131 by=other guest=0x1056f69d00 size=16640 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=137 uid=135 by=other guest=0x1056f70900 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=139 uid=137 by=other guest=0x1056f70900 size=5120 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=141 uid=139 by=other guest=0x1056f70900 size=5376 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=143 uid=141 by=other guest=0x1056f70900 size=5632 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+UWP dense GPU arena: 0x10d3000000, 16 MiB (retired 0 MiB, live 416 MiB), 26/176 DMA views
+Texture cache: free id=62 uid=62 by=eviction guest=0x10d5232a00 size=4608 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: memory pressure, 4457 of 4096 MiB (limit 5120, critical 4352, guest pinned 0): 1 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+Texture cache: erase id=70 (freed by=other)
+Texture cache: erase id=71 (freed by=other)
+Texture cache: erase id=72 (freed by=other)
+Texture cache: erase id=73 (freed by=other)
+Texture cache: erase id=74 (freed by=other)
+Texture cache: erase id=101 (freed by=other)
+Texture cache: erase id=103 (freed by=other)
+Texture cache: erase id=105 (freed by=other)
+Texture cache: erase id=107 (freed by=other)
+Texture cache: erase id=109 (freed by=other)
+Texture cache: erase id=111 (freed by=other)
+Texture cache: erase id=113 (freed by=other)
+Texture cache: erase id=115 (freed by=other)
+Texture cache: erase id=119 (freed by=other)
+Texture cache: erase id=121 (freed by=other)
+Texture cache: erase id=123 (freed by=other)
+Texture cache: erase id=125 (freed by=other)
+Texture cache: erase id=127 (freed by=other)
+Texture cache: erase id=129 (freed by=other)
+Texture cache: erase id=131 (freed by=other)
+Texture cache: erase id=133 (freed by=other)
+Texture cache: erase id=137 (freed by=other)
+Texture cache: erase id=139 (freed by=other)
+Texture cache: erase id=141 (freed by=other)
+Texture cache: erase id=143 (freed by=other)
+Texture cache: erase id=62 (freed by=eviction)
+UWP dense GPU arena: 0x10d5000000, 16 MiB (retired 0 MiB, live 432 MiB), 27/176 DMA views
+UWP dense GPU arena: 0x10db000000, 16 MiB (retired 0 MiB, live 448 MiB), 28/176 DMA views
+UWP dense GPU arena: 0x10d4000000, 16 MiB (retired 0 MiB, live 464 MiB), 29/176 DMA views
+UWP dense GPU arena: 0x1044000000, 16 MiB (retired 0 MiB, live 480 MiB), 30/176 DMA views
+Frame generation pacing: 19.2 game frames/s, 0 generated, 0 shown, Present 1.68 ms/frame (last image 1.68 ms), interval 34.13 ms
+Runtime: open(/app0/dvdroot_ps4/map/m24/m24_9999.tpf.dcx) -> not found
+UWP dense GPU arena: 0x1075000000, 32 MiB released
+UWP dense GPU arena: 0x1074000000, 16 MiB released
+UWP dense GPU arena: 0x106e000000, 16 MiB released
+UWP dense GPU arena: 0x106f000000, 16 MiB released
+UWP dense GPU arena: 0x1073000000, 16 MiB released
+UWP dense GPU arena: 0x1071000000, 32 MiB released
+UWP dense GPU arena: 0x106a000000, 32 MiB released
+UWP dense GPU arena: 0x1080000000, 16 MiB released
+UWP dense GPU arena: 0x1069000000, 48 MiB released
+UWP swap: out=246 in=1 disk=50 views=1 MiB; checks=139 corrupt=0 window evictions=0
+UWP swap: pageable private=575 pinned=0 MiB; page-out passes=123 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=50 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 15755 pages stored (36 raw, 2887 blank, 1 MiB of payload, 0% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP dense GPU arena: 0x10d2000000, 16 MiB (retired 0 MiB, live 496 MiB), 31/176 DMA views
+Texture cache: free id=61 uid=61 by=eviction guest=0x10d5212a00 size=131072 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Frame rate: 14.4 FPS, slowest frame 681.2 ms
+Texture cache: erase id=61 (freed by=eviction)
+Texture cache: free id=58 uid=58 by=eviction guest=0x1066ffe000 size=1048576 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=60 uid=60 by=eviction guest=0x10d4ac8400 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: erase id=58 (freed by=eviction)
+Texture cache: erase id=60 (freed by=eviction)
+Texture cache: free id=67 uid=67 by=eviction guest=0x10df91fa00 size=512 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=69 uid=69 by=depth-reclaim guest=0x10d1d40000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=75 uid=75 by=depth-reclaim guest=0x10d1d50000 size=393216 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=98 uid=96 by=eviction guest=0x1056eb3b00 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=99 uid=97 by=eviction guest=0x1056eb3900 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=100 uid=98 by=eviction guest=0x1056f15a00 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=102 uid=100 by=eviction guest=0x1056f55b00 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=104 uid=102 by=eviction guest=0x1056f65c00 size=16384 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=106 uid=104 by=eviction guest=0x1056eb3d00 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=108 uid=106 by=eviction guest=0x1056eb4e00 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=110 uid=108 by=eviction guest=0x1056eb5300 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=112 uid=110 by=eviction guest=0x1056eb5500 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=114 uid=112 by=eviction guest=0x1056eb5700 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=116 uid=114 by=eviction guest=0x1056eb5900 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=117 uid=115 by=eviction guest=0x1056ec0100 size=350208 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=118 uid=116 by=eviction guest=0x1056f6e000 size=8192 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=120 uid=118 by=eviction guest=0x1056eb5b00 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=122 uid=120 by=eviction guest=0x1056eb6c00 size=2048 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=124 uid=122 by=eviction guest=0x1056eb7500 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=126 uid=124 by=eviction guest=0x1056eb7a00 size=512 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=128 uid=126 by=eviction guest=0x1056f70100 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=130 uid=128 by=eviction guest=0x1056f70300 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=132 uid=130 by=eviction guest=0x1056f70500 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=134 uid=132 by=eviction guest=0x1056f70700 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=135 uid=133 by=eviction guest=0x1056f69d00 size=16896 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=136 uid=134 by=eviction guest=0x1056f72100 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=138 uid=136 by=eviction guest=0x1056f73200 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=140 uid=138 by=eviction guest=0x1056f73700 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=142 uid=140 by=eviction guest=0x1056f73900 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=144 uid=142 by=eviction guest=0x1056f73b00 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=145 uid=143 by=eviction guest=0x1056f70900 size=5888 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=146 uid=144 by=eviction guest=0x1056f73f00 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: erase id=67 (freed by=eviction)
+Texture cache: erase id=69 (freed by=depth-reclaim)
+Texture cache: erase id=75 (freed by=depth-reclaim)
+Texture cache: erase id=98 (freed by=eviction)
+Texture cache: erase id=99 (freed by=eviction)
+Texture cache: erase id=100 (freed by=eviction)
+Texture cache: erase id=102 (freed by=eviction)
+Texture cache: erase id=104 (freed by=eviction)
+Texture cache: erase id=106 (freed by=eviction)
+Texture cache: erase id=108 (freed by=eviction)
+Texture cache: erase id=110 (freed by=eviction)
+Texture cache: erase id=112 (freed by=eviction)
+Texture cache: erase id=114 (freed by=eviction)
+Texture cache: erase id=116 (freed by=eviction)
+Texture cache: erase id=117 (freed by=eviction)
+Texture cache: erase id=118 (freed by=eviction)
+Texture cache: erase id=120 (freed by=eviction)
+Texture cache: erase id=122 (freed by=eviction)
+Texture cache: erase id=124 (freed by=eviction)
+Texture cache: erase id=126 (freed by=eviction)
+Texture cache: erase id=128 (freed by=eviction)
+Texture cache: erase id=130 (freed by=eviction)
+Texture cache: erase id=132 (freed by=eviction)
+Texture cache: erase id=134 (freed by=eviction)
+Texture cache: erase id=135 (freed by=eviction)
+Texture cache: erase id=136 (freed by=eviction)
+Texture cache: erase id=138 (freed by=eviction)
+Texture cache: erase id=140 (freed by=eviction)
+Texture cache: erase id=142 (freed by=eviction)
+Texture cache: erase id=144 (freed by=eviction)
+Texture cache: erase id=145 (freed by=eviction)
+Texture cache: erase id=146 (freed by=eviction)
+Texture cache: free id=147 uid=145 by=eviction guest=0x1056f73d00 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=148 uid=146 by=eviction guest=0x1056f74300 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=149 uid=147 by=eviction guest=0x1056f74100 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=150 uid=148 by=eviction guest=0x1056f74700 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=151 uid=149 by=eviction guest=0x1056f74500 size=256 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=152 uid=150 by=eviction guest=0x1056f74e00 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=153 uid=151 by=eviction guest=0x1056f74900 size=1024 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=154 uid=152 by=eviction guest=0x105700e000 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=0 deferred=1
+Texture cache: free id=155 uid=153 by=eviction guest=0x105700cf00 size=4096 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=156 uid=154 by=eviction guest=0x105dcb0000 size=4718592 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=157 uid=155 by=eviction guest=0x105e140000 size=4718592 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=161 uid=159 by=eviction guest=0x105e8e0000 size=393216 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=169 uid=167 by=eviction guest=0x105ea60000 size=393216 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=179 uid=177 by=eviction guest=0x105ebb8000 size=32768 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=181 uid=179 by=eviction guest=0x105ebd8000 size=8355840 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=182 uid=180 by=eviction guest=0x1057010000 size=16711680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=183 uid=181 by=depth-reclaim guest=0x105a008000 size=9437184 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=184 uid=0 by=eviction guest=0x105a910000 size=2211840 bound=0 target=0 proxy=0 vo=0 tiled=0 gpu_modified=0 deferred=1
+Texture cache: free id=185 uid=182 by=eviction guest=0x1058010000 size=16711680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=186 uid=183 by=eviction guest=0x1059010000 size=16711680 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=196 uid=193 by=eviction guest=0x105b378000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=201 uid=198 by=eviction guest=0x105b600000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=203 uid=200 by=eviction guest=0x105b528000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=205 uid=202 by=eviction guest=0x105ab60000 size=524288 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=210 uid=207 by=eviction guest=0x105ad08000 size=917504 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=213 uid=210 by=eviction guest=0x105aec8000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=218 uid=215 by=eviction guest=0x105afa0000 size=262144 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=227 uid=224 by=eviction guest=0x105b070000 size=32768 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=235 uid=232 by=eviction guest=0x105b650000 size=1310720 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=236 uid=233 by=eviction guest=0x105b7a0000 size=393216 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=237 uid=234 by=eviction guest=0x105b810000 size=131072 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=238 uid=235 by=eviction guest=0x105b840000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: erase id=147 (freed by=eviction)
+Texture cache: erase id=148 (freed by=eviction)
+Texture cache: erase id=149 (freed by=eviction)
+Texture cache: erase id=150 (freed by=eviction)
+Texture cache: erase id=151 (freed by=eviction)
+Texture cache: erase id=152 (freed by=eviction)
+Texture cache: erase id=153 (freed by=eviction)
+Texture cache: erase id=154 (freed by=eviction)
+Texture cache: erase id=155 (freed by=eviction)
+Texture cache: erase id=156 (freed by=eviction)
+Texture cache: erase id=157 (freed by=eviction)
+Texture cache: erase id=161 (freed by=eviction)
+Texture cache: erase id=169 (freed by=eviction)
+Texture cache: erase id=179 (freed by=eviction)
+Texture cache: erase id=181 (freed by=eviction)
+Texture cache: erase id=182 (freed by=eviction)
+Texture cache: erase id=183 (freed by=depth-reclaim)
+Texture cache: erase id=184 (freed by=eviction)
+Texture cache: erase id=185 (freed by=eviction)
+Texture cache: erase id=186 (freed by=eviction)
+Texture cache: erase id=196 (freed by=eviction)
+Texture cache: erase id=201 (freed by=eviction)
+Texture cache: erase id=203 (freed by=eviction)
+Texture cache: erase id=205 (freed by=eviction)
+Texture cache: erase id=210 (freed by=eviction)
+Texture cache: erase id=213 (freed by=eviction)
+Texture cache: erase id=218 (freed by=eviction)
+Texture cache: erase id=227 (freed by=eviction)
+Texture cache: erase id=235 (freed by=eviction)
+Texture cache: erase id=236 (freed by=eviction)
+Texture cache: erase id=237 (freed by=eviction)
+Texture cache: erase id=238 (freed by=eviction)
+Texture cache: free id=239 uid=236 by=eviction guest=0x105b860000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=240 uid=237 by=eviction guest=0x105b880000 size=65536 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=241 uid=238 by=eviction guest=0x105b8a0000 size=1310720 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=242 uid=239 by=eviction guest=0x105b9f0000 size=1310720 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=243 uid=240 by=eviction guest=0x105bb40000 size=393216 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=248 uid=245 by=eviction guest=0x105c118000 size=8355840 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=249 uid=246 by=depth-reclaim guest=0x105d118000 size=9437184 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: free id=250 uid=0 by=eviction guest=0x105da20000 size=2211840 bound=0 target=0 proxy=0 vo=0 tiled=0 gpu_modified=0 deferred=1
+Texture cache: free id=251 uid=247 by=eviction guest=0x105c918000 size=8355840 bound=0 target=0 proxy=0 vo=0 tiled=1 gpu_modified=1 deferred=1
+Texture cache: erase id=239 (freed by=eviction)
+Texture cache: erase id=240 (freed by=eviction)
+Texture cache: erase id=241 (freed by=eviction)
+Texture cache: erase id=242 (freed by=eviction)
+Texture cache: erase id=243 (freed by=eviction)
+Texture cache: erase id=248 (freed by=eviction)
+Texture cache: erase id=249 (freed by=depth-reclaim)
+Texture cache: erase id=250 (freed by=eviction)
+Texture cache: erase id=251 (freed by=eviction)
+UWP memory telemetry: 4312/5120 MiB (level=1, presents=504, guest pinned=0 MiB, +340 MiB since the last sample)
+Texture cache: memory pressure, 4333 of 4096 MiB (limit 5120, critical 4352, guest pinned 0): 72 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 4 depth reclaimed
+UWP memory telemetry: 3526/5120 MiB (level=1, presents=533, guest pinned=0 MiB, -785 MiB since the last sample)
+UWP +30s boot health snapshot:
+UWP swap: out=246 in=2 disk=50 views=2 MiB; checks=182 corrupt=0 window evictions=0
+UWP swap: pageable private=778 pinned=0 MiB; page-out passes=123 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=50 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 15760 pages stored (36 raw, 2887 blank, 1 MiB of payload, 0% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP memory: commit faults=108154, promoted alias pages=33, snapshots=0, restored=0, virtual pages=314312
+Runtime: direct memory allocations=14, maps=14, live=4812046336, budget=5301600256
+Runtime: flexible maps=6, in use=337641472, protects=0, queries=40668, regions=20
+Runtime: files opened=537, reads=7050 (392605576 bytes), writes=0, not found=8
+Thread report:
+  CSClothThread5           (handle=0000000805CA7300) waits 0.0 s for cond at 0000001109176690, called from 00000008020A3ECD
+  CSClothThread4           (handle=0000000805CA7540) waits 0.0 s for cond at 0000001109176510, called from 00000008020A3ECD
+  CSClothThread3           (handle=0000000805CA7780) waits 0.0 s for cond at 0000001109176390, called from 00000008020A3ECD
+  CSClothThread2           (handle=0000000805CA79C0) waits 0.0 s for cond at 0000001109176210, called from 00000008020A3ECD
+  CSClothThread1           (handle=0000000805CA7C00) waits 0.0 s for cond at 000000110917A840, called from 00000008020A3ECD
+  CSClothThread0           (handle=0000000805CA7E40) waits 0.0 s for cond at 000000110917ACA0, called from 00000008020A3ECD
+  CSChrBackInitialize1     (handle=0000000805CA8080) waits 6.9 s for cond at 000000110917B610, called from 00000008020A3ECD
+  CSChrThread5             (handle=0000000805CA82C0) waits 6.9 s for cond at 000000110917B9F0, called from 00000008020A3ECD
+  CSChrThread4             (handle=0000000805CA8500) waits 6.9 s for cond at 00000011091791E0, called from 00000008020A3ECD
+  CSChrThread3             (handle=0000000805CA8740) waits 6.9 s for cond at 0000001109178D80, called from 00000008020A3ECD
+  CSChrThread2             (handle=0000000805CA8980) waits 6.9 s for cond at 0000001109170930, called from 00000008020A3ECD
+  CSChrThread1             (handle=0000000805CA8BC0) waits 6.9 s for cond at 000000110917A3E0, called from 00000008020A3ECD
+  CSChrThread0             (handle=0000000805CA8E00) waits 6.9 s for cond at 00000011091B83E0, called from 00000008020A3ECD
+  FMOD file thread         (handle=0000000805CA9040) running
+  FMOD nonblocking thread (0) (handle=0000000805CA9280) waits 3.1 s for semaphore FMOD Semaphore at 000000000000003E, called from 0000000800D3ADB0
+  CSTrophy::AsyncUpdateThread (handle=0000000805CA94C0) waits 19.6 s for cond at 000000100807DA40, called from 00000008020A3ECD
+  SLSession                (handle=0000000805CA9700) waits 7.5 s for semaphore at 000000000000003C, called from 000000080265AE6A
+  NexusRevolution Main     (handle=0000000805CA9B80) running
+  NexusRevolution Event    (handle=0000000805CAA000) running
+  DLUserPreferenceNotifyServiceIm (handle=0000000805CAA240) running
+  FaceGenMan               (handle=0000000805CAA480) waits 20.4 s for cond at 0000001007BA5000, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA6C0) waits 20.4 s for cond at 0000001109137230, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA900) waits 20.4 s for cond at 0000001109137110, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAB40) waits 20.4 s for cond at 0000001109136FF0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAD80) waits 20.4 s for cond at 0000001109136ED0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAFC0) waits 20.4 s for cond at 0000001109136DB0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAB200) waits 20.4 s for cond at 0000001109136C90, called from 00000008020A3ECD
+  HavokWorkerThread        (handle=0000000805CAB440) waits 0.0 s for semaphore hkSemaphore at 0000000000000027, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB680) waits 0.0 s for semaphore hkSemaphore at 0000000000000026, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB8C0) waits 0.0 s for semaphore hkSemaphore at 0000000000000025, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABB00) waits 0.0 s for semaphore hkSemaphore at 0000000000000024, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABD40) waits 0.0 s for semaphore hkSemaphore at 0000000000000023, called from 0000000800443599
+  Core.Res.TaskManager     (handle=0000000805CABF80) running
+  Core.Res.FileLoader      (handle=0000000805CAC1C0) waits 21.6 s for cond at 00000008056C50E8, called from 00000008020A3ECD
+  Core.Res.CacheableFileLoader (handle=0000000805CAC400) waits 0.0 s for file read /app0/dvdroot_ps4/map/m24/m24_0 at 000000110B027F88, called from 00007FF6CDC59871
+  Core.Res.PostProcessor_2 (handle=0000000805CAC640) waits 0.0 s for cond at 000000110AF82E00, called from 00000008020A3ECD
+  Core.Res.PostProcessor_1 (handle=0000000805CAC880) waits 0.0 s for cond at 000000110AF82938, called from 00000008020A3ECD
+  Core.Res.PostProcessor_0 (handle=0000000805CACAC0) waits 0.0 s for cond at 000000110AF82470, called from 00000008020A3ECD
+  GXWorker:5               (handle=0000000805CACD00) waits 0.0 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:4               (handle=0000000805CACF40) waits 0.0 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:3               (handle=0000000805CAD180) waits 0.0 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:2               (handle=0000000805CAD3C0) waits 0.0 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:1               (handle=0000000805CAD600) waits 0.0 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXRenderThread           (handle=0000000805CAD840) waits 0.0 s for cond at 00000010282A1F18, called from 00000008020A3ECD
+  FMOD stream thread       (handle=0000000805CADA80) running
+  FMOD AudioOut thread     (handle=0000000805CADCC0) running
+  FMOD mixer thread        (handle=0000000805CADF00) waits 0.0 s for semaphore FMOD Semaphore at 000000000000001E, called from 0000000800D3ADB0
+  MOMainThread             (handle=0000000805CAE140) running
+  EzWorkPool_TypeD1        (handle=0000000805CAE380) waits 22.0 s for cond at 00000011091010F0, called from 00000008020A3ECD
+  EzWorkPool_TypeC4        (handle=0000000805CAE5C0) waits 0.0 s for cond at 0000001109100EF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB3        (handle=0000000805CAE800) waits 0.0 s for cond at 0000001109100CF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB2        (handle=0000000805CAEA40) waits 0.0 s for cond at 0000001109100B50, called from 00000008020A3ECD
+  EzWorkPool_TypeB1        (handle=0000000805CAEC80) waits 0.0 s for cond at 00000011091009B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA3        (handle=0000000805CAEEC0) waits 1.6 s for cond at 00000011091007B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA2        (handle=0000000805CAF100) waits 1.6 s for cond at 0000001109100610, called from 00000008020A3ECD
+  EzWorkPool_TypeA1        (handle=0000000805CAF340) waits 1.6 s for cond at 0000001109100470, called from 00000008020A3ECD
+  EzWorkPool_TypeA0        (handle=0000000805CAF580) waits 1.6 s for cond at 00000011091002D0, called from 00000008020A3ECD
+  FD4JobWorker:0           (handle=0000000805CAF7C0) waits 22.0 s for semaphore at 0000000000000013, called from 000000080265AE6A
+  Core.Logging.BackgroundStrategy (handle=0000000805CAFA00) waits 22.1 s for semaphore at 0000000000000012, called from 000000080265AE6A
+  main                     (handle=0000000805CAFC40) running
+Runtime: CPU time by thread: session 46 s, 92 live threads, 39.5 s CPU (11% of 8 hardware threads)
+Runtime:   tid 4212                     24656 ms ( 53.1% of one thread)
+Runtime:   shadPS4:GpuCommandProcessor      4016 ms (  8.7% of one thread)
+Runtime:   bb:DrawRec                    2688 ms (  5.8% of one thread)
+Runtime:   bb:VkRecorder                 2500 ms (  5.4% of one thread)
+Runtime:   Core.Res.PostProcessor_0      2500 ms (  5.4% of one thread)
+Runtime:   Core.Res.PostProcessor_2       844 ms (  1.8% of one thread)
+Runtime:   tid 1512                       406 ms (  0.9% of one thread)
+Runtime:   EzWorkPool_TypeC4              344 ms (  0.7% of one thread)
+Runtime:   bb:Copy1                       266 ms (  0.6% of one thread)
+Runtime:   MOMainThread                   203 ms (  0.4% of one thread)
+Runtime:   bb:Copy0                       188 ms (  0.4% of one thread)
+Runtime:   GXRenderThread                  94 ms (  0.2% of one thread)
+Runtime:   Window Manager Thread           94 ms (  0.2% of one thread)
+Runtime:   bb:Present                      78 ms (  0.2% of one thread)
+Runtime:   tid 6784                        78 ms (  0.2% of one thread)
+Runtime:   Core.Res.CacheableFileLoader        78 ms (  0.2% of one thread)
+Thread sample tid 6784                 (rdi=0000000000000002 rsp=0000007b357ff208): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8BF190000+0x335e9 < 00007FF8BF190000+0x33076 < 00007FF8BF190000+0x3302c < 00007FF8BF190000+0x32a1c < 00007FF8BF190000+0x17353 < bloodborne.exe+0x16dcc < bloodborne.exe+0x16cfe < bloodborne.exe+0x74e9 < bloodborne.exe+0xc577e9 < 00007FF8C3F20000+0x863e2
+Thread sample tid 2684                 (rdi=000001f63d108a70 rsp=0000007b35fff688): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 5752                 (rdi=000001f63d108a70 rsp=0000007b367ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 812                  (rdi=000001f63d108a70 rsp=0000007b36fff6e8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 3788                 (rdi=000001f63d103280 rsp=0000007b377ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample Window Manager Thread    (rdi=0000000000000000 rsp=0000007b37fff608): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < 00007FF8C2C30000+0x4a7ee < 00007FF8C2C30000+0x2320e < 00007FF8C2C30000+0x140ae < 00007FF8C2C30000+0x16670 < 00007FF8C2C30000+0x4a184 < 00007FF8C3F20000+0x863e2
+Thread sample tid 3480                 (rdi=0000000000000001 rsp=0000007b387ff3a8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3A90000+0x11fcbe < 00007FF8C3A90000+0x115b9f < 00007FF8C3A90000+0x115aaf < 00007FF8C3F20000+0x863e2
+Thread sample tid 2132                 (rdi=000001f63d103280 rsp=0000007b38fff6c8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample ApplicationView ASTA     (rdi=0000000000000004 rsp=0000007b397fea08): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C2C30000+0x4ab0b < 00007FF8C2C30000+0x233f7 < 00007FF8C2C30000+0x498f6 < 00007FF8C2C30000+0x14183 < 00007FF8C2C30000+0x1832b < 00007FF8C3A90000+0x10e7b < 00007FF8C3A90000+0x1075c < 00007FF8C3A90000+0x10321 < 00007FF8ADA30000+0xa1ef < 00007FF8ADA30000+0x94c4 < bloodborne.exe+0x1b17b < bloodborne.exe+0x1a770 < bloodborne.exe+0x18042 < 00007FF8BF190000+0x8f685
+Thread sample tid 2504                 (rdi=000001f63d103280 rsp=0000007b39fff718): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4212                 (rdi=00000008064fedf0 rsp=00000008064fedd0): guest+0x2034b14 < guest+0x64dee00 < guest+0x2018e27 < guest+0x1e4a6f5 < guest+0xdf
+Thread sample tid 5456                 (rdi=0000000000000002 rsp=0000007b3c7ff938): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3A90000+0x115e2a < 00007FF8C3A90000+0x115c64 < 00007FF8C3A90000+0x115aaf < 00007FF8C3F20000+0x863e2
+Thread sample tid 5332                 (rdi=000001f63d103280 rsp=0000007b3cfff948): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4960                 (rdi=0000000000000000 rsp=0000007b3d7ffd38): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x43671 < bloodborne.exe+0x4343d < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 4912                 (rdi=0000000000000000 rsp=0000007b3dfffc98): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x438d3 < bloodborne.exe+0x4371b < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 1736                 (rdi=0000000000000001 rsp=0000007b3e7ff6d8): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < 00007FF8BD190000+0x5fb47 < 00007FF8BD190000+0x5fc8c < 00007FF8C3F20000+0x863e2
+Thread sample tid 1512                 (rdi=0000000000000000 rsp=0000007b3f7ff7f8): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x8cc95 < 00007FF89FF80000+0x84ed < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:kernel_service        (rdi=0000000000000000 rsp=0000007b3ffffb38): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0xa25d6 < bloodborne.exe+0xa9c9f < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:window                (rdi=0000000000000000 rsp=0000007b407ff868): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0xa0200 < bloodborne.exe+0xa00bc < bloodborne.exe+0x9fce3 < bloodborne.exe+0xa9a58 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuCommandProcessor (rdi=0000000000000000 rsp=0000007b40fff918): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x34d2e8 < bloodborne.exe+0x34c35d < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:VkRecorder            (rdi=0000000000000000 rsp=0000007b417ff868): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed07c < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b41fff5c8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b427ffa88): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b42fffc68): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy0                 (rdi=0000007b43fffae0 rsp=0000007b437ffa78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy1                 (rdi=0000007b437ffac0 rsp=0000007b43fffa98): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PipelineCacheIO  (rdi=0000000000000000 rsp=0000007b447ffac8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x18b93f < bloodborne.exe+0x18b3d8 < bloodborne.exe+0x1906fa < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:DrawRec               (rdi=0000000000000000 rsp=0000007b44fffc08): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0x8f323 < 00007FF8C3010000+0xe4148 < bloodborne.exe+0xf21a7 < bloodborne.exe+0xf1e4f < bloodborne.exe+0xf1c36 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Present               (rdi=0000000000000000 rsp=0000007b457ffc78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x35af3a < bloodborne.exe+0x360ed6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PresentThread    (rdi=0000000000000000 rsp=0000007b45fff5e8): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x165f2f < bloodborne.exe+0x35fb17 < bloodborne.exe+0x360fa6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample Core.Logging.BackgroundStrategy (rdi=0000000000000002 rsp=00000008065df7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x26471c5 < guest+0x263b246
+Thread sample FD4JobWorker:0           (rdi=0000000000000002 rsp=000000080664f7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x106747f < guest+0x263b246
+Thread sample EzWorkPool_TypeA0        (rdi=0000000000000002 rsp=00000008066af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA1        (rdi=0000000000000002 rsp=000000080670f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA2        (rdi=0000000000000002 rsp=000000080676f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA3        (rdi=0000000000000002 rsp=00000008067cf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB1        (rdi=0000000000000002 rsp=000000080682f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB2        (rdi=0000000000000002 rsp=000000080688f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB3        (rdi=0000000000000002 rsp=00000008068ef838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeC4        (rdi=0000000000000002 rsp=000000080694f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeD1        (rdi=0000000000000002 rsp=00000008069af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample MOMainThread             (rdi=0000000000000000 rsp=0000000806a0fc98): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x2801382 < guest+0x263b246
+Thread sample tid 2860                 (rdi=0000000000000002 rsp=0000007b4c7ff858): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF8BAF00000+0x5fcca < 00007FF8BAF00000+0x5fc7e < 00007FF8C3F20000+0x863e2
+Thread sample tid 1172                 (rdi=0000000000000003 rsp=0000007b4cfffab8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF89B7C0000+0x82ad < 00007FF89B7C0000+0x341f7 < 00007FF8C3F20000+0x863e2
+Thread sample FMOD mixer thread        (rdi=0000000000000002 rsp=0000000806a6f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD AudioOut thread     (rdi=0000000000000000 rsp=0000000806abfba8): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x86e5b < bloodborne.exe+0x86a18 < bloodborne.exe+0x85f44 < guest+0xd1b941 < guest+0xd18372
+Thread sample FMOD stream thread       (rdi=0000000000000000 rsp=0000000806b2fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample GXRenderThread           (rdi=0000000000000002 rsp=0000000806bbf868): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x21b6a7c < guest+0x263b246
+Thread sample GXWorker:1               (rdi=0000000000000002 rsp=0000000806c4f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:2               (rdi=0000000000000002 rsp=0000000806cbf7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:3               (rdi=0000000000000002 rsp=0000000806d2f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:4               (rdi=0000000000000002 rsp=0000000806d9f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:5               (rdi=0000000000000002 rsp=0000000806e0f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample Core.Res.PostProcessor_0 (rdi=0000000000000002 rsp=0000000806e6f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_1 (rdi=0000000000000002 rsp=0000000806ecf768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_2 (rdi=0000000000000002 rsp=0000000806f2f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.CacheableFileLoader (rdi=000001f73e67e5f0 rsp=0000000806f8aee8): 00007FF8C3F20000+0x1648e4 < 00007FF8C3010000+0x4331f < 00007FF8C3010000+0x10bb9f < 00007FF8C3010000+0x10bb09 < bloodborne.exe+0x7b7bd < bloodborne.exe+0x882c9 < bloodborne.exe+0x897ee < guest+0x207389d < guest+0x2076271 < guest+0x20ccbf7 < guest+0x20d1f16 < guest+0x20cc5c4 < guest+0x263b246
+Thread sample Core.Res.FileLoader      (rdi=0000000000000002 rsp=0000000806fef708): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20cfc9a < guest+0x263b246
+Thread sample Core.Res.TaskManager     (rdi=0000000000000000 rsp=000000080704fa58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x20c715b < guest+0x263b246
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008070df758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080714f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008071bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080724f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008072bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080731f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080737f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008073df838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080743f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080749f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008074ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample FaceGenMan               (rdi=0000000000000002 rsp=000000080755f7f8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x184bb1c < guest+0x263b246
+Thread sample DLUserPreferenceNotifyServiceIm (rdi=0000000000000000 rsp=00000008075bfd08): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x21629fa < guest+0x263b246
+Thread sample NexusRevolution Event    (rdi=0000000000000000 rsp=000000080761fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample NexusRevolution Main     (rdi=0000000000000000 rsp=000000080767fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample SLSession                (rdi=0000000000000002 rsp=00000008076df7e8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x2838f0d < guest+0x263b246
+Thread sample CSTrophy::AsyncUpdateThread (rdi=0000000000000002 rsp=000000080777ee58): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x2024bc0 < guest+0x263b246
+Thread sample FMOD nonblocking thread (0) (rdi=0000000000000002 rsp=000000080783f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD file thread         (rdi=0000000000000000 rsp=000000080789fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample CSChrThread0             (rdi=0000000000000002 rsp=00000008078ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread1             (rdi=0000000000000002 rsp=000000080795f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread2             (rdi=0000000000000002 rsp=00000008079bf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread3             (rdi=0000000000000002 rsp=0000000807a1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread4             (rdi=0000000000000002 rsp=0000000807a7f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread5             (rdi=0000000000000002 rsp=0000000807adf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrBackInitialize1     (rdi=0000000000000002 rsp=0000000807b3f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread0           (rdi=0000000000000002 rsp=0000000807b9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread1           (rdi=0000000000000002 rsp=0000000807bff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread2           (rdi=0000000000000002 rsp=0000000807c5f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread3           (rdi=0000000000000002 rsp=0000000807cbf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread4           (rdi=0000000000000002 rsp=0000000807d1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread5           (rdi=0000000000000002 rsp=0000000807d9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Frame generation pacing: 25.5 game frames/s, 0 generated, 0 shown, Present 3.93 ms/frame (last image 3.93 ms), interval 34.34 ms
+UWP swap: out=246 in=2 disk=50 views=2 MiB; checks=186 corrupt=0 window evictions=0
+UWP swap: pageable private=902 pinned=0 MiB; page-out passes=123 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=50 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 15764 pages stored (36 raw, 2888 blank, 1 MiB of payload, 0% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+Frame rate: 29.3 FPS, slowest frame 92.0 ms
+Texture cache: memory pressure, 4098 of 4096 MiB (limit 5120, critical 4352, guest pinned 0): 0 images evicted, 0 written back since the last report; 116 old GPU-written tiled images kept (11 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+UWP memory telemetry: 4102/5120 MiB (level=1, presents=684, guest pinned=0 MiB, +576 MiB since the last sample)
+Frame generation pacing: 29.6 game frames/s, 0 generated, 0 shown, Present 3.16 ms/frame (last image 3.16 ms), interval 33.58 ms
+UWP memory telemetry: 4211/5120 MiB (level=1, presents=714, guest pinned=0 MiB, +108 MiB since the last sample)
+UWP swap: out=246 in=2 disk=50 views=2 MiB; checks=194 corrupt=0 window evictions=0
+UWP swap: pageable private=1443 pinned=0 MiB; page-out passes=123 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=50 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 15769 pages stored (36 raw, 2888 blank, 1 MiB of payload, 0% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP dense GPU arena: 0x1113000000, 16 MiB (retired 0 MiB, live 512 MiB), 32/176 DMA views
+UWP memory telemetry: 4211/5120 MiB (level=1, presents=743, guest pinned=0 MiB, +0 MiB since the last sample)
+Frame rate: 29.4 FPS, slowest frame 75.3 ms
+UWP memory telemetry: 4284/5120 MiB (level=1, presents=773, guest pinned=0 MiB, +73 MiB since the last sample)
+UWP memory telemetry: 4363/5120 MiB (level=1, presents=802, guest pinned=0 MiB, +79 MiB since the last sample)
+Texture cache: memory pressure, 4376 of 4096 MiB (limit 5120, critical 4352, guest pinned 0): 0 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+UWP memory telemetry: 4378/5120 MiB (level=1, presents=832, guest pinned=0 MiB, +14 MiB since the last sample)
+Frame generation pacing: 29.5 game frames/s, 0 generated, 0 shown, Present 4.04 ms/frame (last image 4.04 ms), interval 34.07 ms
+UWP memory telemetry: 4403/5120 MiB (level=1, presents=861, guest pinned=0 MiB, +25 MiB since the last sample)
+UWP swap: out=246 in=2 disk=50 views=2 MiB; checks=200 corrupt=0 window evictions=0
+UWP swap: pageable private=1661 pinned=0 MiB; page-out passes=123 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=50 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 15772 pages stored (36 raw, 2888 blank, 1 MiB of payload, 0% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP memory telemetry: 4418/5120 MiB (level=1, presents=891, guest pinned=0 MiB, +14 MiB since the last sample)
+Frame rate: 29.4 FPS, slowest frame 50.3 ms
+UWP memory telemetry: 4435/5120 MiB (level=1, presents=920, guest pinned=0 MiB, +16 MiB since the last sample)
+UWP dense GPU arena: 0x103b000000, 16 MiB (retired 0 MiB, live 528 MiB), 33/176 DMA views
+UWP dense GPU arena: 0x104e000000, 48 MiB (retired 32 MiB, live 544 MiB), 34/176 DMA views
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)
+UWP dense GPU arena: 0x10f3000000, 16 MiB (retired 0 MiB, live 560 MiB), 35/176 DMA views
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)
+UWP memory telemetry: 4461/5120 MiB (level=1, presents=938, guest pinned=0 MiB, +26 MiB since the last sample)
+UWP memory telemetry: 4354/5120 MiB (level=1, presents=938, guest pinned=0 MiB, -106 MiB since the last sample)
+UWP dense GPU arena: 0x103f000000, 16 MiB (retired 0 MiB, live 576 MiB), 36/176 DMA views
+UWP dense GPU arena: 0x10ef000000, 16 MiB (retired 0 MiB, live 592 MiB), 37/176 DMA views
+UWP dense GPU arena: 0x10d9000000, 16 MiB (retired 0 MiB, live 608 MiB), 38/176 DMA views
+Frame generation pacing: 20.1 game frames/s, 0 generated, 0 shown, Present 5.47 ms/frame (last image 5.47 ms), interval 33.71 ms
+UWP dense GPU arena: 0x1083000000, 16 MiB (retired 0 MiB, live 624 MiB), 39/176 DMA views
+UWP dense GPU arena: 0x1082000000, 16 MiB (retired 0 MiB, live 640 MiB), 40/176 DMA views
+UWP dense GPU arena: 0x10e1000000, 16 MiB (retired 0 MiB, live 656 MiB), 41/176 DMA views
+UWP dense GPU arena: 0x10e2000000, 16 MiB (retired 0 MiB, live 672 MiB), 42/176 DMA views
+UWP dense GPU arena: 0x1045000000, 16 MiB (retired 0 MiB, live 688 MiB), 43/176 DMA views
+UWP dense GPU arena: 0x10e1000000, 32 MiB (retired 32 MiB, live 688 MiB), 43/176 DMA views
+UWP dense GPU arena: 0x1084000000, 16 MiB (retired 0 MiB, live 704 MiB), 44/176 DMA views
+Camera motion: scene render size 1920x1080
+UWP dense GPU arena: 0x10e3000000, 16 MiB (retired 0 MiB, live 720 MiB), 45/176 DMA views
+UWP dense GPU arena: 0x10e5000000, 16 MiB (retired 0 MiB, live 736 MiB), 46/176 DMA views
+UWP dense GPU arena: 0x10e4000000, 16 MiB (retired 0 MiB, live 752 MiB), 47/176 DMA views
+UWP dense GPU arena: 0x1091000000, 16 MiB (retired 0 MiB, live 768 MiB), 48/176 DMA views
+UWP dense GPU arena: 0x1086000000, 16 MiB (retired 0 MiB, live 784 MiB), 49/176 DMA views
+UWP dense GPU arena: 0x1088000000, 16 MiB (retired 0 MiB, live 800 MiB), 50/176 DMA views
+UWP dense GPU arena: 0x1085000000, 16 MiB (retired 0 MiB, live 816 MiB), 51/176 DMA views
+UWP dense GPU arena: 0x1085000000, 32 MiB (retired 32 MiB, live 816 MiB), 51/176 DMA views
+UWP dense GPU arena: 0x1087000000, 16 MiB (retired 0 MiB, live 832 MiB), 52/176 DMA views
+UWP dense GPU arena: 0x1087000000, 32 MiB (retired 32 MiB, live 832 MiB), 52/176 DMA views
+UWP dense GPU arena: 0x10e3000000, 32 MiB (retired 32 MiB, live 832 MiB), 52/176 DMA views
+UWP dense GPU arena: 0x10dd000000, 16 MiB (retired 0 MiB, live 848 MiB), 53/176 DMA views
+UWP dense GPU arena: 0x108e000000, 16 MiB (retired 0 MiB, live 864 MiB), 54/176 DMA views
+UWP dense GPU arena: 0x108d000000, 16 MiB (retired 0 MiB, live 880 MiB), 55/176 DMA views
+UWP memory telemetry: 4874/5120 MiB (level=2, presents=939, guest pinned=0 MiB, +519 MiB since the last sample)
+UWP dense GPU arena: 0x1085000000, 64 MiB (retired 64 MiB, live 880 MiB), 55/176 DMA views
+UWP dense GPU arena: 0x108d000000, 32 MiB (retired 32 MiB, live 880 MiB), 55/176 DMA views
+UWP swap: paged out 21 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 21 MiB for a 81920 KiB allocation in 258 ms (usage 4943/5120 MiB)
+UWP dense GPU arena: 0x1084000000, 80 MiB (retired 80 MiB, live 880 MiB), 55/176 DMA views
+UWP swap: out=739 in=6 disk=174 views=6 MiB; checks=492 corrupt=0 window evictions=0
+UWP swap: pageable private=1211 pinned=0 MiB; page-out passes=360 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=174 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 47390 pages stored (85 raw, 19683 blank, 85 MiB of payload, 11% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP swap: paged out 14 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 14 MiB for a 16384 KiB allocation in 119 ms (usage 5008/5120 MiB)
+UWP swap: paged out 44 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 44 MiB for a 49152 KiB allocation in 334 ms (usage 4976/5120 MiB)
+UWP dense GPU arena: 0x108c000000, 48 MiB (retired 32 MiB, live 896 MiB), 56/176 DMA views
+UWP memory telemetry: 5021/5120 MiB (level=2, presents=939, guest pinned=0 MiB, +146 MiB since the last sample)
+UWP swap: paged out 11 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 11 MiB for a 16384 KiB allocation in 85 ms (usage 5008/5120 MiB)
+UWP dense GPU arena: 0x108f000000, 16 MiB (retired 0 MiB, live 912 MiB), 57/176 DMA views
+UWP swap: paged out 14 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 14 MiB for a 16384 KiB allocation in 111 ms (usage 5002/5120 MiB)
+UWP swap: paged out 3 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 3 MiB for a 16384 KiB allocation in 27 ms (usage 5008/5120 MiB)
+UWP swap: paged out 4 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 4 MiB for a 16384 KiB allocation in 27 ms (usage 5008/5120 MiB)
+UWP swap: paged out 64 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4975/5120 MiB (level=2, presents=939, guest pinned=0 MiB, -45 MiB since the last sample)
+UWP STALL DETECTED (presents stuck at 939 for 10 s):
+UWP swap: state at the stall: lock=sweep held=0 ms sweeps=397 request=64 MiB finished 16 ms ago; out=954 in=7 MiB disk=344 MiB budget=768 MiB
+UWP swap: out=956 in=7 disk=346 views=6 MiB; checks=527 corrupt=0 window evictions=0
+UWP swap: pageable private=994 pinned=0 MiB; page-out passes=397 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=346 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 61261 pages stored (260 raw, 19820 blank, 233 MiB of payload, 24% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP memory: commit faults=171838, promoted alias pages=52, snapshots=0, restored=0, virtual pages=314312
+Runtime: direct memory allocations=14, maps=14, live=4812046336, budget=5301600256
+Runtime: flexible maps=6, in use=337641472, protects=0, queries=41559, regions=20
+Runtime: files opened=968, reads=18453 (875444937 bytes), writes=2, not found=8
+Runtime: audio ports opened=2, buffers output=7528
+Runtime: pad reads=876, gamepad=Xbox Wireless Controller (Windows.Gaming.Input)
+Thread report:
+  CSClothThread5           (handle=0000000805CA7300) waits 2.9 s for cond at 0000001109176690, called from 00000008020A3ECD
+  CSClothThread4           (handle=0000000805CA7540) waits 2.9 s for cond at 0000001109176510, called from 00000008020A3ECD
+  CSClothThread3           (handle=0000000805CA7780) waits 2.9 s for cond at 0000001109176390, called from 00000008020A3ECD
+  CSClothThread2           (handle=0000000805CA79C0) waits 2.9 s for cond at 0000001109176210, called from 00000008020A3ECD
+  CSClothThread1           (handle=0000000805CA7C00) waits 2.9 s for cond at 000000110917A840, called from 00000008020A3ECD
+  CSClothThread0           (handle=0000000805CA7E40) waits 2.9 s for cond at 000000110917ACA0, called from 00000008020A3ECD
+  CSChrBackInitialize1     (handle=0000000805CA8080) waits 4.8 s for cond at 000000110917B610, called from 00000008020A3ECD
+  CSChrThread5             (handle=0000000805CA82C0) waits 4.3 s for cond at 000000110917B9F0, called from 00000008020A3ECD
+  CSChrThread4             (handle=0000000805CA8500) waits 4.3 s for cond at 00000011091791E0, called from 00000008020A3ECD
+  CSChrThread3             (handle=0000000805CA8740) waits 4.3 s for cond at 0000001109178D80, called from 00000008020A3ECD
+  CSChrThread2             (handle=0000000805CA8980) waits 4.3 s for cond at 0000001109170930, called from 00000008020A3ECD
+  CSChrThread1             (handle=0000000805CA8BC0) waits 4.3 s for cond at 000000110917A3E0, called from 00000008020A3ECD
+  CSChrThread0             (handle=0000000805CA8E00) waits 4.3 s for cond at 00000011091B83E0, called from 00000008020A3ECD
+  FMOD file thread         (handle=0000000805CA9040) running
+  FMOD nonblocking thread (0) (handle=0000000805CA9280) waits 4.3 s for semaphore FMOD Semaphore at 000000000000003E, called from 0000000800D3ADB0
+  CSTrophy::AsyncUpdateThread (handle=0000000805CA94C0) waits 37.9 s for cond at 000000100807DA40, called from 00000008020A3ECD
+  SLSession                (handle=0000000805CA9700) waits 4.3 s for semaphore at 000000000000003C, called from 000000080265AE6A
+  NexusRevolution Main     (handle=0000000805CA9B80) running
+  NexusRevolution Event    (handle=0000000805CAA000) running
+  DLUserPreferenceNotifyServiceIm (handle=0000000805CAA240) running
+  FaceGenMan               (handle=0000000805CAA480) waits 4.4 s for cond at 0000001007BA5000, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA6C0) waits 4.3 s for cond at 0000001109137230, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA900) waits 4.3 s for cond at 0000001109137110, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAB40) waits 4.3 s for cond at 0000001109136FF0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAD80) waits 4.3 s for cond at 0000001109136ED0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAFC0) waits 4.3 s for cond at 0000001109136DB0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAB200) waits 38.7 s for cond at 0000001109136C90, called from 00000008020A3ECD
+  HavokWorkerThread        (handle=0000000805CAB440) waits 2.9 s for semaphore hkSemaphore at 0000000000000027, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB680) waits 2.9 s for semaphore hkSemaphore at 0000000000000026, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB8C0) waits 2.9 s for semaphore hkSemaphore at 0000000000000025, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABB00) waits 2.9 s for semaphore hkSemaphore at 0000000000000024, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABD40) waits 2.9 s for semaphore hkSemaphore at 0000000000000023, called from 0000000800443599
+  Core.Res.TaskManager     (handle=0000000805CABF80) waits 2.6 s for cond at 00000008056C4C40, called from 00000008020A3ECD
+  Core.Res.FileLoader      (handle=0000000805CAC1C0) waits 11.5 s for cond at 00000008056C50E8, called from 00000008020A3ECD
+  Core.Res.CacheableFileLoader (handle=0000000805CAC400) waits 2.6 s for cond at 00000008056C4DD0, called from 00000008020A3ECD
+  Core.Res.PostProcessor_2 (handle=0000000805CAC640) waits 2.6 s for cond at 000000110AF82E00, called from 00000008020A3ECD
+  Core.Res.PostProcessor_1 (handle=0000000805CAC880) waits 2.6 s for cond at 000000110AF82938, called from 00000008020A3ECD
+  Core.Res.PostProcessor_0 (handle=0000000805CACAC0) waits 2.6 s for cond at 000000110AF82470, called from 00000008020A3ECD
+  GXWorker:5               (handle=0000000805CACD00) waits 2.9 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:4               (handle=0000000805CACF40) waits 2.9 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:3               (handle=0000000805CAD180) waits 2.9 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:2               (handle=0000000805CAD3C0) waits 2.9 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:1               (handle=0000000805CAD600) waits 2.9 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXRenderThread           (handle=0000000805CAD840) running
+  FMOD stream thread       (handle=0000000805CADA80) running
+  FMOD AudioOut thread     (handle=0000000805CADCC0) running
+  FMOD mixer thread        (handle=0000000805CADF00) running
+  MOMainThread             (handle=0000000805CAE140) running
+  EzWorkPool_TypeD1        (handle=0000000805CAE380) waits 40.2 s for cond at 00000011091010F0, called from 00000008020A3ECD
+  EzWorkPool_TypeC4        (handle=0000000805CAE5C0) waits 9.6 s for cond at 0000001109100EF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB3        (handle=0000000805CAE800) waits 2.9 s for cond at 0000001109100CF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB2        (handle=0000000805CAEA40) waits 2.9 s for cond at 0000001109100B50, called from 00000008020A3ECD
+  EzWorkPool_TypeB1        (handle=0000000805CAEC80) waits 2.9 s for cond at 00000011091009B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA3        (handle=0000000805CAEEC0) waits 16.1 s for cond at 00000011091007B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA2        (handle=0000000805CAF100) waits 16.1 s for cond at 0000001109100610, called from 00000008020A3ECD
+  EzWorkPool_TypeA1        (handle=0000000805CAF340) waits 16.1 s for cond at 0000001109100470, called from 00000008020A3ECD
+  EzWorkPool_TypeA0        (handle=0000000805CAF580) waits 16.1 s for cond at 00000011091002D0, called from 00000008020A3ECD
+  FD4JobWorker:0           (handle=0000000805CAF7C0) waits 40.3 s for semaphore at 0000000000000013, called from 000000080265AE6A
+  Core.Logging.BackgroundStrategy (handle=0000000805CAFA00) waits 40.3 s for semaphore at 0000000000000012, called from 000000080265AE6A
+  main                     (handle=0000000805CAFC40) waits 2.9 s for cond at 00000010282A1F58, called from 00000008020A3ECD
+Runtime: CPU time by thread: session 65 s, 91 live threads, 72.9 s CPU (14% of 8 hardware threads)
+Runtime:   tid 4212                     35797 ms ( 55.4% of one thread)
+Runtime:   shadPS4:GpuCommandProcessor     10219 ms ( 15.8% of one thread)
+Runtime:   bb:VkRecorder                 6781 ms ( 10.5% of one thread)
+Runtime:   bb:DrawRec                    5438 ms (  8.4% of one thread)
+Runtime:   Core.Res.PostProcessor_0      5141 ms (  8.0% of one thread)
+Runtime:   Core.Res.PostProcessor_2      2438 ms (  3.8% of one thread)
+Runtime:   tid 1512                      2062 ms (  3.2% of one thread)
+Runtime:   EzWorkPool_TypeC4             1953 ms (  3.0% of one thread)
+Runtime:   Core.Res.CacheableFileLoader       438 ms (  0.7% of one thread)
+Runtime:   bb:Copy1                       297 ms (  0.5% of one thread)
+Runtime:   GXRenderThread                 219 ms (  0.3% of one thread)
+Runtime:   bb:Copy0                       219 ms (  0.3% of one thread)
+Runtime:   MOMainThread                   203 ms (  0.3% of one thread)
+Runtime:   bb:Present                     156 ms (  0.2% of one thread)
+Runtime:   GXWorker:3                     141 ms (  0.2% of one thread)
+Runtime:   CSChrBackInitialize1           141 ms (  0.2% of one thread)
+Thread sample tid 6784                 (rdi=0000000000000002 rsp=0000007b357ff208): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8BF190000+0x335e9 < 00007FF8BF190000+0x33076 < 00007FF8BF190000+0x3302c < 00007FF8BF190000+0x32a1c < 00007FF8BF190000+0x17353 < bloodborne.exe+0x16dcc < bloodborne.exe+0x16cfe < bloodborne.exe+0x74e9 < bloodborne.exe+0xc577e9 < 00007FF8C3F20000+0x863e2
+Thread sample tid 2684                 (rdi=000001f63d108a70 rsp=0000007b35fff688): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 5752                 (rdi=000001f63d108a70 rsp=0000007b367ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 812                  (rdi=000001f63d108a70 rsp=0000007b36fff6e8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 3788                 (rdi=000001f63d103280 rsp=0000007b377ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample Window Manager Thread    (rdi=0000000000000000 rsp=0000007b37fff608): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < 00007FF8C2C30000+0x4a7ee < 00007FF8C2C30000+0x2320e < 00007FF8C2C30000+0x140ae < 00007FF8C2C30000+0x16670 < 00007FF8C2C30000+0x4a184 < 00007FF8C3F20000+0x863e2
+Thread sample tid 3480                 (rdi=0000000000000001 rsp=0000007b387ff3a8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3A90000+0x11fcbe < 00007FF8C3A90000+0x115b9f < 00007FF8C3A90000+0x115aaf < 00007FF8C3F20000+0x863e2
+Thread sample tid 2132                 (rdi=000001f63d103280 rsp=0000007b38fff6c8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample ApplicationView ASTA     (rdi=0000000000000004 rsp=0000007b397fea08): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C2C30000+0x4ab0b < 00007FF8C2C30000+0x233f7 < 00007FF8C2C30000+0x498f6 < 00007FF8C2C30000+0x14183 < 00007FF8C2C30000+0x1832b < 00007FF8C3A90000+0x10e7b < 00007FF8C3A90000+0x1075c < 00007FF8C3A90000+0x10321 < 00007FF8ADA30000+0xa1ef < 00007FF8ADA30000+0x94c4 < bloodborne.exe+0x1b17b < bloodborne.exe+0x1a770 < bloodborne.exe+0x18042 < 00007FF8BF190000+0x8f685
+Thread sample tid 2504                 (rdi=000001f63d103280 rsp=0000007b39fff718): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4212                 (rdi=0000000000000002 rsp=00000008064fb518): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x2199365 < guest+0x1d97858 < guest+0x103d438 < guest+0x103d2c1 < guest+0x1067579 < guest+0x103deff
+Thread sample tid 5332                 (rdi=000001f63d103280 rsp=0000007b3cfff948): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4960                 (rdi=0000000000000000 rsp=0000007b3d7ffd38): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x43671 < bloodborne.exe+0x4343d < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 4912                 (rdi=0000000000000000 rsp=0000007b3dfffc98): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x438d3 < bloodborne.exe+0x4371b < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 1736                 (rdi=0000000000000001 rsp=0000007b3e7ff6d8): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < 00007FF8BD190000+0x5fb47 < 00007FF8BD190000+0x5fc8c < 00007FF8C3F20000+0x863e2
+Thread sample tid 1512                 (rdi=00000000000006a4 rsp=0000007b3f7ff648): 00007FF8C3F20000+0x161fd4 < 00007FF8C3010000+0xa1daa < bloodborne.exe+0x920e5 < bloodborne.exe+0x91fe3 < bloodborne.exe+0x91b40 < bloodborne.exe+0x915e1 < bloodborne.exe+0x8c420 < bloodborne.exe+0x8cce3 < 00007FF89FF80000+0x84ed < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:kernel_service        (rdi=0000000000000000 rsp=0000007b3ffffb38): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0xa25d6 < bloodborne.exe+0xa9c9f < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:window                (rdi=0000000000000000 rsp=0000007b407ff868): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0xa0200 < bloodborne.exe+0xa00bc < bloodborne.exe+0x9fce3 < bloodborne.exe+0xa9a58 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuCommandProcessor (rdi=000001f6881d3980 rsp=0000007b40fff4a8): 00007FF8A63A0000+0x123d0
+Thread sample bb:VkRecorder            (rdi=0000007b417f21e8 rsp=0000007b417f20a0): 00007FF8AFF30000+0x63cab < 00007FF8AFF30000+0x4e84aa < 00007FF8AFF30000+0x4e84fe < 00007FF8AFF30000+0x4e8919 < 00007FF8AFF30000+0x3ddb69 < 00007FF8AFF30000+0x3dcfac < 00007FF8AFF30000+0x3dba5e < 00007FF8AFF30000+0x38106b < 00007FF8AFF30000+0x503cc2 < 00007FF8AFF30000+0x238590 < 00007FF8AFF30000+0x2382a0 < 00007FF8AFF30000+0x236b83 < 00007FF8AFF30000+0x507de0 < 00007FF8AFF30000+0x504f9a < 00007FF8AFF30000+0x32a18 < 00007FF8AFF30000+0x2a650
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b41fff5c8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b427ffa88): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b42fffc68): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy0                 (rdi=0000007b43fffae0 rsp=0000007b437ffa78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy1                 (rdi=0000007b437ffac0 rsp=0000007b43fffa98): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PipelineCacheIO  (rdi=0000000000000000 rsp=0000007b447ffac8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x18b93f < bloodborne.exe+0x18b3d8 < bloodborne.exe+0x1906fa < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:DrawRec               (rdi=0000000000000001 rsp=0000007b44ffe178): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xac42b < 00007FF8C3F20000+0x3c0ed < bloodborne.exe+0x8f3c5 < bloodborne.exe+0x8f33d < bloodborne.exe+0xa12d7 < bloodborne.exe+0x28faa2 < bloodborne.exe+0x28df0d < bloodborne.exe+0x28e921 < bloodborne.exe+0x29a514 < bloodborne.exe+0x299dd4 < bloodborne.exe+0x293f9d < bloodborne.exe+0x2931a9 < bloodborne.exe+0xd5b07 < bloodborne.exe+0xd1f28 < bloodborne.exe+0xcad5c
+Thread sample bb:Present               (rdi=0000000000000000 rsp=0000007b457ffc78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x35af3a < bloodborne.exe+0x360ed6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PresentThread    (rdi=0000000000000000 rsp=0000007b45fff5f8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < bloodborne.exe+0xc51df8 < bloodborne.exe+0x35f9aa < bloodborne.exe+0x360fa6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample Core.Logging.BackgroundStrategy (rdi=0000000000000002 rsp=00000008065df7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x26471c5 < guest+0x263b246
+Thread sample FD4JobWorker:0           (rdi=0000000000000002 rsp=000000080664f7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x106747f < guest+0x263b246
+Thread sample EzWorkPool_TypeA0        (rdi=0000000000000002 rsp=00000008066af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA1        (rdi=0000000000000002 rsp=000000080670f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA2        (rdi=0000000000000002 rsp=000000080676f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA3        (rdi=0000000000000002 rsp=00000008067cf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB1        (rdi=0000000000000002 rsp=000000080682f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB2        (rdi=0000000000000002 rsp=000000080688f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB3        (rdi=0000000000000002 rsp=00000008068ef838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeC4        (rdi=0000000000000002 rsp=000000080694f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeD1        (rdi=0000000000000002 rsp=00000008069af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample MOMainThread             (rdi=0000000000000000 rsp=0000000806a0fc98): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x2801382 < guest+0x263b246
+Thread sample tid 2860                 (rdi=0000000000000002 rsp=0000007b4c7ff858): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF8BAF00000+0x5fcca < 00007FF8BAF00000+0x5fc7e < 00007FF8C3F20000+0x863e2
+Thread sample tid 1172                 (rdi=0000000000000003 rsp=0000007b4cfffab8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF89B7C0000+0x82ad < 00007FF89B7C0000+0x341f7 < 00007FF8C3F20000+0x863e2
+Thread sample FMOD mixer thread        (rdi=0000000000000002 rsp=0000000806a6f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD AudioOut thread     (rdi=0000000000000000 rsp=0000000806abfba8): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x86e5b < bloodborne.exe+0x86a18 < bloodborne.exe+0x85f44 < guest+0xd1b941 < guest+0xd18372
+Thread sample FMOD stream thread       (rdi=0000000000000000 rsp=0000000806b2fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample GXRenderThread           (rdi=0000000000000000 rsp=0000000806bbf738): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x13cd3b < bloodborne.exe+0x14c3d7 < guest+0x26b0c28 < guest+0x26afb01 < guest+0x216a9f8 < guest+0x21b4d9c < guest+0x2199bbe < guest+0x21b69d5 < guest+0x263b246
+Thread sample GXWorker:1               (rdi=0000000000000002 rsp=0000000806c4f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:2               (rdi=0000000000000002 rsp=0000000806cbf7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:3               (rdi=0000000000000002 rsp=0000000806d2f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:4               (rdi=0000000000000002 rsp=0000000806d9f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:5               (rdi=0000000000000002 rsp=0000000806e0f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample Core.Res.PostProcessor_0 (rdi=0000000000000002 rsp=0000000806e6f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_1 (rdi=0000000000000002 rsp=0000000806ecf768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_2 (rdi=0000000000000002 rsp=0000000806f2f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.CacheableFileLoader (rdi=0000000000000002 rsp=0000000806f8f688): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20cc4cf < guest+0x263b246
+Thread sample Core.Res.FileLoader      (rdi=0000000000000002 rsp=0000000806fef708): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20cfc9a < guest+0x263b246
+Thread sample Core.Res.TaskManager     (rdi=0000000000000002 rsp=000000080704f598): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20c716e < guest+0x263b246
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008070df758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080714f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008071bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080724f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008072bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080731f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080737f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008073df838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080743f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080749f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008074ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample FaceGenMan               (rdi=0000000000000002 rsp=000000080755f7f8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x184bb1c < guest+0x263b246
+Thread sample DLUserPreferenceNotifyServiceIm (rdi=0000000000000000 rsp=00000008075bfd08): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x21629fa < guest+0x263b246
+Thread sample NexusRevolution Event    (rdi=0000000000000000 rsp=000000080761fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample NexusRevolution Main     (rdi=0000000000000000 rsp=000000080767fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample SLSession                (rdi=0000000000000002 rsp=00000008076df7e8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x2838f0d < guest+0x263b246
+Thread sample CSTrophy::AsyncUpdateThread (rdi=0000000000000002 rsp=000000080777ee58): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x2024bc0 < guest+0x263b246
+Thread sample FMOD nonblocking thread (0) (rdi=0000000000000002 rsp=000000080783f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD file thread         (rdi=0000000000000000 rsp=000000080789fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample CSChrThread0             (rdi=0000000000000002 rsp=00000008078ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread1             (rdi=0000000000000002 rsp=000000080795f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread2             (rdi=0000000000000002 rsp=00000008079bf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread3             (rdi=0000000000000002 rsp=0000000807a1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread4             (rdi=0000000000000002 rsp=0000000807a7f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread5             (rdi=0000000000000002 rsp=0000000807adf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrBackInitialize1     (rdi=0000000000000002 rsp=0000000807b3f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread0           (rdi=0000000000000002 rsp=0000000807b9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread1           (rdi=0000000000000002 rsp=0000000807bff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread2           (rdi=0000000000000002 rsp=0000000807c5f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread3           (rdi=0000000000000002 rsp=0000000807cbf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread4           (rdi=0000000000000002 rsp=0000000807d1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread5           (rdi=0000000000000002 rsp=0000000807d9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+UWP dense GPU arena: 0x108c000000, 64 MiB (retired 64 MiB, live 912 MiB), 57/176 DMA views
+UWP swap: paged out 67 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 67 MiB for a 81920 KiB allocation in 456 ms (usage 4945/5120 MiB)
+UWP dense GPU arena: 0x108c000000, 80 MiB (retired 64 MiB, live 928 MiB), 58/176 DMA views
+UWP swap: paged out 15 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 15 MiB for a 16384 KiB allocation in 107 ms (usage 5007/5120 MiB)
+UWP swap: paged out 10 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 10 MiB for a 16384 KiB allocation in 69 ms (usage 5008/5120 MiB)
+UWP swap: paged out 64 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4990/5120 MiB (level=2, presents=939, guest pinned=0 MiB, +14 MiB since the last sample)
+UWP swap: paged out 79 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 79 MiB for a 98304 KiB allocation in 532 ms (usage 4929/5120 MiB)
+UWP dense GPU arena: 0x108c000000, 96 MiB (retired 96 MiB, live 928 MiB), 58/176 DMA views
+UWP swap: paged out 9 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 9 MiB for a 16384 KiB allocation in 70 ms (usage 5008/5120 MiB)
+UWP swap: paged out 14 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 14 MiB for a 16384 KiB allocation in 101 ms (usage 5007/5120 MiB)
+UWP swap: paged out 64 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 5024/5120 MiB (level=2, presents=939, guest pinned=0 MiB, +33 MiB since the last sample)
+UWP swap: out=1418 in=15 disk=694 views=15 MiB; checks=1046 corrupt=0 window evictions=0
+UWP swap: pageable private=533 pinned=0 MiB; page-out passes=473 with nothing to give=0
+UWP swap: not paged - pinned policy=0 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=694 MiB of a 768 MiB budget (ceiling 1536 MiB, raised 0); 90799 pages stored (676 raw, 19820 blank, 522 MiB of payload, 36% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP memory telemetry: 4897/5120 MiB (level=2, presents=939, guest pinned=0 MiB, -126 MiB since the last sample)
+Texture cache: memory pressure, 4963 of 4096 MiB (limit 5120, critical 4352, guest pinned 0): 0 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+Frame rate: 2.6 FPS, slowest frame 103.4 ms
+Frame generation pacing: 0.1 game frames/s, 0 generated, 0 shown, Present 43.44 ms/frame (last image 43.44 ms), interval 33.71 ms
+UWP memory telemetry: 4964/5120 MiB (level=2, presents=940, guest pinned=0 MiB, +67 MiB since the last sample)
+UWP dense GPU arena: 0x1047000000, 16 MiB (retired 0 MiB, live 944 MiB), 59/176 DMA views
+UWP dense GPU arena: 0x1048000000, 16 MiB (retired 0 MiB, live 960 MiB), 60/176 DMA views
+UWP dense GPU arena: 0x1046000000, 16 MiB (retired 0 MiB, live 976 MiB), 61/176 DMA views
+UWP swap: disk budget raised to 1024 MiB (ceiling 1536 MiB) for a waiting allocation
+UWP swap: paged out 21 MiB on request (0 MiB of it urgent)
+UWP buffer headroom: swap paged out 21 MiB for a 16384 KiB allocation in 142 ms (usage 5008/5120 MiB)
+UWP dense GPU arena: 0x104a000000, 16 MiB (retired 0 MiB, live 992 MiB), 62/176 DMA views
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4909/5120 MiB (level=2, presents=941, guest pinned=1 MiB, -54 MiB since the last sample)
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP dense GPU arena: 0x1049000000, 16 MiB (retired 0 MiB, live 1008 MiB), 63/176 DMA views
+UWP dense GPU arena: 0x1048000000, 32 MiB (retired 32 MiB, live 1008 MiB), 63/176 DMA views
+UWP dense GPU arena: 0x10ae000000, 16 MiB (retired 0 MiB, live 1024 MiB), 64/176 DMA views
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4867/5120 MiB (level=2, presents=941, guest pinned=2 MiB, -42 MiB since the last sample)
+UWP swap: disk budget raised to 1280 MiB (ceiling 1536 MiB) for a waiting allocation
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4757/5120 MiB (level=2, presents=941, guest pinned=4 MiB, -109 MiB since the last sample)
+UWP STALL DETECTED (presents stuck at 941 for 10 s):
+UWP swap: state at the stall: lock=sweep held=0 ms sweeps=637 request=32 MiB finished 609 ms ago; out=1904 in=57 MiB disk=1088 MiB budget=1280 MiB
+UWP swap: out=1906 in=57 disk=1090 views=56 MiB; checks=3946 corrupt=0 window evictions=0
+UWP swap: pageable private=60 pinned=4 MiB; page-out passes=637 with nothing to give=19
+UWP swap: not paged - pinned policy=4 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=1090 MiB of a 1280 MiB budget (ceiling 1536 MiB, raised 2); 122042 pages stored (1399 raw, 20005 blank, 861 MiB of payload, 45% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+UWP memory: commit faults=172844, promoted alias pages=292, snapshots=0, restored=0, virtual pages=314312
+Runtime: direct memory allocations=14, maps=14, live=4812046336, budget=5301600256
+Runtime: flexible maps=6, in use=337641472, protects=0, queries=41559, regions=20
+Runtime: files opened=968, reads=18453 (875444937 bytes), writes=2, not found=8
+Runtime: audio ports opened=2, buffers output=9016
+Runtime: pad reads=876, gamepad=Xbox Wireless Controller (Windows.Gaming.Input)
+Thread report:
+  CSClothThread5           (handle=0000000805CA7300) waits 10.9 s for cond at 0000001109176690, called from 00000008020A3ECD
+  CSClothThread4           (handle=0000000805CA7540) waits 10.9 s for cond at 0000001109176510, called from 00000008020A3ECD
+  CSClothThread3           (handle=0000000805CA7780) waits 10.9 s for cond at 0000001109176390, called from 00000008020A3ECD
+  CSClothThread2           (handle=0000000805CA79C0) waits 10.9 s for cond at 0000001109176210, called from 00000008020A3ECD
+  CSClothThread1           (handle=0000000805CA7C00) waits 10.9 s for cond at 000000110917A840, called from 00000008020A3ECD
+  CSClothThread0           (handle=0000000805CA7E40) waits 10.9 s for cond at 000000110917ACA0, called from 00000008020A3ECD
+  CSChrBackInitialize1     (handle=0000000805CA8080) waits 12.7 s for cond at 000000110917B610, called from 00000008020A3ECD
+  CSChrThread5             (handle=0000000805CA82C0) waits 12.3 s for cond at 000000110917B9F0, called from 00000008020A3ECD
+  CSChrThread4             (handle=0000000805CA8500) waits 12.3 s for cond at 00000011091791E0, called from 00000008020A3ECD
+  CSChrThread3             (handle=0000000805CA8740) waits 12.3 s for cond at 0000001109178D80, called from 00000008020A3ECD
+  CSChrThread2             (handle=0000000805CA8980) waits 12.3 s for cond at 0000001109170930, called from 00000008020A3ECD
+  CSChrThread1             (handle=0000000805CA8BC0) waits 12.3 s for cond at 000000110917A3E0, called from 00000008020A3ECD
+  CSChrThread0             (handle=0000000805CA8E00) waits 12.3 s for cond at 00000011091B83E0, called from 00000008020A3ECD
+  FMOD file thread         (handle=0000000805CA9040) running
+  FMOD nonblocking thread (0) (handle=0000000805CA9280) waits 12.2 s for semaphore FMOD Semaphore at 000000000000003E, called from 0000000800D3ADB0
+  CSTrophy::AsyncUpdateThread (handle=0000000805CA94C0) waits 45.8 s for cond at 000000100807DA40, called from 00000008020A3ECD
+  SLSession                (handle=0000000805CA9700) waits 12.3 s for semaphore at 000000000000003C, called from 000000080265AE6A
+  NexusRevolution Main     (handle=0000000805CA9B80) running
+  NexusRevolution Event    (handle=0000000805CAA000) running
+  DLUserPreferenceNotifyServiceIm (handle=0000000805CAA240) running
+  FaceGenMan               (handle=0000000805CAA480) waits 12.4 s for cond at 0000001007BA5000, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA6C0) waits 12.3 s for cond at 0000001109137230, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAA900) waits 12.3 s for cond at 0000001109137110, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAB40) waits 12.3 s for cond at 0000001109136FF0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAD80) waits 12.3 s for cond at 0000001109136ED0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAAFC0) waits 12.3 s for cond at 0000001109136DB0, called from 00000008020A3ECD
+  SpClothVertexUpdate      (handle=0000000805CAB200) waits 46.6 s for cond at 0000001109136C90, called from 00000008020A3ECD
+  HavokWorkerThread        (handle=0000000805CAB440) waits 10.9 s for semaphore hkSemaphore at 0000000000000027, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB680) waits 10.9 s for semaphore hkSemaphore at 0000000000000026, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CAB8C0) waits 10.9 s for semaphore hkSemaphore at 0000000000000025, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABB00) waits 10.9 s for semaphore hkSemaphore at 0000000000000024, called from 0000000800443599
+  HavokWorkerThread        (handle=0000000805CABD40) waits 10.9 s for semaphore hkSemaphore at 0000000000000023, called from 0000000800443599
+  Core.Res.TaskManager     (handle=0000000805CABF80) waits 10.5 s for cond at 00000008056C4C40, called from 00000008020A3ECD
+  Core.Res.FileLoader      (handle=0000000805CAC1C0) waits 19.5 s for cond at 00000008056C50E8, called from 00000008020A3ECD
+  Core.Res.CacheableFileLoader (handle=0000000805CAC400) waits 10.5 s for cond at 00000008056C4DD0, called from 00000008020A3ECD
+  Core.Res.PostProcessor_2 (handle=0000000805CAC640) waits 10.5 s for cond at 000000110AF82E00, called from 00000008020A3ECD
+  Core.Res.PostProcessor_1 (handle=0000000805CAC880) waits 10.5 s for cond at 000000110AF82938, called from 00000008020A3ECD
+  Core.Res.PostProcessor_0 (handle=0000000805CACAC0) waits 10.5 s for cond at 000000110AF82470, called from 00000008020A3ECD
+  GXWorker:5               (handle=0000000805CACD00) waits 10.8 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:4               (handle=0000000805CACF40) waits 10.8 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:3               (handle=0000000805CAD180) waits 10.8 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:2               (handle=0000000805CAD3C0) waits 10.8 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXWorker:1               (handle=0000000805CAD600) waits 10.8 s for semaphore at 0000000000000021, called from 000000080265AE6A
+  GXRenderThread           (handle=0000000805CAD840) waits 2.8 s for cond at 00000010282A1F18, called from 00000008020A3ECD
+  FMOD stream thread       (handle=0000000805CADA80) running
+  FMOD AudioOut thread     (handle=0000000805CADCC0) running
+  FMOD mixer thread        (handle=0000000805CADF00) waits 0.0 s for semaphore FMOD Semaphore at 000000000000001E, called from 0000000800D3ADB0
+  MOMainThread             (handle=0000000805CAE140) running
+  EzWorkPool_TypeD1        (handle=0000000805CAE380) waits 48.2 s for cond at 00000011091010F0, called from 00000008020A3ECD
+  EzWorkPool_TypeC4        (handle=0000000805CAE5C0) waits 17.6 s for cond at 0000001109100EF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB3        (handle=0000000805CAE800) waits 10.9 s for cond at 0000001109100CF0, called from 00000008020A3ECD
+  EzWorkPool_TypeB2        (handle=0000000805CAEA40) waits 10.9 s for cond at 0000001109100B50, called from 00000008020A3ECD
+  EzWorkPool_TypeB1        (handle=0000000805CAEC80) waits 10.9 s for cond at 00000011091009B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA3        (handle=0000000805CAEEC0) waits 24.1 s for cond at 00000011091007B0, called from 00000008020A3ECD
+  EzWorkPool_TypeA2        (handle=0000000805CAF100) waits 24.1 s for cond at 0000001109100610, called from 00000008020A3ECD
+  EzWorkPool_TypeA1        (handle=0000000805CAF340) waits 24.1 s for cond at 0000001109100470, called from 00000008020A3ECD
+  EzWorkPool_TypeA0        (handle=0000000805CAF580) waits 24.1 s for cond at 00000011091002D0, called from 00000008020A3ECD
+  FD4JobWorker:0           (handle=0000000805CAF7C0) waits 48.2 s for semaphore at 0000000000000013, called from 000000080265AE6A
+  Core.Logging.BackgroundStrategy (handle=0000000805CAFA00) waits 48.3 s for semaphore at 0000000000000012, called from 000000080265AE6A
+  main                     (handle=0000000805CAFC40) running
+Runtime: CPU time by thread: session 73 s, 91 live threads, 88.7 s CPU (15% of 8 hardware threads)
+Runtime:   tid 4212                     35812 ms ( 49.3% of one thread)
+Runtime:   shadPS4:GpuCommandProcessor     17609 ms ( 24.3% of one thread)
+Runtime:   bb:VkRecorder                 9609 ms ( 13.2% of one thread)
+Runtime:   bb:DrawRec                    7891 ms ( 10.9% of one thread)
+Runtime:   Core.Res.PostProcessor_0      5141 ms (  7.1% of one thread)
+Runtime:   tid 1512                      4859 ms (  6.7% of one thread)
+Runtime:   Core.Res.PostProcessor_2      2438 ms (  3.4% of one thread)
+Runtime:   EzWorkPool_TypeC4             1953 ms (  2.7% of one thread)
+Runtime:   Core.Res.CacheableFileLoader       438 ms (  0.6% of one thread)
+Runtime:   bb:Copy1                       406 ms (  0.6% of one thread)
+Runtime:   bb:Copy0                       281 ms (  0.4% of one thread)
+Runtime:   tid 2896                       234 ms (  0.3% of one thread)
+Runtime:   GXRenderThread                 219 ms (  0.3% of one thread)
+Runtime:   MOMainThread                   203 ms (  0.3% of one thread)
+Runtime:   bb:Present                     156 ms (  0.2% of one thread)
+Runtime:   GXWorker:3                     141 ms (  0.2% of one thread)
+Thread sample tid 6784                 (rdi=0000000000000002 rsp=0000007b357ff208): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8BF190000+0x335e9 < 00007FF8BF190000+0x33076 < 00007FF8BF190000+0x3302c < 00007FF8BF190000+0x32a1c < 00007FF8BF190000+0x17353 < bloodborne.exe+0x16dcc < bloodborne.exe+0x16cfe < bloodborne.exe+0x74e9 < bloodborne.exe+0xc577e9 < 00007FF8C3F20000+0x863e2
+Thread sample tid 2684                 (rdi=000001f63d108a70 rsp=0000007b35fff688): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 5752                 (rdi=000001f63d108a70 rsp=0000007b367ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 812                  (rdi=000001f63d108a70 rsp=0000007b36fff6e8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 3788                 (rdi=000001f63d103280 rsp=0000007b377ff928): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample Window Manager Thread    (rdi=0000000000000000 rsp=0000007b37fff608): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < 00007FF8C2C30000+0x4a7ee < 00007FF8C2C30000+0x2320e < 00007FF8C2C30000+0x140ae < 00007FF8C2C30000+0x16670 < 00007FF8C2C30000+0x4a184 < 00007FF8C3F20000+0x863e2
+Thread sample tid 3480                 (rdi=0000000000000001 rsp=0000007b387ff3a8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3A90000+0x11fcbe < 00007FF8C3A90000+0x115b9f < 00007FF8C3A90000+0x115aaf < 00007FF8C3F20000+0x863e2
+Thread sample tid 2132                 (rdi=000001f63d103280 rsp=0000007b38fff6c8): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample ApplicationView ASTA     (rdi=0000000000000004 rsp=0000007b397fea08): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C2C30000+0x4ab0b < 00007FF8C2C30000+0x233f7 < 00007FF8C2C30000+0x498f6 < 00007FF8C2C30000+0x14183 < 00007FF8C2C30000+0x1832b < 00007FF8C3A90000+0x10e7b < 00007FF8C3A90000+0x1075c < 00007FF8C3A90000+0x10321 < 00007FF8ADA30000+0xa1ef < 00007FF8ADA30000+0x94c4 < bloodborne.exe+0x1b17b < bloodborne.exe+0x1a770 < bloodborne.exe+0x18042 < 00007FF8BF190000+0x8f685
+Thread sample tid 2504                 (rdi=000001f63d103280 rsp=0000007b39fff718): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4212                 (rdi=0000000000000001 rsp=00000008064fd628): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xac42b < 00007FF8C3F20000+0x3c0ed < bloodborne.exe+0x8ce27 < bloodborne.exe+0x80ae1 < 00007FF8C3F20000+0x12d96 < 00007FF8C3F20000+0x12166 < 00007FF8C3F20000+0x165f4e < guest+0x261af9e < guest+0x2166210 < guest+0x26d9644 < guest+0x21c03ab < guest+0x21a7311 < guest+0x1d86ea0 < guest+0x1d8745e < guest+0x1d8e458
+Thread sample tid 5332                 (rdi=000001f63d103280 rsp=0000007b3cfff948): 00007FF8C3F20000+0x165b84 < 00007FF8C3F20000+0x75dfe < 00007FF8C3F20000+0x863e2
+Thread sample tid 4960                 (rdi=0000000000000000 rsp=0000007b3d7ffd38): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x43671 < bloodborne.exe+0x4343d < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 4912                 (rdi=0000000000000000 rsp=0000007b3dfffc98): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0x438d3 < bloodborne.exe+0x4371b < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample tid 1736                 (rdi=0000000000000001 rsp=0000007b3e7ff6d8): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < 00007FF8BD190000+0x5fb47 < 00007FF8BD190000+0x5fc8c < 00007FF8C3F20000+0x863e2
+Thread sample tid 1512                 (rdi=0000000000008002 rsp=0000007b3f7ff758): 00007FF8C3F20000+0x162294 < 00007FF8C3010000+0xbb2ea < bloodborne.exe+0x91c8f < bloodborne.exe+0x91622 < bloodborne.exe+0x8c420 < bloodborne.exe+0x8cce3 < 00007FF89FF80000+0x84ed < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:kernel_service        (rdi=0000000000000000 rsp=0000007b3ffffb38): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0xa25d6 < bloodborne.exe+0xa9c9f < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:window                (rdi=0000000000000000 rsp=0000007b407ff868): 00007FF8C3F20000+0x162554 < 00007FF8C3F20000+0xd32d4 < 00007FF8C3010000+0x46f01 < bloodborne.exe+0xa0200 < bloodborne.exe+0xa00bc < bloodborne.exe+0x9fce3 < bloodborne.exe+0xa9a58 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuCommandProcessor (rdi=000001f785f65954 rsp=0000007b40ff8b80): 00007FF8AFF30000+0x4e76e8 < 00007FF8AFF30000+0x4e85e3 < 00007FF8AFF30000+0x4e8412 < 00007FF8AFF30000+0x4e89ad < 00007FF8AFF30000+0x3ddb69 < 00007FF8AFF30000+0x3dcfac < 00007FF8AFF30000+0x3dba5e < 00007FF8AFF30000+0x38106b < 00007FF8AFF30000+0x503cc2 < 00007FF8AFF30000+0x238590 < 00007FF8AFF30000+0x2382a0 < 00007FF8AFF30000+0x236b83 < 00007FF8AFF30000+0x507de0 < 00007FF8AFF30000+0x504f9a < 00007FF8AFF30000+0x32a18 < 00007FF8AFF30000+0x2a650
+Thread sample bb:VkRecorder            (rdi=0000000000000000 rsp=0000007b417ff868): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed07c < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b41fff5c8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b427ffa88): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:GpuSchedPriorityPendingOpsRunner (rdi=0000000000000000 rsp=0000007b42fffc68): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x1ed963 < bloodborne.exe+0x1f2534 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy0                 (rdi=0000007b43fffae0 rsp=0000007b437ffa78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Copy1                 (rdi=0000000000000000 rsp=0000007b43fffa98): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x116055 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PipelineCacheIO  (rdi=0000000000000000 rsp=0000007b447ffac8): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x18b93f < bloodborne.exe+0x18b3d8 < bloodborne.exe+0x1906fa < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:DrawRec               (rdi=0000000000000000 rsp=0000007b44fffc08): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0x8f323 < 00007FF8C3010000+0xe4148 < bloodborne.exe+0xf21a7 < bloodborne.exe+0xf1e4f < bloodborne.exe+0xf1c36 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample bb:Present               (rdi=0000000000000000 rsp=0000007b457ffc78): 00007FF8C3F20000+0x165b24 < 00007FF8C3F20000+0xabefe < 00007FF8C3010000+0x41d78 < 00007FF8A63A0000+0x12085 < bloodborne.exe+0x35af3a < bloodborne.exe+0x360ed6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample shadPS4:PresentThread    (rdi=0000000000000000 rsp=0000007b45fff600): 00007FF8C3F20000+0xabfb0 < 00007FF8C3010000+0x41d78 < bloodborne.exe+0xc51df8 < bloodborne.exe+0x35f9aa < bloodborne.exe+0x360fa6 < 00007FF8C2EB0000+0x37b0 < 00007FF8C3F20000+0x863e2
+Thread sample Core.Logging.BackgroundStrategy (rdi=0000000000000002 rsp=00000008065df7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x26471c5 < guest+0x263b246
+Thread sample FD4JobWorker:0           (rdi=0000000000000002 rsp=000000080664f7d8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x106747f < guest+0x263b246
+Thread sample EzWorkPool_TypeA0        (rdi=0000000000000002 rsp=00000008066af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA1        (rdi=0000000000000002 rsp=000000080670f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA2        (rdi=0000000000000002 rsp=000000080676f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeA3        (rdi=0000000000000002 rsp=00000008067cf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB1        (rdi=0000000000000002 rsp=000000080682f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB2        (rdi=0000000000000002 rsp=000000080688f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeB3        (rdi=0000000000000002 rsp=00000008068ef838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeC4        (rdi=0000000000000002 rsp=000000080694f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample EzWorkPool_TypeD1        (rdi=0000000000000002 rsp=00000008069af838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample MOMainThread             (rdi=0000000000000000 rsp=0000000806a0fc98): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x2801382 < guest+0x263b246
+Thread sample tid 2860                 (rdi=0000000000000002 rsp=0000007b4c7ff858): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF8BAF00000+0x5fcca < 00007FF8BAF00000+0x5fc7e < 00007FF8C3F20000+0x863e2
+Thread sample tid 1172                 (rdi=0000000000000003 rsp=0000007b4cfffab8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF89B7C0000+0x82ad < 00007FF89B7C0000+0x341f7 < 00007FF8C3F20000+0x863e2
+Thread sample FMOD mixer thread        (rdi=0000000000000002 rsp=0000000806a6f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD AudioOut thread     (rdi=0000000000000000 rsp=0000000806abfba8): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x86e5b < bloodborne.exe+0x86a18 < bloodborne.exe+0x85f44 < guest+0xd1b941 < guest+0xd18372
+Thread sample FMOD stream thread       (rdi=0000000000000000 rsp=0000000806b2fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample GXRenderThread           (rdi=0000000000000002 rsp=0000000806bbf868): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x21b6a7c < guest+0x263b246
+Thread sample GXWorker:1               (rdi=0000000000000002 rsp=0000000806c4f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:2               (rdi=0000000000000002 rsp=0000000806cbf7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:3               (rdi=0000000000000002 rsp=0000000806d2f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:4               (rdi=0000000000000002 rsp=0000000806d9f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample GXWorker:5               (rdi=0000000000000002 rsp=0000000806e0f7c8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x21b9905 < guest+0x263b246
+Thread sample Core.Res.PostProcessor_0 (rdi=0000000000000002 rsp=0000000806e6f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_1 (rdi=0000000000000002 rsp=0000000806ecf768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.PostProcessor_2 (rdi=0000000000000002 rsp=0000000806f2f768): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20d9b4f < guest+0x263b246
+Thread sample Core.Res.CacheableFileLoader (rdi=0000000000000002 rsp=0000000806f8f688): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20cc4cf < guest+0x263b246
+Thread sample Core.Res.FileLoader      (rdi=0000000000000002 rsp=0000000806fef708): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20cfc9a < guest+0x263b246
+Thread sample Core.Res.TaskManager     (rdi=0000000000000002 rsp=000000080704f598): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x20c716e < guest+0x263b246
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008070df758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080714f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008071bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=000000080724f758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample HavokWorkerThread        (rdi=0000000000000002 rsp=00000008072bf758): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x423599 < guest+0x423474 < guest+0x4233c5
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080731f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080737f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008073df838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080743f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=000000080749f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample SpClothVertexUpdate      (rdi=0000000000000002 rsp=00000008074ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x1e3f45b < guest+0x263b246
+Thread sample FaceGenMan               (rdi=0000000000000002 rsp=000000080755f7f8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x184bb1c < guest+0x263b246
+Thread sample DLUserPreferenceNotifyServiceIm (rdi=0000000000000000 rsp=00000008075bfd08): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0x21629fa < guest+0x263b246
+Thread sample NexusRevolution Event    (rdi=0000000000000000 rsp=000000080761fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample NexusRevolution Main     (rdi=0000000000000000 rsp=000000080767fd48): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xcbb6a5 < guest+0x263b246
+Thread sample SLSession                (rdi=0000000000000002 rsp=00000008076df7e8): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0x263ae6a < guest+0x2838f0d < guest+0x263b246
+Thread sample CSTrophy::AsyncUpdateThread (rdi=0000000000000002 rsp=000000080777ee58): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x2024bc0 < guest+0x263b246
+Thread sample FMOD nonblocking thread (0) (rdi=0000000000000002 rsp=000000080783f848): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x9af58 < bloodborne.exe+0x9aaa0 < guest+0xd1adb0 < guest+0xd1834a
+Thread sample FMOD file thread         (rdi=0000000000000000 rsp=000000080789fd58): 00007FF8C3F20000+0x161f54 < 00007FF8C3010000+0x3b1bf < bloodborne.exe+0x8225d < bloodborne.exe+0x8b432 < guest+0xd1a88f < guest+0xd18325
+Thread sample CSChrThread0             (rdi=0000000000000002 rsp=00000008078ff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread1             (rdi=0000000000000002 rsp=000000080795f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread2             (rdi=0000000000000002 rsp=00000008079bf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread3             (rdi=0000000000000002 rsp=0000000807a1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread4             (rdi=0000000000000002 rsp=0000000807a7f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrThread5             (rdi=0000000000000002 rsp=0000000807adf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSChrBackInitialize1     (rdi=0000000000000002 rsp=0000000807b3f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread0           (rdi=0000000000000002 rsp=0000000807b9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread1           (rdi=0000000000000002 rsp=0000000807bff838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread2           (rdi=0000000000000002 rsp=0000000807c5f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread3           (rdi=0000000000000002 rsp=0000000807cbf838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread4           (rdi=0000000000000002 rsp=0000000807d1f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+Thread sample CSClothThread5           (rdi=0000000000000002 rsp=0000000807d9f838): 00007FF8C3F20000+0x162a24 < 00007FF8C3010000+0x41a93 < 00007FF8C3010000+0x41961 < 00007FF89FF80000+0x2c99 < 00007FF89FF80000+0x1c9a < 00007FF89FF80000+0x1f5d < 00007FF89FF80000+0x2737 < bloodborne.exe+0x95d05 < guest+0x2083ecd < guest+0x207e9e8 < guest+0x208bfe5 < guest+0x20340ab < guest+0x263b246
+UWP swap: out=1967 in=57 disk=1125 views=56 MiB; checks=4050 corrupt=0 window evictions=0
+UWP swap: pageable private=0 pinned=6 MiB; page-out passes=669 with nothing to give=20
+UWP swap: not paged - pinned policy=6 section=0 shared=0 exec/unreadable=0 MiB
+UWP swap: disk pages=1125 MiB of a 1280 MiB budget (ceiling 1536 MiB, raised 2); 125940 pages stored (1492 raw, 20604 blank, 890 MiB of payload, 45% of raw); write failures=0; urgent sweeps=0 (0 MiB)
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)
+Runtime: save data 'SPRJ0005' mounted at /savedata0 (existing)
+UWP dense GPU arena: 0x107c000000, 16 MiB (retired 0 MiB, live 1040 MiB), 65/176 DMA views
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4711/5120 MiB (level=2, presents=941, guest pinned=6 MiB, -46 MiB since the last sample)
+UWP swap: paged out 28 MiB on request (0 MiB of it urgent)
+UWP swap: paged out 0 MiB on request (0 MiB of it urgent)
+Texture cache: memory pressure, 4690 of 4096 MiB (limit 5120, critical 4352, guest pinned 6): 0 images evicted, 0 written back since the last report; 0 old GPU-written tiled images kept (0 MiB), 0 dropped, 0 pinned, 0 depth reclaimed
+Frame rate: 0.6 FPS, slowest frame 533.2 ms
+UWP memory telemetry: 4690/5120 MiB (level=2, presents=942, guest pinned=6 MiB, -21 MiB since the last sample)
+Frame generation pacing: 0.6 game frames/s, 0 generated, 0 shown, Present 12.39 ms/frame (last image 12.39 ms), interval 33.71 ms
+UWP dense GPU arena: 0x104a000000, 32 MiB (retired 16 MiB, live 1056 MiB), 66/176 DMA views
+UWP dense GPU arena: 0x1044000000, 32 MiB (retired 32 MiB, live 1056 MiB), 66/176 DMA views
+UWP memory telemetry: 4755/5120 MiB (level=2, presents=946, guest pinned=9 MiB, +65 MiB since the last sample)
+UWP swap: paged out 32 MiB on request (0 MiB of it urgent)
+UWP dense GPU arena: 0x1046000000, 32 MiB (retired 32 MiB, live 1056 MiB), 66/176 DMA views
+UWP memory telemetry: 4799/5120 MiB (level=2, presents=948, guest pinned=23 MiB, +43 MiB since the last sample)
+UWP dense GPU arena: 0x1043000000, 48 MiB (retired 48 MiB, live 1056 MiB), 66/176 DMA views
+UWP swap: paged out 24 MiB on request (0 MiB of it urgent)
+UWP memory telemetry: 4889/5120 MiB (level=2, presents=952, guest pinned=31 MiB, +89 MiB since the last sample)
