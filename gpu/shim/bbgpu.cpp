@@ -9,6 +9,10 @@
 #endif
 #include "bbport_toggles.h"
 #include <algorithm>
+#include <cstdio>
+#ifdef _WIN32
+#include <windows.h> // GetCurrentThreadId for the per-thread operation table
+#endif
 #include <atomic>
 #include <condition_variable>
 #include <boost/asio/io_context.hpp>
@@ -453,6 +457,153 @@ extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
         return r->GetTextureCache().EmergencyReclaim(need);
     }
     return 0;
+}
+
+/// bbport: the memory categories and the fence position, for the UWP heartbeat (main.cpp).
+///
+/// The `.524` run showed why one number is not enough: `pageable private` fell to 508 MiB while the
+/// app was still at 5,032/5,120 MiB, and the log could not say where the other 4.5 GiB was. Each
+/// category here is a counter that already existed inside the renderer; this is the arithmetic that
+/// puts them next to each other, and `unaccounted` in main.cpp is what is left.
+extern "C" int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats *out) {
+    if (!out) {
+        return 0;
+    }
+    *out = BbGpuMemoryCats{};
+    auto *r = Core::Memory::Instance()->GetRasterizer();
+    if (!r) {
+        return 0;
+    }
+    const auto &instance = r->GetInstance();
+    if (instance.CanReportMemoryUsage()) {
+        out->device_used = instance.GetDeviceMemoryUsage();
+    }
+    const auto &textures = r->GetTextureCache();
+    out->texture_bytes = textures.ImageBytes();
+    out->texture_count = textures.ImageCount();
+    const auto &buffers = r->GetBufferCache();
+    out->dense_live = buffers.ArenaBackedBytes();
+    out->dense_retired = buffers.RetiredArenaBytes();
+    out->arena_reserve_used = buffers.ArenaReserveUsedBytes();
+    auto &scheduler = r->GetScheduler();
+    out->fence_submitted = scheduler.CurrentTick();
+    out->fence_completed = scheduler.GetWorkSemaphore()->KnownGpuTick();
+    out->available = 1;
+    return 1;
+}
+
+/// bbport: B8 - the big allocations and the slow ones, in one line each.
+///
+/// Two things go wrong at world load and neither used to leave a trace: a single allocation of
+/// hundreds of MiB (which is what turns a run that was fine into the run that died), and an
+/// allocation or a fence wait that takes a quarter of a second (the stall that looks like a hang in
+/// the log but is really one call). Everything below this size is left alone - a log that prints
+/// every 4 KiB page is not cheap enough for a release build.
+///
+/// `caller` is a static string literal; `elapsed_ms` is what the caller measured (0 when it does not
+/// care). The usage numbers are the console's own, so the line says where the budget went.
+extern "C" uint64_t bb_uwp_app_memory_usage();
+
+namespace {
+constexpr uint64_t kBigAllocBytes = UINT64_C(32) << 20;
+constexpr double kSlowAllocMs = 250.0;
+} // namespace
+
+extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
+                                 uint64_t usage_before, double elapsed_ms) {
+    const bool big = size >= kBigAllocBytes;
+    const bool slow = elapsed_ms >= kSlowAllocMs;
+    if (!big && !slow) {
+        return;
+    }
+    std::printf("UWP alloc%s: %llu MiB %s (%s), usage %llu -> %llu MiB, %.1f ms%s\n",
+                big ? "" : " (small but slow)", static_cast<unsigned long long>(size >> 20),
+                kind ? kind : "unknown", caller ? caller : "unknown",
+                static_cast<unsigned long long>(usage_before >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20), elapsed_ms,
+                slow ? " [SLOW >250 ms]" : "");
+    std::fflush(stdout);
+}
+
+/// bbport: per-thread "current operation", so a stall report says what each GPU thread was doing
+/// rather than only where its stack was. `tag` is a string literal kept as a pointer, which is what
+/// makes this safe to read from another thread: no buffer is ever rewritten, only swapped.
+namespace {
+struct ThreadOp {
+    std::atomic<uint32_t> tid{0};
+    std::atomic<const char *> tag{nullptr};
+    std::atomic<uint64_t> arg0{0};
+    std::atomic<uint64_t> arg1{0};
+    std::atomic<uint64_t> since{0};
+};
+constexpr size_t kThreadOpSlots = 16;
+ThreadOp g_thread_ops[kThreadOpSlots];
+} // namespace
+
+/* bbport: the slot is found once per thread and then cached, because `Scheduler::Wait` tags on
+ * every fence wait - a 16-slot scan there would be paid thousands of times a second. Slots live in
+ * a static array, so a cached pointer never dangles. */
+static thread_local ThreadOp *t_slot = nullptr;
+
+extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1) {
+    ThreadOp *slot = t_slot;
+    if (!slot) {
+        const uint32_t tid = static_cast<uint32_t>(::GetCurrentThreadId());
+        ThreadOp *empty = nullptr;
+        for (auto &op : g_thread_ops) {
+            const uint32_t owner = op.tid.load(std::memory_order_relaxed);
+            if (owner == tid) {
+                slot = &op;
+                break;
+            }
+            if (owner == 0 && !empty) {
+                empty = &op;
+            }
+        }
+        if (!slot) {
+            slot = empty;
+            if (!slot) {
+                return; // more than 16 tagged threads: keep the ones already there
+            }
+            slot->tid.store(tid, std::memory_order_relaxed);
+        }
+        t_slot = slot;
+    }
+    slot->arg0.store(arg0, std::memory_order_relaxed);
+    slot->arg1.store(arg1, std::memory_order_relaxed);
+    slot->since.store(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                .count()),
+                      std::memory_order_relaxed);
+    slot->tag.store(tag, std::memory_order_release);
+}
+
+extern "C" void bbgpu_thread_op_done(void) {
+    const uint32_t tid = static_cast<uint32_t>(::GetCurrentThreadId());
+    for (auto &op : g_thread_ops) {
+        if (op.tid.load(std::memory_order_relaxed) == tid) {
+            op.tag.store(nullptr, std::memory_order_release);
+            return;
+        }
+    }
+}
+
+extern "C" void bbgpu_thread_op_dump(void) {
+    const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   std::chrono::steady_clock::now().time_since_epoch())
+                                                   .count());
+    for (auto &op : g_thread_ops) {
+        const char *tag = op.tag.load(std::memory_order_acquire);
+        if (!tag) {
+            continue;
+        }
+        std::printf("UWP thread op: tid %u in '%s' (0x%llx, 0x%llx) for %llu ms\n",
+                    op.tid.load(std::memory_order_relaxed), tag,
+                    static_cast<unsigned long long>(op.arg0.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(op.arg1.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(now - op.since.load(std::memory_order_relaxed)));
+    }
+    std::fflush(stdout);
 }
 
 extern "C" void bbgpu_flush_caches(void) {

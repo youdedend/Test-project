@@ -149,6 +149,30 @@ static uint64_t uwp_swap_codec_fallbacks;
  * own counters, in the same structural buckets as uwp_swap_report plus the two state ones (disk
  * budget, view guard). Reset by runtime_memory_page_out and printed only when a request comes back
  * empty, so they cost one increment per page scanned and nothing on a normal page-out. */
+/* bbport: per-category counters for the 5 s memory table (main.cpp). `atbudget_bytes` is what the
+ * disk budget and the device reserve together keep resident: the pages are skipped, and until this
+ * existed the skip was counted in pages only, so "at-budget=136690" never said how much guest
+ * memory that was. */
+static uint64_t uwp_scan_atbudget_bytes, uwp_scan_write_failed_bytes;
+/* bbport: the pager names itself in the per-thread operation table (gpu/shim/bbgpu.cpp), so a
+ * stall report says "guest memory pager, sweeping for N MiB" instead of only showing a stack. */
+extern void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+extern void bbgpu_thread_op_done(void);
+/* bbport: a sweep is not allowed to run forever. `.736` froze for 10 s inside one sweep at
+ * 5,116/5,120 MiB and the allocation waiting for it had no answer either way; the ladder must end
+ * in a decision (degrade, or stop with a reason), never in an unbounded wait. */
+static uint64_t uwp_swap_sweep_deadline, uwp_swap_sweep_timeouts;
+static uint64_t uwp_swap_sweep_timeout_ms(void) {
+    static uint64_t cached;
+    if (!cached) {
+        const char *env = getenv("BB_UWP_SWAP_TIMEOUT_MS");
+        const unsigned long long ms = env ? strtoull(env, NULL, 10) : 0;
+        cached = (ms >= 250 && ms <= 60000) ? ms : UINT64_C(2000);
+    }
+    return cached;
+}
+static uint64_t uwp_swap_copy_out_pages, uwp_swap_copy_in_pages, uwp_swap_copy_in_failures;
+static uint64_t uwp_swap_blank_bytes, uwp_swap_raw_bytes, uwp_swap_compressed_bytes;
 static uint64_t uwp_scan_pages, uwp_scan_unmapped, uwp_scan_unpageable, uwp_scan_kind,
     uwp_scan_uncommitted, uwp_scan_noview, uwp_scan_pinned, uwp_scan_shared, uwp_scan_section,
     uwp_scan_atbudget, uwp_scan_unreadable, uwp_scan_recent_cleared, uwp_scan_viewguard,
@@ -393,6 +417,30 @@ static int uwp_swap_io_at(uint64_t offset, void *data, size_t size, int write) {
     return 1;
 }
 
+/* bbport (A3): both savings are switchable, because a number you cannot turn off is a number you
+ * cannot measure against. `BB_UWP_SWAP_BLANK=0` stores all-zero pages like any other page (which
+ * costs a record and a write each, and says exactly how many there were); `BB_UWP_SWAP_COMPRESS=0`
+ * stores every page raw. The default is on for both - the logs from `.524` measured 19,770 blank
+ * pages out of 92,196 and 37% of raw payload, so the saving is real - and the report prints what
+ * each one bought either way. */
+static int uwp_swap_flag_on(const char *name) {
+    char buffer[8];
+    const DWORD length = GetEnvironmentVariableA(name, buffer, sizeof(buffer));
+    return !(length == 1 && buffer[0] == '0');
+}
+
+static int uwp_swap_blank_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) cached = uwp_swap_flag_on("BB_UWP_SWAP_BLANK");
+    return cached;
+}
+
+static int uwp_swap_compress_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) cached = uwp_swap_flag_on("BB_UWP_SWAP_COMPRESS");
+    return cached;
+}
+
 /* bbport: all-zero pages are the cheapest saving available - a heap that was freed and zeroed is
  * still pageable, and it needs no bytes on disk at all. */
 static int uwp_swap_blank(const void *data) {
@@ -469,14 +517,26 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
         }
         return 1;
     }
-    if (uwp_swap_blank(data)) {
+    if (uwp_swap_blank_enabled() && uwp_swap_blank(data)) {
         if (uwp_swap_slot[key] != UWP_SWAP_SLOT_ZERO) ++uwp_swap_store_zero;
         ++uwp_swap_store_pages;
+        uwp_swap_blank_bytes += PAGE;
         uwp_swap_slot[key] = UWP_SWAP_SLOT_ZERO;
         return 1;
     }
     int raw = 0;
-    size_t total = uwp_swap_encode(data, &raw);
+    size_t total;
+    if (!uwp_swap_compress_enabled()) {
+        // Raw on request: the length header is PAGE, which is the marker the reader already treats
+        // as "uncompressed", so nothing else in the record format changes.
+        memcpy(uwp_swap_io + 2, data, PAGE);
+        uwp_swap_io[0] = (unsigned char)(PAGE & 0xFF);
+        uwp_swap_io[1] = (unsigned char)((PAGE >> 8) & 0xFF);
+        total = PAGE + 2;
+        raw = 1;
+    } else {
+        total = uwp_swap_encode(data, &raw);
+    }
     if (!raw && uwp_swap_verify_payloads()) {
         if (uwp_lz_decompress(uwp_swap_io + 2, total - 2, uwp_swap_verify, PAGE) != PAGE ||
             memcmp(uwp_swap_verify, data, PAGE) != 0) {
@@ -488,7 +548,12 @@ static int uwp_swap_transfer_locked(uint64_t physical, void *data, int write) {
             raw = 1;
         }
     }
-    if (raw) ++uwp_swap_store_raw;
+    if (raw) {
+        ++uwp_swap_store_raw;
+        uwp_swap_raw_bytes += PAGE;
+    } else {
+        uwp_swap_compressed_bytes += PAGE;
+    }
     uwp_swap_store_payload += total - 2;
     uint64_t offset = 0;
     const uint32_t slot = uwp_swap_slot[key];
@@ -570,6 +635,16 @@ static int uwp_swap_transfer(uint64_t physical, void *data, int write) {
     AcquireSRWLockExclusive(&uwp_swap_io_lock);
     const int ok = uwp_swap_transfer_locked(physical, data, write);
     ReleaseSRWLockExclusive(&uwp_swap_io_lock);
+    /* bbport: copy-out and copy-in counts and failures as their own numbers. `in=7 MiB` in the
+     * report was the only evidence a page had come back; a decode that fails (or a record that is
+     * missing) is a different event from a write that fails, and the two were added together. */
+    if (write) {
+        ++uwp_swap_copy_out_pages;
+    } else if (ok) {
+        ++uwp_swap_copy_in_pages;
+    } else {
+        ++uwp_swap_copy_in_failures;
+    }
     return ok;
 }
 
@@ -821,6 +896,17 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
         if (uwp_swap_cursor >= uwp_count) uwp_swap_cursor = 0;
         UwpPage *page = &uwp_pages[uwp_swap_cursor++];
         ++uwp_scan_pages;
+        if (uwp_swap_sweep_deadline && !(uwp_scan_pages & 8191) &&
+            GetTickCount64() > uwp_swap_sweep_deadline) {
+            // Out of time, not out of pages: report what this sweep already freed and let the
+            // caller decide (see runtime_memory_page_out). Bounded and one line, once per sweep.
+            ++uwp_swap_sweep_timeouts;
+            printf("UWP swap: sweep stopped at its %" PRIu64 " ms timeout (released %" PRIu64
+                   " MiB of the %" PRIu64 " MiB asked; budget=%" PRIu64 "/%" PRIu64 " MiB)\n",
+                   uwp_swap_sweep_timeout_ms(), released >> 20, bytes >> 20,
+                   uwp_swap_store_next >> 20, uwp_swap_disk_budget >> 20);
+            break;
+        }
         if (page == exclude) continue;
         if (!page->mapped) {
             ++uwp_scan_unmapped;
@@ -889,6 +975,7 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
             if (uwp_swap_disk_full || !uwp_swap_disk_growable ||
                 uwp_swap_disk_budget >= uwp_swap_disk_ceiling || uwp_scan_write_failed) {
                 ++uwp_scan_atbudget;
+                uwp_scan_atbudget_bytes += PAGE;
                 continue;
             }
             uwp_swap_disk_budget += uwp_swap_disk_step;
@@ -928,11 +1015,13 @@ static uint64_t uwp_swap_page_out_locked(uint64_t bytes, UwpPage *exclude, int i
                 // The budget, not the device (see uwp_swap_transfer): keep the page resident and
                 // let the caller decide whether the ceiling is worth another step.
                 ++uwp_scan_atbudget;
+                uwp_scan_atbudget_bytes += PAGE;
                 uwp_apply_protection(page);
                 continue;
             }
             ++uwp_swap_write_failures;
             ++uwp_scan_write_failed;
+            uwp_scan_write_failed_bytes += PAGE;
             if (uwp_swap_transfer_error == ERROR_DISK_FULL) {
                 uwp_swap_disk_full = 1;
                 uwp_swap_full_tick = GetTickCount64();
@@ -1067,6 +1156,9 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
     uwp_swap_scan_reset();
     // An allocation is already waiting: this is the one place allowed to raise the disk budget.
     uwp_swap_disk_growable = 1;
+    // bbport: hard deadline for the whole request, and a name for the stall dump.
+    uwp_swap_sweep_deadline = now + uwp_swap_sweep_timeout_ms();
+    bbgpu_thread_op("guest memory pager: sweeping", bytes, 0);
     for (int sweep = 0; sweep < 3 && total < bytes; ++sweep) {
         const uint64_t got = uwp_swap_reclaim(bytes - total, 1, sweep > 0);
         if (!got) {
@@ -1076,6 +1168,8 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
         total += got;
     }
     uwp_swap_disk_growable = 0;
+    uwp_swap_sweep_deadline = 0;
+    bbgpu_thread_op_done();
     uwp_swap_last_request_bytes = bytes;
     uwp_swap_last_request_done = GetTickCount64();
     uwp_swap_request_bytes = 0;
@@ -1105,20 +1199,66 @@ uint64_t runtime_memory_page_out(uint64_t bytes) {
         printf("UWP swap: request %" PRIu64 " MiB got nothing; scanned=%" PRIu64 " unmapped=%"
                PRIu64 " unpageable=%" PRIu64 " kind=%" PRIu64 " uncommitted=%" PRIu64
                " views-off=%" PRIu64 " pinned=%" PRIu64 " shared=%" PRIu64 " section=%" PRIu64
-               " at-budget=%" PRIu64 " unreadable=%" PRIu64 " view-guard=%" PRIu64
+               " at-budget=%" PRIu64 " (%" PRIu64 " MiB) unreadable=%" PRIu64
+               " view-guard=%" PRIu64
                " recent=%" PRIu64 " write-failed=%" PRIu64
                "; disk=%" PRIu64 "/%" PRIu64 " MiB full=%d write failures=%" PRIu64
                "; page table: resident=%" PRIu64 " pinned=%" PRIu64 " section=%" PRIu64
                " shared=%" PRIu64 " unreadable=%" PRIu64 " MiB\n",
                bytes >> 20, uwp_scan_pages, uwp_scan_unmapped, uwp_scan_unpageable,
                uwp_scan_kind, uwp_scan_uncommitted, uwp_scan_noview, uwp_scan_pinned,
-               uwp_scan_shared, uwp_scan_section, uwp_scan_atbudget, uwp_scan_unreadable,
+               uwp_scan_shared, uwp_scan_section, uwp_scan_atbudget,
+               uwp_scan_atbudget_bytes >> 20, uwp_scan_unreadable,
                uwp_scan_viewguard, uwp_scan_recent_cleared, uwp_scan_write_failed,
                (uwp_swap_disk_pages * PAGE) >> 20, uwp_swap_disk_budget >> 20,
                (int)uwp_swap_disk_full, uwp_swap_write_failures, b_resident >> 20, b_pinned >> 20,
                b_section >> 20, b_shared >> 20, b_unreadable >> 20);
     }
     return total;
+}
+
+/* bbport: the numbers the 5 s memory table needs, from the pager's own counters. One struct so a
+ * caller cannot read a half-updated pair, and no page walk: these are all scalars. */
+void runtime_memory_swap_stats(RuntimeSwapStats *out) {
+    if (!out) return;
+    out->disk_used = uwp_swap_store_next;
+    out->disk_budget = uwp_swap_disk_budget;
+    out->payload = uwp_swap_store_payload;
+    out->pages = uwp_swap_store_pages;
+    out->blank_pages = uwp_swap_store_zero;
+    out->blank_bytes = uwp_swap_blank_bytes;
+    out->raw_bytes = uwp_swap_raw_bytes;
+    out->compressed_bytes = uwp_swap_compressed_bytes;
+    out->device_free = uwp_swap_free_space();
+    out->reserve = uwp_swap_reserve;
+    out->atbudget_bytes = uwp_scan_atbudget_bytes;
+    out->write_failed_bytes = uwp_scan_write_failed_bytes;
+    out->copy_out_pages = uwp_swap_copy_out_pages;
+    out->copy_in_pages = uwp_swap_copy_in_pages;
+    out->copy_in_failures = uwp_swap_copy_in_failures;
+    out->write_failures = uwp_swap_write_failures;
+}
+
+/* Resident guest memory: every mapped page that is not paged out. This is the "guest private
+ * resident" line of the memory table; `runtime_memory_pinned_bytes` is the part of it no eviction
+ * can return. One page walk (1.25 M entries, a few ms), called from the heartbeat, not a hot path.
+ */
+uint64_t runtime_memory_resident_bytes(void) {
+    read_lock();
+    AcquireSRWLockExclusive(&uwp_commit_lock);
+    uint64_t resident = 0;
+    for (size_t i = 0; i < uwp_count; ++i) {
+        const UwpPage *page = &uwp_pages[i];
+        if (!page->mapped) continue;
+        if (page->kind == 1) {
+            if (page->committed) resident += PAGE;
+        } else {
+            resident += PAGE; // section-backed (kind 2) and mapped views (kind 3)
+        }
+    }
+    ReleaseSRWLockExclusive(&uwp_commit_lock);
+    read_unlock();
+    return resident;
 }
 
 /* bbport: the part of guest memory the pager may never page out (pinned: a page the guest's own
@@ -1182,14 +1322,18 @@ static void uwp_swap_report(void) {
     // resident, so this is the difference between "nothing to page" and "nowhere to put it".
     printf("UWP swap: disk pages=%" PRIu64 " MiB of a %" PRIu64 " MiB budget (ceiling %" PRIu64
            " MiB, raised %" PRIu64 "); %" PRIu64 " pages stored (%" PRIu64 " raw, %" PRIu64
-           " blank, %" PRIu64 " MiB of payload, %" PRIu64 "%% of raw); write failures=%" PRIu64
-           "; codec fallbacks=%" PRIu64 "; urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
+           " blank, %" PRIu64 " MiB of payload, %" PRIu64 "%% of raw [blank %" PRIu64
+           " MiB 0 B, raw %" PRIu64 " MiB, compressed %" PRIu64 " MiB]); write failures=%" PRIu64
+           "; codec fallbacks=%" PRIu64 "; copy-out=%" PRIu64 " copy-in=%" PRIu64
+           " (failed %" PRIu64 "); urgent sweeps=%" PRIu64 " (%" PRIu64 " MiB)%s\n",
            (disk * PAGE) >> 20, uwp_swap_disk_budget >> 20, uwp_swap_disk_ceiling >> 20,
            uwp_swap_disk_raised, uwp_swap_store_pages, uwp_swap_store_raw, uwp_swap_store_zero,
            uwp_swap_store_payload >> 20,
            uwp_swap_store_pages ? (uwp_swap_store_payload * 100) / (uwp_swap_store_pages * PAGE)
                                 : UINT64_C(0),
-           uwp_swap_write_failures, uwp_swap_codec_fallbacks,
+           uwp_swap_blank_bytes >> 20, uwp_swap_raw_bytes >> 20, uwp_swap_compressed_bytes >> 20,
+           uwp_swap_write_failures, uwp_swap_codec_fallbacks, uwp_swap_copy_out_pages,
+           uwp_swap_copy_in_pages, uwp_swap_copy_in_failures,
            uwp_swap_urgent_sweeps, (uwp_swap_urgent_pages * PAGE) >> 20,
            uwp_swap_disk_full ? " (device full: private pages stay resident)" : "");
     // How much of the device is left, so the next log answers "could we have taken more?" without a
@@ -1241,9 +1385,14 @@ void runtime_memory_start_paging(void) {
     // bbport: room the pager may take in LocalState. 768 MiB by default: enough to cover the gap
     // the last runs died in, small enough to leave the device's storage for saves.
     {
-        // Default: start at 768 MiB and let a waiting allocation raise it, 256 MiB at a time, to
-        // 1.5 GiB. An explicit BB_UWP_SWAP_DISK_MB is taken as a hard limit and never grows.
-        uwp_swap_disk_ceiling = UINT64_C(1536) << 20;
+        // bbport: 2 GiB by default, not 768 MiB. The `.524` run stopped with a 713 MiB file and
+        // `device free=349 MiB`: the 768 MiB *budget* was never the limit, the device's free space
+        // and the 384 MiB reserve were. So the default is raised (a console whose LocalState has
+        // room should get to use it) and then capped, below, to what actually exists - raising a
+        // number cannot conjure space, and a budget larger than the device only hides that.
+        // `bbport.ini swap_disk_mb=` / BB_UWP_SWAP_DISK_MB overrides it and never grows.
+        uwp_swap_disk_budget = UINT64_C(2048) << 20;
+        uwp_swap_disk_ceiling = UINT64_C(2048) << 20;
         const char *budget = getenv("BB_UWP_SWAP_DISK_MB");
         const unsigned long long mb = budget ? strtoull(budget, NULL, 10) : 0;
         if (mb >= 64 && mb <= 8192) {
@@ -1266,6 +1415,27 @@ void runtime_memory_start_paging(void) {
         return;
     }
     runtime_memory_reserve();
+    /* bbport: what the device will actually give us, printed once. `uwp_swap_free_space` is the
+     * same query the store uses before every record; asking it here means the budget shown in the
+     * banner is the budget the store will honour, and the unused remainder of a 2 GiB request is
+     * explained in the log instead of looking like a pager that stopped early. */
+    {
+        const uint64_t free_bytes = uwp_swap_free_space();
+        if (free_bytes != 0) {
+            const uint64_t usable = free_bytes > uwp_swap_reserve ? free_bytes - uwp_swap_reserve
+                                                                  : UINT64_C(0);
+            if (usable < uwp_swap_disk_budget) {
+                const uint64_t capped = usable > (UINT64_C(256) << 20) ? usable
+                                                                      : (UINT64_C(256) << 20);
+                printf("UWP swap: disk budget %" PRIu64 " MiB capped to %" PRIu64
+                       " MiB (device free=%" PRIu64 " MiB, reserve %" PRIu64 " MiB)\n",
+                       uwp_swap_disk_budget >> 20, capped >> 20, free_bytes >> 20,
+                       uwp_swap_reserve >> 20);
+                uwp_swap_disk_budget = capped;
+                if (uwp_swap_disk_ceiling > capped) uwp_swap_disk_ceiling = capped;
+            }
+        }
+    }
     if (!uwp_swap_open()) {
         puts("UWP swap: pager could not start");
         return;

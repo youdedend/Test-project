@@ -20,6 +20,10 @@ extern "C" uint64_t bb_uwp_app_memory_limit(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
 extern "C" uint64_t runtime_memory_pinned_bytes(void);
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+extern "C" uint64_t bb_uwp_app_memory_usage(void);
+/* B8: the big/slow allocation line (gpu/shim/bbgpu.cpp). */
+extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
+                                 uint64_t usage_before, double elapsed_ms);
 
 namespace {
 /// bbport: how much of the app budget a failed allocation needs back, and the last resort when
@@ -223,6 +227,10 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         }
 #endif
         VkBuffer unsafe_buffer{};
+        // bbport: B8 - the allocation's size, the console's usage either side of it and how long it
+        // took; bbgpu_note_alloc decides whether the line is worth printing (32 MiB or 250 ms).
+        const auto uwp_alloc_start = std::chrono::steady_clock::now();
+        const uint64_t uwp_usage_before = bb_uwp_app_memory_usage();
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
 #ifdef BB_UWP
@@ -250,6 +258,13 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
             }
         }
 #ifdef BB_UWP
+        // bbport: B8 - the big and the slow allocations, even when they succeed. This is the call
+        // that takes the world from 4.6 GiB to the ceiling, and it used to leave no trace at all.
+        bbgpu_note_alloc(buffer_ci.size, BufferTypeName(mem_type).data(), "buffer cache",
+                         uwp_usage_before,
+                         std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - uwp_alloc_start)
+                             .count());
         if (result != VK_SUCCESS) {
             VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
             vmaGetHeapBudgets(allocator, budgets);

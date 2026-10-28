@@ -114,6 +114,18 @@ uint64_t runtime_memory_page_out(uint64_t need);
 /* Guest memory the pager may not page out (pages guest CPU code executed from or touched as
  * WC_GARLIC): the part of the app budget no eviction of ours can return. */
 uint64_t runtime_memory_pinned_bytes(void);
+/* Resident guest memory (mapped and not paged out). One page walk: heartbeat cadence only. */
+uint64_t runtime_memory_resident_bytes(void);
+/* The pager's own counters, for the 5 s memory table. All bytes; `pages` are counts. */
+typedef struct RuntimeSwapStats {
+    uint64_t disk_used, disk_budget, payload;   /* file size, what it may grow to, payload in it */
+    uint64_t pages, blank_pages;                /* records stored, of them all-zero pages */
+    uint64_t blank_bytes, raw_bytes, compressed_bytes;
+    uint64_t device_free, reserve;              /* free space, and what stays for the game's files */
+    uint64_t atbudget_bytes, write_failed_bytes;/* resident because the budget/device refused it */
+    uint64_t copy_out_pages, copy_in_pages, copy_in_failures, write_failures;
+} RuntimeSwapStats;
+void runtime_memory_swap_stats(RuntimeSwapStats *out);
 void runtime_memory_start_paging(void);
 /* The guest memory contract self-test (xbox/platform/guest_memory_test.inc): 0 when every
  * check passed, else the number of the first failing one. Run with "memory" in run.txt. */

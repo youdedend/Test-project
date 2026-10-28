@@ -73,7 +73,16 @@ inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 2560, 3440, 3840, 5120, 3840, 5120};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 1080, 1440, 1600, 2160, 1080, 1440};
 inline constexpr int OutputCount = 10;
+#ifdef BB_UWP
+/// A5: 1280x720 (index 0) is the console's default. The reason is measured, not aesthetic: every
+/// 1080p-class host target is 2.25x the pixels of the 720p one, and the runs that reached the world
+/// load at 5116/5120 MiB did it with 1080p-class targets. The upscaler and frame generation stay off
+/// by default for the same reason - each is a full-size extra target - and all three are opt-in
+/// (`output_res=1920x1080`, `upscaler=`, `frame_gen=` in bbport.ini).
+inline constexpr int OutputDefault = 0; ///< 1280x720 on the console: the headroom A5 asked for
+#else
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
+#endif
 /// Wider than 16:9: camera and HUD patched at startup.
 inline bool Ultrawide(int output) {
     return OutputWidths[output] * 9 > OutputHeights[output] * 16;

@@ -427,6 +427,23 @@ void DrawPreparation::ScannerLoop(std::stop_token stop) {
     }
 }
 
+// bbport: B7 - the per-thread operation tag for the draw-prep workers, defined in gpu/shim/bbgpu.cpp.
+// A scope rather than a tag/untag pair so every `return` below (there are several) clears it.
+extern "C" void bbgpu_thread_op(const char* tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+namespace {
+struct ThreadOpScope {
+    ThreadOpScope(const char* tag, uint64_t arg0, uint64_t arg1) {
+        bbgpu_thread_op(tag, arg0, arg1);
+    }
+    ~ThreadOpScope() {
+        bbgpu_thread_op_done();
+    }
+    ThreadOpScope(const ThreadOpScope&) = delete;
+    ThreadOpScope& operator=(const ThreadOpScope&) = delete;
+};
+} // namespace
+
 void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
     Common::SetCurrentThreadName(("bb:DrawPrep" + std::to_string(index)).c_str());
     BbThreads::MakeBackground();
@@ -484,6 +501,9 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                 path.push_back(std::move(step));
             }
         }
+        // bbport: B7 - what this worker is doing, and for which submission, for the whole of the
+        // preparation below (the scope clears the tag on every `continue` and on the next iteration).
+        const ThreadOpScope op("preparing draws (DrawRec)", target->seq, index);
         if (!path_ok) {
             path.clear();
             position = NoPosition;

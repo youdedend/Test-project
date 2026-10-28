@@ -42,6 +42,15 @@ public:
         return runtime;
     }
 
+    /// bbport: read-only access for the UWP diagnostics (memory categories and GPU fence age in
+    /// the 5 s heartbeat). Neither is used for anything the renderer does.
+    [[nodiscard]] const Instance& GetInstance() const noexcept {
+        return instance;
+    }
+    [[nodiscard]] Scheduler& GetScheduler() noexcept {
+        return scheduler;
+    }
+
     [[nodiscard]] VideoCore::BufferCache& GetBufferCache() noexcept {
         return buffer_cache;
     }

@@ -106,6 +106,33 @@ void bbgpu_uwp_on_suspending(void);
 void bbgpu_uwp_on_resuming(void);
 /* Evicts cold TextureSetMemo descriptor slices and staging pools down to target_bytes. */
 uint64_t bbgpu_uwp_trim_memory(uint64_t target_bytes_to_free);
+/* bbport: one row per memory category, for the UWP 5 s heartbeat (main.cpp). Every field is a
+ * byte count except the counts and the flags. Zero means "nothing of this kind", except
+ * `available`, which is 0 until the rasterizer exists - a category that is 0 because it does not
+ * exist yet must not look like a category that is 0 because it is empty. */
+typedef struct BbGpuMemoryCats {
+    uint64_t device_used;      /* VRAM the driver reports in use (VMA), 0 when it cannot report */
+    uint64_t texture_bytes;    /* registered texture images, by their guest size */
+    uint64_t texture_count;
+    uint64_t dense_live;       /* dense buffer arenas backed now */
+    uint64_t dense_retired;    /* replaced arenas the fence has not released yet */
+    uint64_t arena_reserve_used;
+    uint64_t fence_submitted;  /* scheduler tick submitted */
+    uint64_t fence_completed;  /* tick the GPU has signalled */
+    int32_t available;
+} BbGpuMemoryCats;
+/* Fills `out`; returns 1 when the GPU exists (0 leaves the struct zeroed). */
+int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats *out);
+/* The calling thread's current operation, for the stall report. `tag` must be a string literal
+ * (it is stored as a pointer; nothing copies or frees it). */
+void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+void bbgpu_thread_op_done(void);
+/* Prints every thread with a tag: one line each, with how long it has been in that operation. */
+void bbgpu_thread_op_dump(void);
+/* B8: one line for an allocation of 32 MiB or more, or one that took 250 ms or more. `caller` and
+ * `kind` are static literals; `usage_before` is the console's AppMemoryUsage before the call. */
+void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller, uint64_t usage_before,
+                      double elapsed_ms);
 /* Returns 1 if shader precompilation is currently compiling an item, filling diagnostic fields. */
 int bbgpu_uwp_active_precompile_diag(uint32_t *out_idx, uint32_t *out_total, uint32_t *out_stage,
                                      uint64_t *out_hash, uint64_t *out_partner_hash);

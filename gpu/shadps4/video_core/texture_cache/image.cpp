@@ -20,6 +20,10 @@ extern "C" uint64_t runtime_memory_page_out(uint64_t bytes);
 #endif
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+
+extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
+                                 uint64_t usage_before, double elapsed_ms);
 
 namespace VideoCore {
 
@@ -204,6 +208,10 @@ bool UniqueImage::TryCreate(const vk::ImageCreateInfo& image_ci) {
 #endif
     VkImage unsafe_image{};
     VmaAllocationInfo alloc_info{};
+    // bbport: B8 - see the matching comment in buffer.cpp. Texture allocations are the other half of
+    // what the GPU holds at world load, and one image of a few hundred MiB is not unusual there.
+    const auto uwp_alloc_start = std::chrono::steady_clock::now();
+    const uint64_t uwp_usage_before = bb_uwp_app_memory_usage();
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
 #ifdef BB_UWP
@@ -238,6 +246,14 @@ bool UniqueImage::TryCreate(const vk::ImageCreateInfo& image_ci) {
             LogHeaps(allocator, device, image_ci);
         }
     }
+#ifdef BB_UWP
+    // bbport: B8 - the image's size comes from VMA (the create info's extent alone is not the bytes
+    // that were allocated), so the note is taken after the create either way.
+    bbgpu_note_alloc(alloc_info.size, "image", "texture cache", uwp_usage_before,
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                              uwp_alloc_start)
+                         .count());
+#endif
     // bbport: out of memory past the budget too (AMD keeps render targets in VRAM only, so a
     // 4 GB card has no system memory to fall back on): the caller frees memory and tries again.
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {

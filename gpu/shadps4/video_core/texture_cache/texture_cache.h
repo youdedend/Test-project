@@ -554,6 +554,19 @@ private:
     void GarbageCollectImages();
     void GarbageCollectSamplers();
 
+public:
+    /// bbport: registered images and their total guest size, for the UWP memory table
+    /// (gpu/shim/bbgpu.cpp). Read once per heartbeat; no locking is needed because the two counters
+    /// are only moved under the cache's own mutation path and a torn pair is a statistic, not state.
+    [[nodiscard]] u64 ImageBytes() const {
+        return image_bytes;
+    }
+    [[nodiscard]] u64 ImageCount() const {
+        return image_count;
+    }
+
+private:
+
 private:
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;

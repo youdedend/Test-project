@@ -112,6 +112,10 @@ void Liverpool::ProcessCommands() {
     }
 }
 
+// bbport: per-thread operation tag, defined in gpu/shim/bbgpu.cpp (bbgpu_thread_op).
+extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
     on_processor_thread = true;
@@ -153,6 +157,8 @@ void Liverpool::Process(std::stop_token stoken) {
         curr_qid = -1;
 
         while (num_submits || num_commands) {
+            // bbport: what this thread is doing, for the stall report (`UWP thread op:`).
+            bbgpu_thread_op("processing a PM4 submission", num_commands, num_submits);
             ProcessCommands();
 
             curr_qid = (curr_qid + 1) % num_mapped_queues;
@@ -180,6 +186,9 @@ void Liverpool::Process(std::stop_token stoken) {
                 submit_cv.notify_all();
             }
         }
+        // bbport: nothing left to process: clear the tag, so the stall report says "idle" rather
+        // than naming the last submission this thread handled minutes ago.
+        bbgpu_thread_op_done();
 
         if (submit_done) {
             VideoCore::EndCapture();

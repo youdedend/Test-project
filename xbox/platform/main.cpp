@@ -16,6 +16,7 @@
 #include <gamingdeviceinformation.h>
 #include <memoryapi.h>
 #include <process.h>
+#include <psapi.h>
 #include <unknwn.h>
 
 #include <algorithm>
@@ -25,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -42,6 +44,10 @@
 #include "sfo_version.h"
 
 extern "C" void bbgpu_flush_caches(void);
+
+// B10: the breadcrumb ring (definition further down, next to the fault handler that dumps it).
+void bb_uwp_breadcrumb(const char* text);
+void bb_uwp_breadcrumb_dump(const char* why);
 
 #ifndef BB_PREPARED_FORMAT
 #define BB_PREPARED_FORMAT "1"
@@ -71,6 +77,29 @@ void bb_uwp_overlay_configure(const char* base, const char* patch, const char* i
 uint64_t bbgpu_uwp_present_count(void);
 int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total, uint32_t* out_stage,
                                      uint64_t* out_hash, uint64_t* out_partner_hash);
+/* gpu/shim/bbgpu.cpp: memory categories, the GPU fence position and the per-thread operation tags
+ * (declared in gpu/bbgpu.h for the GPU; repeated here the way the rest of this block is). */
+typedef struct BbGpuMemoryCats {
+    uint64_t device_used, texture_bytes, texture_count;
+    uint64_t dense_live, dense_retired, arena_reserve_used;
+    uint64_t fence_submitted, fence_completed;
+    int32_t available;
+} BbGpuMemoryCats;
+int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats* out);
+void bbgpu_thread_op_dump(void);
+/* guest_swap.inc: the pager's own counters and the resident guest total. The parameter is
+ * `void *` because this file is C++ and src/runtime.h is C (`__thread`, no extern "C" guard); the
+ * struct below must stay field-for-field identical to RuntimeSwapStats there. */
+struct BbSwapStats {
+    uint64_t disk_used, disk_budget, payload;
+    uint64_t pages, blank_pages;
+    uint64_t blank_bytes, raw_bytes, compressed_bytes;
+    uint64_t device_free, reserve;
+    uint64_t atbudget_bytes, write_failed_bytes;
+    uint64_t copy_out_pages, copy_in_pages, copy_in_failures, write_failures;
+};
+void runtime_memory_swap_stats(void* out);
+uint64_t runtime_memory_resident_bytes(void);
 }
 
 static std::atomic<bool> g_finished{false};
@@ -106,6 +135,11 @@ extern "C" IUnknown* bb_uwp_core_window(void) {
 }
 
 [[noreturn]] static void exit_now(const char* reason) {
+    {
+        char line[128];
+        std::snprintf(line, sizeof(line), "exiting (%s)", reason ? reason : "unspecified");
+        bb_uwp_breadcrumb(line);
+    }
     if (!g_finished.load()) {
         std::printf("UWP lifecycle: exiting (%s)\n", reason);
     }
@@ -117,6 +151,11 @@ extern "C" IUnknown* bb_uwp_core_window(void) {
 }
 
 [[noreturn]] static void close_app(const char* reason) {
+    {
+        char line[128];
+        std::snprintf(line, sizeof(line), "close_app (%s)", reason ? reason : "unspecified");
+        bb_uwp_breadcrumb(line);
+    }
     if (auto win = g_core_window.get()) {
         win.Dispatcher().RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::High, [] {
             winrt::Windows::ApplicationModel::Core::CoreApplication::Exit();
@@ -639,6 +678,37 @@ extern "C" void bb_uwp_find_game_folders(char* out, size_t size) {
     std::snprintf(out, size, "%s", text.c_str());
 }
 
+/// A5, for consoles that already have the file: `ensure_default_ini` only writes a missing ini, so
+/// a console that has been running since before A5 still says `output_res=1920x1080`. This rewrites
+/// exactly that one line to the new default once (`settings_rev=2` marks it), prints what it did,
+/// and leaves every other line untouched. Setting `output_res=1920x1080` afterwards is the opt-in
+/// and is not undone - the marker is already there.
+static void migrate_ini_defaults(const std::string& ini_path) {
+    BbPrepare::Bytes data;
+    if (!read_file_bytes(ini_path, data)) {
+        return;
+    }
+    std::string text(data.begin(), data.end());
+    if (text.find("settings_rev=") != std::string::npos) {
+        return;
+    }
+    const std::string old_line = "output_res=1920x1080";
+    const auto at = text.find(old_line);
+    if (at != std::string::npos) {
+        text.replace(at, old_line.size(), "output_res=1280x720");
+        std::printf("UWP settings: output_res 1920x1080 -> 1280x720 (new default that keeps the "
+                    "app under the memory limit; set output_res=1920x1080 in bbport.ini to keep "
+                    "1080p)\n");
+    }
+    if (!text.empty() && text.back() != '\n') {
+        text.push_back('\n');
+    }
+    text += "settings_rev=2\n";
+    BbPrepare::Bytes bytes(text.begin(), text.end());
+    write_file_bytes(ini_path, bytes);
+    std::fflush(stdout);
+}
+
 static void ensure_default_ini(const std::string& ini_path) {
     if (file_exists(ini_path)) {
         return;
@@ -649,7 +719,7 @@ static void ensure_default_ini(const std::string& ini_path) {
         "# once on the first start.\n"
         "upscaler=off\n"
         "scene_res=1280x720\n"
-        "output_res=1920x1080\n"
+        "output_res=1280x720\n"
         "vsync=1\n"
         "fps_cap=60\n"
         "gamma=1.00\n"
@@ -1369,10 +1439,53 @@ static void configure_dlc_and_mods(const std::string& dump, const std::string& l
 
 static std::wstring g_quarantine_path_w;
 
+// B10: the breadcrumb ring. When the app dies, the last thing printed is usually minutes before the
+// fault (the pager printing "sweeping" then nothing), so the interesting question - what was it
+// doing in the final seconds - has no answer in any log so far. Every lifecycle event and every
+// limit change drops a line here; the fault handler dumps the last 200 before anything else.
+//
+// Static storage, no allocation, no lock in the fault path: a spinlock that the crashed thread may
+// already hold would hang the handler, so the fault dump reads the ring as-is. A torn line is
+// acceptable; a missing dump is not.
+#define BB_BREADCRUMB_LINES 200
+#define BB_BREADCRUMB_CHARS 160
+static char g_breadcrumb[BB_BREADCRUMB_LINES][BB_BREADCRUMB_CHARS];
+static std::atomic<unsigned> g_breadcrumb_at{0};
+
+static unsigned long long breadcrumb_ms() {
+    static const ULONGLONG base = GetTickCount64();
+    return GetTickCount64() - base;
+}
+
+void bb_uwp_breadcrumb(const char* text) {
+    if (!text) {
+        return;
+    }
+    const unsigned slot = g_breadcrumb_at.fetch_add(1, std::memory_order_relaxed);
+    char* dst = g_breadcrumb[slot % BB_BREADCRUMB_LINES];
+    std::snprintf(dst, BB_BREADCRUMB_CHARS, "[%llu ms] %s",
+                  static_cast<unsigned long long>(breadcrumb_ms()), text);
+}
+
+void bb_uwp_breadcrumb_dump(const char* why) {
+    const unsigned at = g_breadcrumb_at.load(std::memory_order_relaxed);
+    const unsigned count = at < BB_BREADCRUMB_LINES ? at : BB_BREADCRUMB_LINES;
+    std::printf("UWP breadcrumbs (%s), last %u of %u entries:\n", why ? why : "dump", count, at);
+    for (unsigned i = at - count; i < at; ++i) {
+        std::printf("  %s\n", g_breadcrumb[i % BB_BREADCRUMB_LINES]);
+    }
+    std::fflush(stdout);
+}
+
+
 static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
     if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
+    // B10: before the stack walk (which can fault itself on a bad stack), say what the app had been
+    // doing. This runs for an assert too: the CRT's assert ends in 0xC0000409, which is in the list
+    // below, and that is exactly the case where the ring explains the "why" the assert cannot.
+    bb_uwp_breadcrumb_dump("unhandled exception");
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
@@ -1466,6 +1579,194 @@ static int run_memory_selftest() {
     return bbport_uwp_run_probe(2, args);
 }
 
+/// bbport: the header every log now starts with. A run that is sent in has to be self-describing:
+/// which build, which commit, which settings, and what each graphics feature costs in bytes - the
+/// three questions every log so far needed a follow-up message to answer.
+///
+/// The package version comes from the manifest (Package::Current), so it is the version the console
+/// installed even though the old build's first line did not print one. Commit and branch are baked
+/// in by the build (BB_BUILD_COMMIT / BB_BUILD_BRANCH, xbox/CMakeLists.txt + the workflow).
+static void log_run_header(const std::string& local_dir) {
+    unsigned major = 0, minor = 0, build = 0, revision = 0;
+    try {
+        const auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+        major = version.Major;
+        minor = version.Minor;
+        build = version.Build;
+        revision = version.Revision;
+    } catch (...) {
+        // Not packaged (a debug launch): the rest of the header still identifies the run.
+    }
+    std::printf("UWP build: version=%u.%u.%u.%u commit=%s branch=%s\n", major, minor, build, revision,
+                BB_BUILD_COMMIT[0] ? BB_BUILD_COMMIT : "unknown",
+                BB_BUILD_BRANCH[0] ? BB_BUILD_BRANCH : "unknown");
+    std::printf("UWP memory marks: limit=%llu MiB, usage=%llu MiB, level=%u, pinned=%llu MiB, "
+                "resident=%llu MiB\n",
+                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()),
+                static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20),
+                static_cast<unsigned long long>(runtime_memory_resident_bytes() >> 20));
+
+    const auto ini = parse_kv_file(local_dir + "\\bbport.ini");
+    auto setting = [&ini](const char* key, const char* fallback) {
+        const auto it = ini.find(key);
+        return it != ini.end() && !it->second.empty() ? it->second.c_str() : fallback;
+    };
+    const char* output = setting("output_res", "1280x720");
+    const char* upscaler = setting("upscaler", "off");
+    const char* frame_gen = setting("frame_gen", "off");
+    std::printf("UWP settings: output_res=%s upscaler=%s frame_gen=%s preset=%s swap_disk_mb=%s "
+                "swap_reserve_mb=%s\n",
+                output, upscaler, frame_gen, setting("preset", "default"),
+                setting("swap_disk_mb", "default (2048, capped to the device)"),
+                setting("swap_reserve_mb", "384"));
+
+    // What each feature costs, so "turn it off" is a number and not an opinion. These are the host
+    // targets the feature needs, computed from its own resolution: 4 bytes per pixel for an RGBA8
+    // scene/history target, and frame generation keeps one extra interpolated frame plus its
+    // history pair. Printed whether or not the feature is on - the point is the comparison.
+    auto pixels_of = [](const char* text, int fallback_w, int fallback_h, int* out_w, int* out_h) {
+        int w = 0, h = 0;
+        if (text && std::sscanf(text, "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+            *out_w = w;
+            *out_h = h;
+        } else {
+            *out_w = fallback_w;
+            *out_h = fallback_h;
+        }
+    };
+    int out_w = 1280, out_h = 720;
+    pixels_of(output, 1280, 720, &out_w, &out_h);
+    const double scene_mib = (double)out_w * out_h * 4.0 / (1024.0 * 1024.0);
+    std::printf("UWP feature cost: output %dx%d (scene target %.1f MiB, history pair %.1f MiB); "
+                "upscaler=%s (+%.1f MiB when on); frame_gen=%s (+%.1f MiB per extra frame when on)\n",
+                out_w, out_h, scene_mib, scene_mib * 2.0, upscaler,
+                (std::strcmp(upscaler, "off") == 0) ? 0.0 : scene_mib * 2.0, frame_gen,
+                (std::strcmp(frame_gen, "off") == 0) ? 0.0 : scene_mib);
+
+    // Flags that change behaviour at run time, printed even when unset, so a log reader does not
+    // have to guess which A/B switches were in play.
+    std::printf("UWP flags: swap=%s verify=%s blank=%s compress=%s pin_private=%s "
+                "timeout_ms=%s toggles=%s\n",
+                std::getenv("BB_UWP_SWAP") ? std::getenv("BB_UWP_SWAP") : "1",
+                std::getenv("BB_UWP_SWAP_VERIFY") ? std::getenv("BB_UWP_SWAP_VERIFY") : "1",
+                std::getenv("BB_UWP_SWAP_BLANK") ? std::getenv("BB_UWP_SWAP_BLANK") : "1",
+                std::getenv("BB_UWP_SWAP_COMPRESS") ? std::getenv("BB_UWP_SWAP_COMPRESS") : "1",
+                std::getenv("BB_UWP_PIN_PRIVATE") ? std::getenv("BB_UWP_PIN_PRIVATE") : "0",
+                std::getenv("BB_UWP_SWAP_TIMEOUT_MS") ? std::getenv("BB_UWP_SWAP_TIMEOUT_MS")
+                                                      : "2000",
+                std::getenv("BB_TOGGLE_FILE") ? std::getenv("BB_TOGGLE_FILE") : "none");
+    std::fflush(stdout);
+}
+
+/// bbport: the per-category memory table (A4) and the Windows side of the picture (B6).
+///
+/// Every earlier log gave one number - `UWP memory telemetry: 5116/5120 MiB` - and the question it
+/// could not answer was *whose* bytes those were. This prints the categories side by side, and the
+/// last line is the answer to "is it us": what the app budget accounts for minus what every category
+/// we know about sums to. A large `unaccounted` means the bytes are not guest memory and not the
+/// GPU's, so no change of ours can return them; a small one means the next reclaim has a target.
+///
+/// Cheap enough for release: one page walk for the pager's totals, a handful of counter reads for
+/// the GPU, and five `MemoryManager` fields, once per heartbeat (5 s, 1 s near the limit).
+static void log_memory_table(uint64_t presents) {
+    BbSwapStats swap{};
+    runtime_memory_swap_stats(&swap);
+    BbGpuMemoryCats gpu{};
+    const bool have_gpu = bbgpu_uwp_memory_cats(&gpu) != 0;
+
+    // B6's Windows side: the paging counters, which say whether the console is thrashing (hard
+    // faults climbing, peak working set far above the current one) while our own numbers look calm.
+    // Resolved through the loader rather than linked: psapi/kernel32's process-memory query is not
+    // in the UWP API partition, but on a debug-launched build it is present, and the console's own
+    // hardware test is the run that needs the numbers. When it is missing the line says so.
+    PROCESS_MEMORY_COUNTERS_EX paging{};
+    paging.cb = sizeof(paging);
+    bool have_paging = false;
+    if (HMODULE kernel = GetModuleHandleW(L"kernel32.dll")) {
+        using QueryFn = BOOL(WINAPI*)(HANDLE, PROCESS_MEMORY_COUNTERS*, DWORD);
+        if (const auto query =
+                reinterpret_cast<QueryFn>(reinterpret_cast<void*>(GetProcAddress(
+                    kernel, "K32GetProcessMemoryInfo")))) {
+            have_paging =
+                query(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&paging),
+                      sizeof(paging)) != FALSE;
+        }
+    }
+
+    const uint64_t limit = bb_uwp_app_memory_limit();
+    const uint64_t usage = bb_uwp_app_memory_usage();
+    const uint64_t resident = runtime_memory_resident_bytes();
+    const uint64_t pinned = runtime_memory_pinned_bytes();
+
+    std::printf("UWP memory table:");
+    std::printf(" app=%llu/%llu MiB", static_cast<unsigned long long>(usage >> 20),
+                static_cast<unsigned long long>(limit >> 20));
+    std::printf(" guest resident=%llu MiB (pinned %llu MiB)",
+                static_cast<unsigned long long>(resident >> 20),
+                static_cast<unsigned long long>(pinned >> 20));
+    std::printf("\n  swap: used=%llu budget=%llu payload=%llu MiB, pages=%llu (blank %llu), "
+                "blank=%llu raw=%llu compressed=%llu MiB\n",
+                static_cast<unsigned long long>(swap.disk_used >> 20),
+                static_cast<unsigned long long>(swap.disk_budget >> 20),
+                static_cast<unsigned long long>(swap.payload >> 20),
+                static_cast<unsigned long long>(swap.pages),
+                static_cast<unsigned long long>(swap.blank_pages),
+                static_cast<unsigned long long>(swap.blank_bytes >> 20),
+                static_cast<unsigned long long>(swap.raw_bytes >> 20),
+                static_cast<unsigned long long>(swap.compressed_bytes >> 20));
+    std::printf("  swap io: out=%llu in=%llu pages, copy-in failures=%llu, write failures=%llu, "
+                "at-budget=%llu MiB, write-failed=%llu MiB\n",
+                static_cast<unsigned long long>(swap.copy_out_pages),
+                static_cast<unsigned long long>(swap.copy_in_pages),
+                static_cast<unsigned long long>(swap.copy_in_failures),
+                static_cast<unsigned long long>(swap.write_failures),
+                static_cast<unsigned long long>(swap.atbudget_bytes >> 20),
+                static_cast<unsigned long long>(swap.write_failed_bytes >> 20));
+    if (have_gpu) {
+        const unsigned long long outstanding =
+            gpu.fence_submitted >= gpu.fence_completed
+                ? static_cast<unsigned long long>(gpu.fence_submitted - gpu.fence_completed)
+                : 0;
+        std::printf("  gpu: device=%llu MiB (available=%d), textures=%llu MiB in %llu images\n",
+                    static_cast<unsigned long long>(gpu.device_used >> 20), gpu.available,
+                    static_cast<unsigned long long>(gpu.texture_bytes >> 20),
+                    static_cast<unsigned long long>(gpu.texture_count));
+        std::printf("  arena: live=%llu retired=%llu reserve-used=%llu MiB\n",
+                    static_cast<unsigned long long>(gpu.dense_live >> 20),
+                    static_cast<unsigned long long>(gpu.dense_retired >> 20),
+                    static_cast<unsigned long long>(gpu.arena_reserve_used >> 20));
+        std::printf("  fences: submitted=%llu completed=%llu outstanding=%llu\n",
+                    static_cast<unsigned long long>(gpu.fence_submitted),
+                    static_cast<unsigned long long>(gpu.fence_completed), outstanding);
+    } else {
+        std::puts("  gpu: not available");
+    }
+    if (have_paging) {
+        std::printf("  os: hard faults=%lu, working set=%llu MiB, peak=%llu MiB, page file=%llu MiB, "
+                    "presents=%llu\n",
+                    paging.PageFaultCount,
+                    static_cast<unsigned long long>(paging.WorkingSetSize >> 20),
+                    static_cast<unsigned long long>(paging.PeakWorkingSetSize >> 20),
+                    static_cast<unsigned long long>(paging.PagefileUsage >> 20),
+                    static_cast<unsigned long long>(presents));
+    } else {
+        std::printf("  os: paging counters unavailable, presents=%llu\n",
+                    static_cast<unsigned long long>(presents));
+    }
+
+    // The accounting line. Only the categories that are supposed to add up are in the sum: guest
+    // resident plus what the pager parked on disk plus the GPU's own allocations. Everything the
+    // runtime maps for itself (audio, save data, prepared files, the JIT's own heap) lands in
+    // `unaccounted` by design - it is a residual, not a defect counter.
+    const uint64_t known = resident + swap.disk_used + (have_gpu ? gpu.device_used : 0);
+    const long long unaccounted = static_cast<long long>(usage) - static_cast<long long>(known);
+    std::printf("  accounted=%llu MiB, unaccounted=%+lld MiB (app - guest resident - swap - device)\n",
+                static_cast<unsigned long long>(known >> 20), unaccounted / 1024 / 1024);
+    std::fflush(stdout);
+}
+
 static void run_loader() {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     const auto local_w =
@@ -1481,20 +1782,54 @@ static void run_loader() {
         }
     }
 
+    /* bbport: every run keeps its own file. The current run still writes loader.log / errors.log /
+     * dozen.log (that is what gets sent in), but the previous run is archived under the timestamp of
+     * *its* start rather than overwriting one rolling `.prev` file, so two console runs can never be
+     * mixed up and no run is ever lost. The start time is the first line of the archived file
+     * (`UWP log: started ...`), which is also what identifies it in the header below. */
     {
-        auto rotate_log = [&](const wchar_t* name, const wchar_t* prev_name) {
+        auto archive_log = [&](const wchar_t* name, const wchar_t* stem) {
             std::error_code ec;
             const std::filesystem::path cur = std::filesystem::path{local_w} / name;
-            const std::filesystem::path prev = std::filesystem::path{local_w} / prev_name;
-            if (std::filesystem::exists(cur, ec) && std::filesystem::file_size(cur, ec) > 0 && !ec) {
-                std::filesystem::remove(prev, ec);
-                ec.clear();
-                std::filesystem::rename(cur, prev, ec);
+            if (!std::filesystem::exists(cur, ec) || std::filesystem::file_size(cur, ec) == 0 ||
+                ec) {
+                return;
             }
+            // The run's own start stamp, from its header line, so the name matches its contents.
+            std::string stamp = "unknown";
+            {
+                std::ifstream in{cur};
+                std::string line;
+                for (int i = 0; i < 12 && std::getline(in, line); ++i) {
+                    const auto at = line.find("started ");
+                    if (at != std::string::npos) {
+                        stamp.clear();
+                        for (size_t k = at + 8; k < line.size(); ++k) {
+                            const char c = line[k];
+                            if (c == ' ' || c == '\r' || c == ';') break;
+                            if (c == ':' || c == '.' || c == '-') stamp.push_back('_');
+                            else stamp.push_back(c);
+                        }
+                        break;
+                    }
+                }
+            }
+            if (stamp.empty()) stamp = "unknown";
+            std::filesystem::path archived =
+                std::filesystem::path{local_w} / (std::wstring{stem} + L"-" +
+                                                  std::wstring(stamp.begin(), stamp.end()) +
+                                                  L".log");
+            for (int n = 2; std::filesystem::exists(archived, ec) && n < 20; ++n) {
+                archived = std::filesystem::path{local_w} /
+                           (std::wstring{stem} + L"-" +
+                            std::wstring(stamp.begin(), stamp.end()) + L"-" + std::to_wstring(n) +
+                            L".log");
+            }
+            std::filesystem::rename(cur, archived, ec);
         };
-        rotate_log(L"loader.log", L"loader.prev.log");
-        rotate_log(L"errors.log", L"errors.prev.log");
-        rotate_log(L"dozen.log", L"dozen.prev.log");
+        archive_log(L"loader.log", L"loader");
+        archive_log(L"errors.log", L"errors");
+        archive_log(L"dozen.log", L"dozen");
     }
 
     _wfreopen((local_w + L"\\loader.log").c_str(), L"w", stdout);
@@ -1508,13 +1843,36 @@ static void run_loader() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
     AddVectoredExceptionHandler(0, &uwp_last_chance_logger);
+    // B10: std::terminate (an escaping exception, a noexcept violation) aborts without a useful
+    // exception record. Dump the ring here too, then chain to whatever handler was installed (the
+    // precompile pass installs its own for the duration of that pass, so this must not swallow it).
+    {
+        static std::terminate_handler s_previous_terminate = nullptr;
+        s_previous_terminate = std::set_terminate([] {
+            bb_uwp_breadcrumb_dump("std::terminate");
+            if (s_previous_terminate != nullptr) {
+                const auto previous = s_previous_terminate;
+                s_previous_terminate = nullptr;  // one dump, even if `previous` re-terminates
+                std::set_terminate(previous);
+                previous();
+            }
+            std::abort();
+        });
+    }
 
-    std::printf("Bloodborne Xbox Series X|S UWP loader started\n");
+    // The first line names the run (its time stamp is what the archived file is named after).
+    {
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+        std::printf("Bloodborne Xbox Series X|S UWP loader started %04u-%02u-%02u %02u_%02u_%02u\n",
+                    now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+    }
     GAMING_DEVICE_MODEL_INFORMATION model{};
     GetGamingDeviceModelInformation(&model);
     std::printf("Device model: 0x%08x; app memory budget: %llu MiB; gamepads: %u\n", model.deviceId,
                 static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
                 winrt::Windows::Gaming::Input::Gamepad::Gamepads().Size());
+    log_run_header(local_str);
 
     // Verify dynamic code generation + System V AMD64 ABI invocation inside AppContainer.
     void* smoke_page = VirtualAllocFromApp(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -1596,6 +1954,24 @@ static void run_loader() {
     set_env_var("TEMP", temp_str);
     set_env_var("TMP", temp_str);
     set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
+    // bbport: `swap_disk_mb=` in bbport.ini is the swap budget, the same number as
+    // BB_UWP_SWAP_DISK_MB. The pager reads it from the environment at start-up, and caps it to what
+    // the device actually has, so a larger value than the console's free space is reported, not
+    // silently ignored (guest_swap.inc, `disk budget N MiB capped to M MiB`).
+    {
+        const auto ini = parse_kv_file(ini_path);
+        const auto it = ini.find("swap_disk_mb");
+        if (it != ini.end() && !it->second.empty()) {
+            const long mb = std::strtol(it->second.c_str(), nullptr, 10);
+            if (mb >= 64 && mb <= 8192) {
+                set_env_var("BB_UWP_SWAP_DISK_MB", std::to_string(mb));
+                std::printf("UWP settings: swap_disk_mb=%ld from bbport.ini\n", mb);
+            } else {
+                std::printf("UWP settings: swap_disk_mb=%s is out of range (64..8192), ignored\n",
+                            it->second.c_str());
+            }
+        }
+    }
 
     // Guest memory contract self-test (cosmo/gow3_xbox). It runs by itself on the first launch
     // after install (while LocalState\memory-selftest.txt does not exist), and again whenever
@@ -1681,6 +2057,7 @@ static void run_loader() {
     }
 
     ensure_default_ini(ini_path);
+    migrate_ini_defaults(ini_path);
 
     // Read the dump's metadata, pair a base game with a separately dumped update folder and let the
     // player confirm or change that choice before anything is prepared.
@@ -1744,6 +2121,13 @@ static void run_loader() {
 
     std::puts("Handing off to Bloodborne sysv_abi loader + shadPS4/Dozen GPU runtime...");
     std::fflush(stdout);
+    // B7: this thread is the guest's main thread from here on. A stall where the guest main thread
+    // is the one that has not moved is a different story from a GPU thread that has not.
+    {
+        char line[64];
+        std::snprintf(line, sizeof(line), "running the guest (%s)", mode.c_str());
+        bb_uwp_breadcrumb(line);
+    }
     const int rc = bbport_uwp_run_probe(static_cast<int>(argv.size()), argv.data());
     std::printf("Bloodborne loader returned %d\n", rc);
     g_finished = true;
@@ -1775,12 +2159,22 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                 std::printf("UWP lifecycle: suspending; memory=%llu/%llu MiB\n",
                             static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
                             static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20));
+                {
+                    char line[128];
+                    std::snprintf(line, sizeof(line),
+                                  "suspending: memory=%llu/%llu MiB, presents=%llu",
+                                  static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                                  static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                                  static_cast<unsigned long long>(bbgpu_uwp_present_count()));
+                    bb_uwp_breadcrumb(line);
+                }
                 bbgpu_flush_caches();
                 std::fflush(nullptr);
                 deferral.Complete();
             });
         winrt::Windows::ApplicationModel::Core::CoreApplication::Resuming(
             [](const auto&, const auto&) {
+                bb_uwp_breadcrumb("resuming");
                 std::puts("UWP lifecycle: resuming");
                 std::fflush(stdout);
             });
@@ -1791,6 +2185,7 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
         g_core_window = winrt::agile_ref(value);
 
         window.Closed([](const auto&, const auto&) {
+            bb_uwp_breadcrumb("CoreWindow closed");
             if (!g_finished.load()) {
                 std::puts("UWP lifecycle: CoreWindow closed");
                 std::fflush(stdout);
@@ -1850,6 +2245,24 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                 // limit every sample is printed, whoever asked.
                 const uint64_t limit_before = bb_uwp_app_memory_limit();
                 const uint64_t usage_before = bb_uwp_app_memory_usage();
+                {
+                    // B10: the console can move `AppMemoryUsageLimit` under us (another app
+                    // suspended, the game left the foreground). A limit that changed mid-run
+                    // explains a run that behaved differently from the previous one, so it is a
+                    // breadcrumb and a log line, not a silent change.
+                    static uint64_t last_limit = 0;
+                    if (last_limit != 0 && limit_before != last_limit) {
+                        std::printf("UWP memory: AppMemoryUsageLimit changed %llu -> %llu MiB\n",
+                                    static_cast<unsigned long long>(last_limit >> 20),
+                                    static_cast<unsigned long long>(limit_before >> 20));
+                        char line[128];
+                        std::snprintf(line, sizeof(line), "memory limit changed %llu -> %llu MiB",
+                                      static_cast<unsigned long long>(last_limit >> 20),
+                                      static_cast<unsigned long long>(limit_before >> 20));
+                        bb_uwp_breadcrumb(line);
+                    }
+                    last_limit = limit_before;
+                }
                 const bool near_limit =
                     limit_before != 0 && usage_before + (1024ULL << 20) >= limit_before;
                 Sleep(near_limit ? 1000 : 5000);
@@ -1879,6 +2292,8 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                         static_cast<unsigned long long>(presents),
                         static_cast<unsigned long long>(runtime_memory_pinned_bytes() >> 20),
                         delta / 1024 / 1024);
+                    // A4: the same heartbeat, broken down into categories.
+                    log_memory_table(presents);
                 }
                 if (runtime_entered_game()) {
                     if (!auto_sampled && ++entered_ticks >= 6) {
@@ -1906,6 +2321,10 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                                 runtime_pad_report();
                                 runtime_wait_report();
                                 runtime_sample_threads();
+                                // B7: what each render thread is doing right now, and for how
+                                // long - a stall with a thread "waiting on a GPU fence" for 9 s is
+                                // a different bug from one recording commands for 9 s.
+                                bbgpu_thread_op_dump();
                             }
                         } else {
                             stalled_ticks = 0;

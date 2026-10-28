@@ -89,6 +89,10 @@ target_compile_definitions(bloodborne PRIVATE
   WIN32_LEAN_AND_MEAN
   _CRT_SECURE_NO_WARNINGS
   BB_PREPARED_FORMAT="${BB_PREPARED_FORMAT}"
+  # Build identity for the log header (B11). The workflow passes the commit and the branch; a local
+  # build gets empty strings and the header prints "unknown".
+  BB_BUILD_COMMIT="${BB_BUILD_COMMIT}"
+  BB_BUILD_BRANCH="${BB_BUILD_BRANCH}"
 )
 
 target_compile_options(bloodborne PRIVATE

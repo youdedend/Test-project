@@ -25,7 +25,7 @@ $env:PATH = "$vs/VC/Tools/Llvm/x64/bin;$vs/Common7/IDE/CommonExtensions/Microsof
 
 $build = Join-Path $local 'build'
 $options = @("-DBB_MESA_ROOT=$($config.mesa_root)")
-foreach ($key in 'dozen_dll', 'mesa_license', 'dxc_root') {
+foreach ($key in 'dozen_dll', 'mesa_license', 'dxc_root', 'build_commit', 'build_branch') {
     if ($config.PSObject.Properties[$key] -and $config.$key) {
         $options += "-DBB_$($key.ToUpper())=$($config.$key)"
     }

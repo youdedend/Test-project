@@ -123,6 +123,23 @@ public:
     /// bbport: memory backing guest memory for the GPU (never freed), the reserve kept for it,
     /// and the part of the reserve used (for the memory report).
     [[nodiscard]] u64 ArenaBackedBytes() const { return arena_backed; }
+#ifdef BB_UWP
+    /// bbport: bytes still held by arenas a replacement has retired but the fence has not released
+    /// (the `.524` logs show this as `retired N MiB` on every arena line, one line at a time; the
+    /// memory table needs the live total).
+    [[nodiscard]] u64 RetiredArenaBytes() const {
+        u64 total = 0;
+        std::scoped_lock lk{dense_arena_mutex};
+        for (const auto& retired : retired_arenas) {
+            total += retired.arena->SizeBytes();
+        }
+        return total;
+    }
+#else
+    [[nodiscard]] u64 RetiredArenaBytes() const {
+        return 0;
+    }
+#endif
     [[nodiscard]] u64 ArenaReserveBytes() const { return reserve_size; }
     [[nodiscard]] u64 ArenaReserveUsedBytes() const { return reserve_used; }
 

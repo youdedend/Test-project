@@ -3,6 +3,7 @@
 
 #include <thread>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
@@ -315,8 +316,13 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
             queued_chunks.store(recorder_queue.size(), std::memory_order_release);
             recorder_busy = true;
         }
+        // bbport: tagged per chunk, not once per thread, so the elapsed time the stall report prints
+        // is how long *this* chunk has been recording - a recorder stuck in one chunk for 9 s is the
+        // stall, and the thread's total age says nothing.
+        bbgpu_thread_op("recording Vulkan commands", queued_chunks.load(), 0);
         // current_cmdbuf only changes after SyncRecording(), which waits for this thread.
         chunk->Execute(current_cmdbuf);
+        bbgpu_thread_op_done();
         {
             std::scoped_lock lk{recorder_mutex};
             free_chunks.push_back(std::move(chunk));
@@ -346,6 +352,10 @@ void Scheduler::Finish() {
     Wait(presubmit_tick);
 }
 
+// bbport: per-thread operation tags, defined in gpu/shim/bbgpu.cpp (bbgpu_thread_op).
+extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+
 void Scheduler::WaitSubmitted() {
     const u64 tick = CurrentTick();
     if (tick > 1) {
@@ -360,7 +370,24 @@ void Scheduler::Wait(u64 tick) {
         Flush(info);
     }
     BbStats::WaitTimer timer{BbStats::tick_wait_ns};
+    // bbport: name the wait for the stall report. `tick` is what the caller must reach and
+    // `KnownGpuTick` is where the GPU actually is, so a stall line says how far behind it is.
+    bbgpu_thread_op("waiting on a GPU fence", tick, work_semaphore.KnownGpuTick());
+    // bbport: B8 - a fence wait of a quarter of a second is not a wait, it is a stall, and it says
+    // who was waiting and how far the GPU had got. Cheap: one clock read per wait, and the wait
+    // itself is already a wait.
+    const auto wait_start = std::chrono::steady_clock::now();
     work_semaphore.Wait(tick);
+    const double wait_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - wait_start)
+            .count();
+    bbgpu_thread_op_done();
+    if (wait_ms >= 250.0) {
+        std::printf("UWP fence wait: %.1f ms for tick %llu (GPU at %llu) [SLOW >250 ms]\n", wait_ms,
+                    static_cast<unsigned long long>(tick),
+                    static_cast<unsigned long long>(work_semaphore.KnownGpuTick()));
+        std::fflush(stdout);
+    }
 }
 
 void Scheduler::PopPendingOperations() {

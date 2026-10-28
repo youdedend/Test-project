@@ -169,6 +169,9 @@ jobs:
             dozen_dll    = "$env:RUNNER_TEMP\dozen\vulkan_dzn.dll"
             mesa_license = "$env:RUNNER_TEMP\dozen\MIT"
             dxc_root     = "$env:RUNNER_TEMP\dxc"
+            # Build identity for the log header, so a console log names the commit that built it.
+            build_commit = "${{ github.sha }}".Substring(0, 12)
+            build_branch = "${{ github.ref_name }}"
           } | ConvertTo-Json | Set-Content xbox\.local\settings.json
 
       - name: Build Bloodborne Xbox UWP
