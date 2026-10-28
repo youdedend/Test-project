@@ -233,6 +233,32 @@ jobs:
             }
           }
 
+      - name: Guard - no large stack frames in the pager
+        # `.524` died of STATUS_STACK_OVERFLOW in `_alloca_probe`, called from a 64 KiB
+        # `wchar_t wide[32768]` local in `uwp_swap_open` - a function on the commit-fault path, so
+        # that frame came out of the faulting guest thread's stack (docs/hardware-test-27). Frames
+        # above 4 KiB are the ones MSVC turns into an `_alloca_probe` walk; these two files run
+        # inside guest fault handlers, so they must not have any. `static` buffers are fine: they
+        # are not on the stack, and the pager already uses them for its page buffers.
+        run: |
+          $bad = @()
+          foreach ($file in @('xbox/platform/guest_swap.inc', 'xbox/platform/guest_memory.inc')) {
+            $n = 0
+            foreach ($line in Get-Content $file) {
+              ++$n
+              if ($line -match '^\s*static ') { continue }
+              if ($line -match '^\s*(unsigned\s+char|char|wchar_t|uint8_t|int8_t|uint16_t|int16_t|uint32_t|int32_t|uint64_t|int64_t|float|double|int)\s+\w+\s*\[\s*(\d{4,})\s*\]') {
+                $bytes = [int]$matches[2]
+                if ($bytes -ge 4096) { $bad += "$file`:$n  $($line.Trim())" }
+              }
+            }
+          }
+          if ($bad.Count) {
+            foreach ($b in $bad) { Write-Output "::error title=Large stack frame in a fault path::$b" }
+            throw "A local buffer of 4 KiB or more in the pager: it runs on the guest thread's stack (see docs/hardware-test-27). Move it to a static buffer or the heap."
+          }
+          Write-Output "no stack buffer of 4 KiB or more in guest_swap.inc / guest_memory.inc"
+
       - name: Symbolicate known crash RVAs
         # The link uses /MAP, so this resolves every crash address in crash-rvas.txt against the
         # exact binary in the package. Diagnostic only: never blocks a release, but a missing or

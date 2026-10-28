@@ -115,11 +115,15 @@ static uint64_t uwp_swap_free_space(void) {
                 break;
             }
         }
-        wchar_t wide[1024];
+        // bbport: same rule as uwp_swap_open - this runs inside a page-out, on whichever stack
+        // that page-out was called from, so the wide copy lives on the heap.
+        wchar_t *wide = uwp_swap_wide_path(dir);
         ULARGE_INTEGER available;
-        if (MultiByteToWideChar(CP_UTF8, 0, dir, -1, wide, 1024) &&
-            GetDiskFreeSpaceExW(wide, &available, NULL, NULL)) {
-            uwp_swap_free_bytes = available.QuadPart;
+        if (wide) {
+            if (GetDiskFreeSpaceExW(wide, &available, NULL, NULL)) {
+                uwp_swap_free_bytes = available.QuadPart;
+            }
+            free(wide);
         }
     }
     return uwp_swap_free_bytes;
@@ -282,18 +286,54 @@ static uint64_t uwp_swap_hash(const void *data) {
     return hash;
 }
 
+/* bbport: a UTF-8 path to a wide one on the heap, never on the stack.
+ *
+ * `uwp_swap_open` used to declare `wchar_t wide[32768]` - **64 KiB of stack frame**, allocated by
+ * the prologue on every call, including the early-out that finds the file already open. It is
+ * reached from `uwp_swap_page_out_locked`, which `uwp_commit` calls when a commit-on-touch is out
+ * of memory, which runs *on the faulting guest thread's stack*. `.524` died of exactly that:
+ * `Fault: exception 0xc00000fd` in `_alloca_probe` (+0xc52457), with `uwp_swap_open` (+0x8c96c),
+ * `uwp_commit` (+0x8d54d), `uwp_swap_page_out_locked` (+0x9128c) and `uwp_page` (+0x8d167) on that
+ * thread's stack (docs/hardware-test-27, resolved from the linker map by CI). A guest thread that
+ * asked for a 64 KiB stack has 64 KiB + STACK_MARGIN to its name; a fault handler that wants 64 KiB
+ * of its own is not a handler. The path buffers are small and this runs once per session, so the
+ * heap costs nothing and the guest stack keeps its margin. */
+static wchar_t *uwp_swap_wide_path(const char *utf8) {
+    if (!utf8 || !*utf8) return NULL;
+    const int need = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (need <= 0) return NULL;
+    wchar_t *wide = (wchar_t *)calloc((size_t)need, sizeof(*wide));
+    if (!wide) return NULL;
+    if (!MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, need)) {
+        free(wide);
+        return NULL;
+    }
+    return wide;
+}
+
+/* The fast path stays a four-line function so a call that finds the swap already open allocates
+ * nothing at all - not even the small frame of the opener. */
+static int uwp_swap_open_slow(void);
+
 static int uwp_swap_open(void) {
+    if (uwp_swap_section) return 1;
+    if (uwp_swap_disabled) return 0;
+    return uwp_swap_open_slow();
+}
+
+static int uwp_swap_open_slow(void) {
     if (uwp_swap_section) return 1;
     if (uwp_swap_disabled) return 0;
     const char *path = getenv("BB_UWP_SWAP_FILE");
     if (!path || !*path) return 0;
-    wchar_t wide[32768];
-    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 32768)) return 0;
+    wchar_t *wide = uwp_swap_wide_path(path);
+    if (!wide) return 0;
     CREATEFILE2_EXTENDED_PARAMETERS params = {0};
     params.dwSize = sizeof(params);
     params.dwFileAttributes = FILE_ATTRIBUTE_TEMPORARY;
     params.dwFileFlags = FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_RANDOM_ACCESS;
     uwp_swap_file = CreateFile2FromAppW(wide, GENERIC_READ | GENERIC_WRITE, 0, CREATE_ALWAYS, &params);
+    free(wide);
     DWORD done = 0;
     if (uwp_swap_file == INVALID_HANDLE_VALUE ||
         !DeviceIoControl(uwp_swap_file, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &done, NULL)) {

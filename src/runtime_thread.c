@@ -213,6 +213,18 @@ void runtime_wait_report(void) {
     fflush(stdout);
 }
 
+/* bbport: the guest thread name for the fault handler. A stack overflow prints the thread it
+ * happened on (docs/hardware-test-27: the report only had a host tid, and the thread that overflowed
+ * was a 64 KiB guest thread whose fault handler wanted 64 KiB of its own). Returns "" when the
+ * current host thread is not a guest thread. */
+const char *runtime_thread_current_name(void) {
+    static _Thread_local char name[32];
+    GuestThread *t = current;
+    if (!t || !t->name[0]) return "";
+    snprintf(name, sizeof(name), "%s", t->name);
+    return name;
+}
+
 static ABI void *thread_self(void) { return runtime_thread_current(); }
 static ABI int32_t *guest_error(void) { return &runtime_thread_current()->errno_val; }
 int32_t *runtime_errno(void) { return &runtime_thread_current()->errno_val; }

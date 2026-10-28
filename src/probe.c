@@ -309,6 +309,28 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         printf("Fault: %s access to %p at %s (thread %lu)\n",
                record->ExceptionInformation[0]==1 ? "write" : record->ExceptionInformation[0]==8 ? "execute" : "read",
                (void *)record->ExceptionInformation[1],where,GetCurrentThreadId());
+    } else if (record->ExceptionCode==EXCEPTION_STACK_OVERFLOW) {
+        /* bbport: a stack overflow used to print only an RVA and a host tid. Name the thread and
+         * show how much of its stack was left: a guest thread that asked for 64 KiB runs on
+         * 64 KiB + the margin (runtime_thread.c), and a single large local in the fault path is
+         * enough to lose the rest (.524: `_alloca_probe` from a 64 KiB frame in uwp_swap_open,
+         * docs/hardware-test-27). */
+#ifdef _WIN32
+        const NT_TIB *tib=(const NT_TIB *)NtCurrentTeb();
+        const char *guest=runtime_thread_current_name();
+        const long long headroom=(long long)((uintptr_t)c->Rsp-(uintptr_t)tib->StackLimit);
+        fprintf(stderr,"Fault: stack overflow at %s (thread %lu, guest thread '%s'): rsp=%p "
+                "stack base=%p limit=%p headroom=%lld bytes\n",
+                where,GetCurrentThreadId(),guest?guest:"",(void *)(uintptr_t)c->Rsp,
+                tib->StackBase,tib->StackLimit,headroom);
+        printf("Fault: stack overflow at %s (thread %lu, guest thread '%s'): rsp=%p stack base=%p "
+               "limit=%p headroom=%lld bytes\n",
+               where,GetCurrentThreadId(),guest?guest:"",(void *)(uintptr_t)c->Rsp,
+               tib->StackBase,tib->StackLimit,headroom);
+#else
+        fprintf(stderr,"Fault: stack overflow at %s (thread %lu)\n",where,GetCurrentThreadId());
+        printf("Fault: stack overflow at %s (thread %lu)\n",where,GetCurrentThreadId());
+#endif
     } else {
         fprintf(stderr,"Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
         printf("Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());

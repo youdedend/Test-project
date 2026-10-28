@@ -44,6 +44,8 @@ void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uin
 void runtime_thread_attach_main(void);
 struct GuestThread;
 struct GuestThread *runtime_thread_current(void);
+/* Guest thread name of the calling thread ("" outside a guest thread); for fault reporting. */
+const char *runtime_thread_current_name(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
