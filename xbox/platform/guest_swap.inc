@@ -90,6 +90,8 @@ static uint64_t uwp_swap_urgent_pages, uwp_swap_urgent_sweeps;
  * GetDiskFreeSpaceExFromApp is not in the UWP subset; the plain call is allowed for the app's own
  * package paths, and if it fails the reserve is skipped (the budget still bounds the file). */
 static uint64_t uwp_swap_free_checked_tick, uwp_swap_free_bytes;
+/* Defined with the opener further down; the free-space query below uses it too. */
+static wchar_t *uwp_swap_wide_path(const char *utf8);
 static uint64_t uwp_swap_reserve = UINT64_C(384) << 20;
 static uint64_t uwp_swap_reserve_hits;
 
