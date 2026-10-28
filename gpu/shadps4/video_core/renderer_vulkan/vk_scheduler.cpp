@@ -285,6 +285,10 @@ void Scheduler::SyncRecording() {
     recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
 }
 
+// bbport: per-thread operation tags, defined in gpu/shim/bbgpu.cpp (bbgpu_thread_op).
+extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+
 void Scheduler::RecorderThread(std::stop_token stoken) {
     Common::SetCurrentThreadName("bb:VkRecorder");
     while (true) {
@@ -351,10 +355,6 @@ void Scheduler::Finish() {
     SubmitExecution(info);
     Wait(presubmit_tick);
 }
-
-// bbport: per-thread operation tags, defined in gpu/shim/bbgpu.cpp (bbgpu_thread_op).
-extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
-extern "C" void bbgpu_thread_op_done(void);
 
 void Scheduler::WaitSubmitted() {
     const u64 tick = CurrentTick();
