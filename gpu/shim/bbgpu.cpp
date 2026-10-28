@@ -37,6 +37,10 @@
 #include "bloodborne_cam.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+// bbport: the memory categories read the instance's accounting and the scheduler's fence position,
+// so their definitions (not just the handles from vk_rasterizer.h) are needed here.
+#include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 
 extern "C" {
 // runtime_memory.c
