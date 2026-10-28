@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `690132b` — *feat(swap): store swap pages compressed; a full device no longer disables the pager* (release target) |
+| HEAD | `d99cd96` — *fix(swap): keep a device reserve for the game's own files; a full disk no longer aborts a cache write* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40494550194` — [actions/runs/40494550194](https://github.com/youdedend/Test-project/actions/runs/40494550194), both jobs green, all tests green (including the new `swap_codec` test), pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26300.1119.zip` — 10,224,790 B, sha256 `d420c339726d2c5b814bafbbc2af40a9a2041a18574d168e6b35b4c212780e4f` |
-| Version shown by that package | **`1.0.26300.1119`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26300.1119`** — [releases/tag/xbox-alpha-1.0.26300.1119](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26300.1119), target `690132b` (run `40494550194`): **compressed swap pages** (LZ4 per page, all-zero pages elided, packed 4 KiB-aligned arena, real bytes as the budget), **a full device no longer stops the sweep or disables the pager for the session**. Built on `.0908` (ceiling 1.5 GiB + image reclaim before a failure — **hardware-confirmed: the budget was raised twice and bought a 96 MiB allocation in 295 ms**, §2p). Previous: `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623`, `.0559`, `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
-| Console validation of this build | **not installed yet** — the newest hardware run is `.908` (`docs/hardware-test-24/`, §2p), which ended in `Fault: exception 0xc00000fd` after the device refused a single write |
-| Open blocker | **the device refuses writes at ~1.17 GiB** (`.908`: one failure at `disk pages=1171 MiB`, `.559` at 1,252). `.1119` answers it by storing pages compressed (expect 2–4×; the console will print the ratio). Unexplained: `Fault: exception 0xc00000fd` (host stack overflow) in the present path at the memory limit — §2p |
+| Last green CI | run `40631002261` — [actions/runs/40631002261](https://github.com/youdedend/Test-project/actions/runs/40631002261), both jobs green, all tests green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26301.421.zip` — 10,228,148 B, sha256 `c5971dfa5ea4d37b42c17ee9ce988a9fe2dadfc80d9ce820235be35f5c229e9b` |
+| Version shown by that package | **`1.0.26301.421`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26301.0421`** — [releases/tag/xbox-alpha-1.0.26301.0421](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0421), target `d99cd96` (run `40631002261`): **a 384 MiB device reserve for the game's own files** and **a full disk no longer aborts a cache write** — built on `.1119` (compressed swap pages, **hardware-confirmed: 45% of raw, ~2.5 GiB of guest pages in 1,125 MiB, present 941**, §2q). Previous: `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder), `.0623`, `.0559`, `.0534`, `.0504`, `.0424`, `.0405`, `.0345`, `.0328`, `.0300` |
+| Console validation of this build | **not installed yet** — the newest hardware run is `.1119` (`docs/hardware-test-25/`, §2q): no pager failure at all, but the swap filled the device and the game's own cache write hit `ENOSPC` and aborted |
+| Open blocker | **the working set, not the pager.** `.1119`: `pageable private=0` (everything pageable was paged out), `lock=sweep held=0 ms` at both 10 s stalls, and the frame rate fell to 0.6 FPS. The swap is no longer the limit of what can be paged; the area is bigger than 5 GiB of RAM. The approved ladder has one rung left — a lower output resolution — which is a settings default and needs a decision |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -804,6 +804,54 @@ Hardware reproduction (Series S/X): **still required** — `.1119` has not run. 
 must show: `… pages stored (N raw, N blank, N MiB of payload, N% of raw)` — that percentage is the
 whole bet. Below ~60% and the same 1.17 GiB covers ~2× the guest memory; near 100% and the codec is
 buying nothing and the next lever is resolution.
+
+---
+
+## 2q. `.1119` run: compression works; the swap took the game's disk (2026-10-27/28)
+
+Logs in `docs/hardware-test-25/` (loader 1,283, errors 80). Build identity: first line pair
+`UWP swap: compressed sparse backing ready; 64 MiB mapped-window limit, 389120 page records`.
+
+**The codec delivered.** Stored pages through the run: 15,755 → 47,390 → 61,261 → 90,799 →
+**125,940**, of which only **1,492 raw** and **20,604 blank** (no bytes at all), payload **890 MiB =
+45% of raw**. So 1,125 MiB of device held ~2,500 MiB of guest pages. `pageable private=0` at the
+end: everything pageable had been paged out. **Present 941** — 832 in `.908`, 792 in `.823`.
+
+**The stall diagnostic answered its question.** Both 10 s freezes print
+`lock=sweep held=0 ms` (requests finished 16 ms and 609 ms earlier), so no sweep was holding
+`uwp_commit_lock`: the pager is not what freezes the frame. The end of the run is `Frame rate: 0.6
+FPS` — the working set does not fit.
+
+**What ended it was not the pager:**
+
+```
+GPU [Debug] <Critical> io_file.h:187 WriteSpan: Assertion Failed!
+Failed to write to file, error = No space left on device
+STOP: GPU library assertion failed (see GPU log above)
+```
+
+`write failures=0` for the whole run: the pager never had a write refused. It simply used the space,
+and the game's pipeline-cache flush lost the race for what was left.
+
+### Fixes in `.26301.421`
+
+| What | Where |
+|---|---|
+| **384 MiB device reserve** (`BB_UWP_SWAP_RESERVE_MB`): before taking a record the store asks the device for free space (`GetDiskFreeSpaceExW` on the swap file's directory, cached 1 s) and refuses to come closer. A refused record is `ERROR_DISK_FULL` → the page stays resident | `guest_swap.inc:76-125, 445-455` |
+| Report prints `device free=… MiB (reserve … MiB kept for the game's own writes, N record(s) refused by it)`; the pager banner carries the reserve, so a log identifies the build | `guest_swap.inc:1100-1112, 1180-1190` |
+| `IOFile::WriteSpan` no longer asserts on `ENOSPC`/`EDQUOT`: the short write is reported to the caller (which removes the partial file and recompiles later). Every other error still asserts; nothing is silently truncated | `gpu/shadps4/common/io_file.h:186-208` |
+
+Hardware reproduction (Series S/X): **still required** — `.26301.421` has not run. What the next log
+must show: `device free=…` in the report, and whether stopping 384 MiB short keeps the game's own
+writes alive while still reaching the same present count.
+
+### What is left, in order
+
+1. **The working set.** `pageable private=0` means paging is exhausted — no more swap tuning helps.
+   The ladder's last rung is a lower output resolution / frame-gen setting, which is a default and
+   needs the user's decision.
+2. `gpu/shadps4` cache blobs and the dump share that device pool; the reserve is sized for them
+   (384 MiB) and can be raised with `BB_UWP_SWAP_RESERVE_MB` without a build.
 
 ---
 
