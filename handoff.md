@@ -6,7 +6,7 @@ unproven. Sections 1–9 are the current, authoritative state. Section 10 is an 
 kept word for word from earlier rounds (it explains how the current state was reached; its branch
 names, PR numbers and "current" claims are historical and superseded).
 
-Last updated: after commit `d4f18dd` (CI run `40637003055`, green, published as `1.0.26301.524`). Console-tested: **no** — that build has not run on hardware.
+Last updated: after commit `4ac5446` (CI run `40646088889`, green, published as `1.0.26301.655`). Console-tested: **no** — that build has not run on hardware.
 
 ---
 
@@ -48,14 +48,14 @@ Standing goals and constraints:
 | Item | Value |
 |---|---|
 | Repo / branch | `youdedend/Test-project` — `arena/8ac58bdb-test-project` (session branch; the platform fixes this name, it cannot be renamed) |
-| HEAD | `d4f18dd` — *fix(swap): a compressed page of exactly 16 KiB was read back as raw* (release target) |
+| HEAD | `4ac5446` — *fix(stack): the pager's 64 KiB local was eating the guest thread's stack* (release target) |
 | `main` | `36e388d1123b7a46272043577826c86297d81712` — untouched by this work |
-| Last green CI | run `40637003055` — [actions/runs/40637003055](https://github.com/youdedend/Test-project/actions/runs/40637003055), both jobs green, all unit suites green (including the two new codec checks), pre-release published |
-| Package built by it | `BloodborneXbox-1.0.26301.524.zip` — 10,233,506 B, sha256 `689ede92ef11c76e0dd49ea62756771c34542e688bf91c6c47db3e618731cba7` |
-| Version shown by that package | **`1.0.26301.524`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
-| Published pre-release | **`xbox-alpha-1.0.26301.0524`** — [releases/tag/xbox-alpha-1.0.26301.0524](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0524), target `d4f18dd` (run `40637003055`): **a compressed page of exactly 16 KiB is stored raw instead of being read back as raw** — the `.437` integrity stop, found and reproduced on the host (§2s) — plus store-time payload verification and the `reserve 0 MiB` bug that had disabled `.421`'s device reserve. On top of `.26301.437` (the resolution rung, §2r), `.26301.421` (device reserve, §2q) and `.1119` (compressed swap, 45% hardware-confirmed). Previous: `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder)
-| Console validation of this build | **not installed yet** — the newest hardware run is the one in `docs/hardware-test-26/` (§2s), on `.26301.421`/`.437`: 65,475 pages stored (27% of raw), `device free=770 MiB (reserve 0 MiB …)`, `lock=sweep held=0 ms` at the one stall, and the stop on `UWP promoted page integrity` after 500 successful checks. `.26301.524` is published and unrun |
-| Open blocker | **two separate things, and only one is fixed.** (1) *Solved this round*: a compressed page of exactly 16 KiB collided with the "stored raw" length marker and was handed back as LZ4 bytes; that was the `.437` stop (§2s), not memory. (2) *Still open*: the working set — `lock=sweep held=0 ms` at every stall recorded so far (`.823`, `.908`, `.1119`, this run), 0.6–6 FPS at the end, `pageable private` falling to ~900 MiB while the area needs more than 5 GiB |
+| Last green CI | run `40646088889` — [actions/runs/40646088889](https://github.com/youdedend/Test-project/actions/runs/40646088889), both jobs green, all suites green, new stack-frame guard green, pre-release published |
+| Package built by it | `BloodborneXbox-1.0.26301.655.zip` — 10,235,078 B, sha256 `643535696937fc8f94a060cd4a98bfe08ee3a39e320bbbc21d7646645ec2b540` |
+| Version shown by that package | **`1.0.26301.655`** (app list / "Manage app" / `.appx` filename — *not* printed in `loader.log`) |
+| Published pre-release | **`xbox-alpha-1.0.26301.0655`** — [releases/tag/xbox-alpha-1.0.26301.0655](https://github.com/youdedend/Test-project/releases/tag/xbox-alpha-1.0.26301.0655), target `4ac5446` (run `40646088889`): **the pager no longer puts 64 KiB of stack frame on a guest thread's fault path** — the `.524` stack-overflow stop, resolved from the linker map (§2t) — plus a stack-overflow line that names the guest thread and its remaining headroom, and a build-time guard against large stack buffers in the pager. On top of `.26301.524` (the 16 KiB codec collision, §2s), `.26301.437` (§2r), `.26301.421` (§2q) and `.1119` (compressed swap, 45% hardware-confirmed). Previous: `.0908` (§2p), `.0823` (§2o), `.0736` (§2m), `.0717` (§2l), `.0649` (the ladder) |
+| Console validation of this build | **not installed yet** — the newest hardware run is the one in `docs/hardware-test-27/` (§2t), on `.524`: 92,196 pages stored (37% of raw), `codec fallbacks=0`, `corrupt=0` across 954 verifies, the 384 MiB reserve in force and refusing 1 record, 1,439 MiB of guest memory held in a 713 MiB file — then `0xc00000fd` (stack overflow) in our own fault handler. `.26301.655` is published and unrun |
+| Open blocker | **the working set, and now measured from both sides.** `.524`: the swap stopped at a 713 MiB file with `device free=349 MiB` because of the 384 MiB reserve, `pageable private` fell to 508 MiB, 4 dry passes, `request 64 MiB got nothing`, 5.7 FPS. `lock=sweep held=0 ms` at the one stall — the pager is still not the freeze. The two stops of the last three rounds (codec collision §2s, stack overflow §2t) were our own bugs, both fixed |
 | CI for the precompile isolation (§2c) | run `40439891299` on `0234b1a` (both jobs green) built `1.0.26300.246`; it was then published as `1.0.26300.300` by run `40440888038` on `7535ba2` |
 
 Compile-state caveat: everything in §4 has been compiled **only** by CI (clang-cl). Two compile
@@ -938,6 +938,66 @@ decision.
 `reserve 384 MiB` in the `device free=` line, `codec fallbacks` present in the `disk pages=` line,
 and no `corrupt record` in `errors.log.txt`. A `corrupt record` line would name the record and its
 shape, which is the whole point of adding it.
+
+---
+
+## 2t. The `.524` run: the swap held, then a fault handler wanted 64 KiB of stack (2026-10-28)
+
+Logs and the full write-up: `docs/hardware-test-27/`.
+
+**`.524` did what it was built for.** 92,196 pages stored (715 raw, 19,770 blank, 537 MiB payload,
+37% of raw), `codec fallbacks=0`, `corrupt=0` across 954 verified pages, the 384 MiB reserve in force
+from the first report (`device free=1008 MiB (reserve 384 MiB …)`), and at `device free=349 MiB` the
+store refused a record instead of taking the game's last 350 MiB — the session carried on. 1,439 MiB
+of guest memory lived in a 713 MiB file. The run died 40% further in than `.421`/`.437`, on a
+different failure entirely.
+
+**The stop was ours, end to end.** `Fault: exception 0xc00000fd` (STATUS_STACK_OVERFLOW) at
+`bloodborne.exe+0xc52457`. The package's own linker map resolves that and the six `rsp` slots CI is
+told about (`xbox/scripts/crash-rvas.txt`):
+
+| RVA | Symbol |
+|---|---|
+| `0xc52457` | `_alloca_probe` (+0x37) |
+| `0x8c96c` | `uwp_swap_open` (+0xc) |
+| `0x8d54d` | `uwp_commit` (+0xbd) |
+| `0x9128c` | `uwp_swap_page_out_locked` (+0x3c) |
+| `0x8d167` | `uwp_page` (+0x17) |
+
+guest commit fault → `uwp_page` → `uwp_commit` (out of memory for the page) →
+`uwp_swap_page_out_locked` → `uwp_swap_open`, whose prologue probed **64 KiB** down. The frame is
+`wchar_t wide[32768]`, allocated by the prologue on every call including the early-out. That chain
+runs on the faulting **guest thread's** own stack: a UWP guest thread runs on its requested stack plus
+`STACK_MARGIN` (256 KiB), and these threads requested 64 KiB — 320 KiB in total, of which the guest
+was already using ~256 KiB. There is no recovering from a stack overflow, and the code that caused it
+is the code that was supposed to recover.
+
+Same bug as the `0xc00000fd` that ended `.908` (`docs/hardware-test-24`), which was written off there
+as "the host stack in the present path". It was never the present path.
+
+| Fix | Where |
+|---|---|
+| UTF-8 → wide on the heap, `MultiByteToWideChar` twice | `guest_swap.inc:303-317` `uwp_swap_wide_path` |
+| `uwp_swap_open` is a four-line fast path that allocates nothing when the file is open; `uwp_swap_open_slow` does the work | `guest_swap.inc:318-345` |
+| The free-space query (`wchar_t wide[1024]`) converted the same way — it also runs inside a page-out | `guest_swap.inc:118-132` |
+| A stack overflow prints RSP, TIB `StackBase`/`StackLimit`, headroom in bytes and the **guest thread name** | `src/probe.c:312-330`, `runtime_thread_current_name` at `src/runtime_thread.c:216-223` |
+| Build-time guard: no local buffer of 4 KiB or more in `guest_swap.inc`/`guest_memory.inc` (`static` exempt) | `.github/workflows/xbox.yml`, "Guard - no large stack frames in the pager" |
+
+`STACK_MARGIN` was deliberately not raised: with the 64 KiB frame gone the guest had ~64 KiB left and
+the handler needs under 8 KiB, so the cause is removed; a margin bump would cost ~1 MiB per guest
+thread against the same 5 GiB budget with nothing measured to justify it. The new fault line prints
+the headroom, so a recurrence settles the question with a number instead of arithmetic.
+
+**Two process notes from this round.** (1) The crash RVA could not be resolved for two rounds because
+the artifact and the job log both come back through a host the sandbox cannot reach; the symbolicate
+step now emits one `::notice::` per resolved address (`.github/workflows/xbox.yml`), readable through
+`gh api repos/…/check-runs/<job>/annotations` — that is how `_alloca_probe` was identified, and it is
+also how the compile error in the first push of this round was read without log access. (2) A
+docs-and-RVA-only commit builds a **byte-identical** binary (the version comes from the packaging
+timestamp), which is what makes resolving *this* round's crash addresses safe.
+
+**Hardware validation required for `.26301.655`** — not run. What the next log should show: no
+`stack overflow` line at all; if one appears it names the guest thread and the headroom.
 
 ---
 
