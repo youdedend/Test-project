@@ -130,10 +130,13 @@ dump plus `flushed N open save file(s)`.
 * **The 30 fps cap, evaluated**: `fps_cap=` is printed with the scene-target size and the note that a
   30 cap halves the frames the GPU may queue. It is *not* changed behind the player's back — a cap
   cannot be measured into a log line the way a MiB can, and the plan asks for an evaluation.
-* **Downscale-textures, evaluated**: the texture cache's own size is already printed once a minute as
-  `textures N (M MiB)` in the memory line; an A/B run of `BB_UWP_DOWNSCALE_TEXTURES=0` vs `=1` on the
-  same route is the measurement, and it is only worth doing if the per-pass collector line shows the
-  cache sitting at a stable size (if it is not, texture size is not the variable).
+* **Downscale-textures, evaluated — and not implemented**: there is no texture-downscale switch in
+  this tree (checked: nothing in `gpu/` or `xbox/` reads one). The measurement that exists is the
+  per-minute memory line's `textures N (M MiB)`, and the only lever that changes it today is
+  `scene_res=` / the preset, which changes what the *game* uploads rather than how the cache stores
+  it. A real downscale would have to intercept image creation and re-create every guest texture at
+  half size, which changes what the guest's own render targets sample — a corpus-level change that
+  must be measured on hardware, not added behind a flag without one. Reported as not done.
 * **Shader/pipeline cache sizes**: `UWP caches: driver.vkcache=N MiB prepared.bin=N MiB shaders.bin=N
   MiB` at the top of every run, measured before the game starts, so the size is what the previous run
   left behind. **Shrinking an over-provisioned cache is not done in this build**: the only honest
@@ -165,6 +168,18 @@ unchanged.
 
 Locally: `g++ -std=c++20 -Wall -Wextra -I xbox/platform xbox/tests/watchdog_policy_test.cpp` — clean,
 all checks pass.
+
+## What this build does not do
+
+* **It does not split arena merges.** Item 13 asks to *evaluate* capping the merge size, and the split
+  needs contiguous pages (the page table encodes `(slot + 1) << 32 | offset`) and one DMA view slot
+  per page out of a fixed 176. The log line says what a split would have cost on the real route; the
+  change waits for that number.
+* **It does not downscale textures.** No such switch exists in this tree; see item 16 above.
+* **It does not shrink an over-provisioned pipeline cache.** The sizes are reported at every run;
+  shrinking without a measurement of what is re-read would trade a save for shader-compile stutter.
+* **It does not change the 30 fps cap.** `fps_cap=` stays the player's; the line prints what a cap
+  would mean.
 
 ## What needs the console
 

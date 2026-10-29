@@ -1929,8 +1929,9 @@ static void enforce_optional_feature_budget(const BbIni::Values& ini) {
     }
     // Item 16's other two evaluations, printed where a run can be read: the frame cap and its
     // frames-in-flight cost, and the caches on disk. Neither changes behaviour on its own - a 30 fps
-    // cap is the player's `fps_cap=` and the texture cache is measured by the per-minute memory
-    // line's `textures N (M MiB)` with and without `BB_UWP_DOWNSCALE_TEXTURES`.
+    // cap is the player's `fps_cap=`. The texture cache is measured by the per-minute memory line's
+    // `textures N (M MiB)`; there is no texture-downscale switch in this tree, so that measurement
+    // is an A/B of `scene_res=` / the preset, not of a flag that would have to be invented first.
     const char* fps_cap = value("fps_cap");
     std::printf("UWP feature budget: fps_cap=%s (each frame in flight holds a %0.1f MiB scene target "
                 "plus the presenter's images; a 30 cap halves the frames the GPU may queue)\n",
