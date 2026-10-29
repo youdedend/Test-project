@@ -49,6 +49,16 @@ public:
     /// Releases idle memory.
     void TickFrame();
 
+    /// bbport (BUILD 3, item 15a): the watchdog's "trim staging" step, and the bytes it returned.
+    ///
+    /// It applies exactly the rule TickFrame already applies - a ring block beyond the ring's keep
+    /// count and idle for RING_IDLE_FRAMES, a large buffer idle for LARGE_IDLE_FRAMES and whose tick
+    /// has been signalled - so it can never destroy a block a command recorded a frame or two ago.
+    /// (An urgent one-idle-frame trim did exactly that: cosmo/gow3_xbox's note on TickFrame.) The
+    /// difference from TickFrame is that it runs now, from the watchdog, instead of waiting for the
+    /// next frame, which is what matters when no frame is being presented.
+    [[nodiscard]] u64 TrimIdle();
+
 private:
     struct Block {
         std::unique_ptr<VideoCore::StreamBuffer> buffer;
@@ -77,6 +87,9 @@ private:
     void TrimLarge(std::vector<LargeBuffer>& cache);
 
     void PublishStats() const;
+
+    /// bbport: the bytes this pool is holding, for TrimIdle's "what did that free" line.
+    [[nodiscard]] u64 ResidentBytes() const;
 
     const Instance& instance;
     Scheduler& scheduler;

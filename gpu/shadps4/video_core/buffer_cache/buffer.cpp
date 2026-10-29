@@ -11,8 +11,11 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 #include <vk_mem_alloc.h>
+#include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef BB_UWP
 extern "C" uint64_t bb_uwp_app_memory_usage(void);
@@ -20,6 +23,11 @@ extern "C" uint64_t bb_uwp_app_memory_limit(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
 extern "C" uint64_t runtime_memory_pinned_bytes(void);
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+/* BUILD 3, item 14: wait for the frees already in flight (retired arenas, images on other threads)
+ * and ask again, bounded by a deadline. */
+extern "C" uint64_t bbgpu_uwp_wait_for_release(uint64_t need, uint32_t timeout_ms);
+/* BUILD 3, item 14: the ladder's last rung - make the next attempt need less (step 3 = degrade). */
+extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need);
 extern "C" uint64_t bb_uwp_app_memory_usage(void);
 /* B8: the big/slow allocation line (gpu/shim/bbgpu.cpp). */
 extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
@@ -45,7 +53,26 @@ u64 UwpEmergencyRelease(u64 size, const char* why) {
     const u64 need_now = bb_uwp_app_memory_usage() + size + (96ULL << 20) > limit
                              ? bb_uwp_app_memory_usage() + size + (96ULL << 20) - limit
                              : 0;
-    const u64 images = bbgpu_uwp_emergency_reclaim(need_now ? need_now : size);
+    u64 images = bbgpu_uwp_emergency_reclaim(need_now ? need_now : size);
+    // bbport (BUILD 3, item 14): the ladder's waiting rung, between "free images" and "assert".
+    //
+    // Every earlier rung asks once. Both `.736` and `.819` show the cost of that: the release of a
+    // retired arena is deferred while a draw-prep producer is in flight (always, at world load), and
+    // the image walk runs under the cache mutex while another thread is inserting - so memory that
+    // becomes available a frame later is memory the failed allocation never sees. One bounded wait,
+    // not a loop: the budget is `BB_ALLOC_RETRY_MS` (default 250 ms), and after it the ladder still
+    // ends at the unmodified assertion rather than waiting forever. Nothing is weakened.
+    {
+        static const u32 retry_ms = [] {
+            const char* env = std::getenv("BB_ALLOC_RETRY_MS");
+            const long value = env ? std::strtol(env, nullptr, 10) : 250;
+            return static_cast<u32>(std::clamp<long>(value, 0, 2000));
+        }();
+        const u64 still_short = need_now > images ? need_now - images : 0;
+        if (still_short != 0 && retry_ms != 0) {
+            images += bbgpu_uwp_wait_for_release(still_short, retry_ms);
+        }
+    }
     const auto done = std::chrono::steady_clock::now();
     const auto ms = [](auto from, auto to) {
         return static_cast<long long>(
@@ -237,8 +264,31 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         for (unsigned attempt = 0; result == VK_ERROR_OUT_OF_DEVICE_MEMORY && attempt < 3;
              ++attempt) {
             const u64 released = UwpEmergencyRelease(buffer_ci.size, "allocation failed");
+            // bbport (BUILD 3, item 14): the ladder's last rung before giving up on the *freeing*
+            // side - make the next attempt need less. `.819` freed nothing on its final attempt and
+            // stopped with the textures already emptied; at that point the only thing left to hand
+            // back is the optional work. Done once per failure (a static counter, not per attempt),
+            // so a retry loop cannot walk the resolution down by three steps in one call.
+            static const bool degrade_on_failure = [] {
+                const char* env = std::getenv("BB_ALLOC_DEGRADE");
+                return env == nullptr || env[0] != '0';
+            }();
+            if (degrade_on_failure) {
+                static std::atomic<unsigned> degrade_reports{0};
+                if (degrade_reports.fetch_add(1) < 4) {
+                    std::printf("UWP memory: allocation of %llu KiB failed with the ladder spent; "
+                                "degrading optional features and retrying\n",
+                                static_cast<unsigned long long>(buffer_ci.size >> 10));
+                    std::fflush(stdout);
+                    bbgpu_uwp_recovery_step(3, 0);
+                }
+            }
             if (!released) {
-                break;
+                // Nothing was handed back: the retry below still runs (the degrade above may have
+                // been what makes it fit), but a second identical attempt would only repeat it.
+                if (attempt != 0) {
+                    break;
+                }
             }
             result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                      &allocation, out_alloc_info);

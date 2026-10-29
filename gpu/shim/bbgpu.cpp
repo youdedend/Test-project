@@ -41,10 +41,15 @@
 // so their definitions (not just the handles from vk_rasterizer.h) are needed here.
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+// bbport (BUILD 3): the recovery step trims the staging pool, so the pool's definition is needed,
+// not only the handle vk_rasterizer.h returns it through.
+#include "video_core/renderer_vulkan/vk_runtime.h"
 
 extern "C" {
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+// bbport (BUILD 3): the pager's forced sweep, used by the recovery watchdog's step 2.
+size_t runtime_memory_page_out(size_t target_bytes);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
 void runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
@@ -506,6 +511,163 @@ extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
         freed += r->GetTextureCache().EmergencyReclaim(need - freed);
     }
     return freed;
+}
+
+/// bbport (BUILD 3, item 14): the fail-soft ladder's waiting rung.
+///
+/// `bbgpu_uwp_emergency_reclaim` asks once. Both `.736` and `.819` show why once is not always
+/// enough: a merge or an area load is retiring arenas and freeing images on other threads while the
+/// allocation that failed is waiting, and the submit path defers a retired-arena release whenever a
+/// draw-prep producer is in flight - which, at world load, is always. So the release happens, just
+/// after the allocation has already failed.
+///
+/// This waits for those in-flight frees, up to `timeout_ms`, asking again every 20 ms, and reports
+/// what the waiting bought. It is bounded: the plan's rule is "never block forever", and the caller
+/// (`buffer.cpp`) still has its own attempts and the unmodified assertion after this.
+extern "C" uint64_t bbgpu_uwp_present_count(void);
+extern "C" uint64_t bbgpu_uwp_wait_for_release(uint64_t need, uint32_t timeout_ms) {
+    if (need == 0 || timeout_ms == 0) {
+        return 0;
+    }
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r) {
+        return 0;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + std::chrono::milliseconds(timeout_ms);
+    uint64_t freed = 0;
+    uint32_t asks = 0;
+    uint64_t retired_at_start = r->GetBufferCache().RetiredArenaBytes();
+    while (true) {
+        const uint64_t remaining = freed >= need ? 0 : need - freed;
+        freed += bbgpu_uwp_emergency_reclaim(remaining);
+        ++asks;
+        if (freed >= need) {
+            break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            break;
+        }
+        // 20 ms: long enough for a draw-prep producer to finish its share and for the fence the
+        // release is waiting on to be signalled, short enough that the whole wait stays a fraction
+        // of a frame budget when it is triggered from the GPU thread at world load.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+    const uint64_t retired_now = r->GetBufferCache().RetiredArenaBytes();
+    std::printf("UWP memory: waited %lld ms for in-flight frees (%u ask(s)): released %llu MiB of "
+                "the %llu MiB wanted; retired arenas %llu -> %llu MiB\n",
+                static_cast<long long>(waited), asks,
+                static_cast<unsigned long long>(freed >> 20),
+                static_cast<unsigned long long>(need >> 20),
+                static_cast<unsigned long long>(retired_at_start >> 20),
+                static_cast<unsigned long long>(retired_now >> 20));
+    std::fflush(stdout);
+    if (freed != 0) {
+        bb_uwp_breadcrumb("memory: waited for in-flight frees");
+    }
+    return freed;
+}
+
+/// bbport (BUILD 3, item 15): one recovery step, run by the watchdog thread in main.cpp.
+///
+/// The watchdog decides *which* step to run (xbox/platform/watchdog_policy.h, tested in
+/// xbox/tests/watchdog_policy_test.cpp) and this runs it, returning the bytes it released so the
+/// log line carries a number rather than an intention. Every step is bounded work: none of them
+/// waits on a fence without a deadline, and none of them is allowed to fail the run - a step that
+/// finds nothing returns 0 and the next one is considered on the following check.
+///
+///  1 = release: retired arenas, idle staging, then any image the collector may take
+///  2 = pager:   a forced sweep, including the compressed pool (the pager's own urgent path)
+///  3 = degrade: optional features off at run time, then the internal resolution one notch down
+///  4 = exit:    nothing here; main.cpp dumps state, flushes saves and closes the app
+extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need) {
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r) {
+        return 0;
+    }
+    if (step == 1) {
+        uint64_t freed = 0;
+        // Retired arenas first: they are whole copies of ranges the page table no longer points at,
+        // so releasing them returns the most memory for the least work, and the release is already
+        // gated on the replacement tick having been signalled and no DMA view holding the arena.
+        const uint64_t retired_before = r->GetBufferCache().RetiredArenaBytes();
+        r->GetBufferCache().ReleaseRetiredArenas();
+        const uint64_t retired_after = r->GetBufferCache().RetiredArenaBytes();
+        const uint64_t arena_freed = retired_before > retired_after ? retired_before - retired_after : 0;
+        freed += arena_freed;
+        // Then staging: the same idle rule as the per-frame trim, run now because a stalled
+        // presenter means the per-frame trim is not running at all.
+        const uint64_t staging_freed = r->GetRuntime().GetStagingPool().TrimIdle();
+        freed += staging_freed;
+        // Then images. `need` is what the caller wants back; when it is 0 the texture cache is asked
+        // for whatever it can take, which is the cheap end of the same walk.
+        // A step the watchdog runs with no specific need still has to ask the walk for a budget:
+        // EmergencyReclaim(0) is a request for zero bytes, not "as much as you can".
+        const uint64_t ask = need > freed ? need - freed : (uint64_t{32} << 20);
+        const uint64_t images_freed = r->GetTextureCache().EmergencyReclaim(ask);
+        freed += images_freed;
+        std::printf("UWP recovery: released %llu MiB (arenas %llu, staging %llu, images %llu MiB) "
+                    "of the %llu MiB wanted\n",
+                    static_cast<unsigned long long>(freed >> 20),
+                    static_cast<unsigned long long>(arena_freed >> 20),
+                    static_cast<unsigned long long>(staging_freed >> 20),
+                    static_cast<unsigned long long>(images_freed >> 20),
+                    static_cast<unsigned long long>(need >> 20));
+        std::fflush(stdout);
+        return freed;
+    }
+    if (step == 2) {
+        // The pager's forced sweep: the same entry point a failed allocation uses, with the pages'
+        // second-chance bit overridable. It returns what it paged out, which is memory the app
+        // budget gets back as soon as the pages are resident again in the compressed pool.
+        const uint64_t paged = runtime_memory_page_out(static_cast<size_t>(need ? need : (128ull << 20)));
+        std::printf("UWP recovery: paged out %llu MiB (of the %llu MiB wanted)\n",
+                    static_cast<unsigned long long>(paged >> 20),
+                    static_cast<unsigned long long>(need >> 20));
+        std::fflush(stdout);
+        return paged;
+    }
+    if (step == 3) {
+        // Visible, so it is the last thing before giving up, and each change is logged with the
+        // target it costs (item 16: the byte cost of every optional feature).
+        auto& s = BbSettings::Get();
+        const int upscaler = s.upscaler.load(std::memory_order_relaxed);
+        const int frame_gen = s.frame_gen.load(std::memory_order_relaxed);
+        const int output = s.output_res.load(std::memory_order_relaxed);
+        const int preset = s.preset.load(std::memory_order_relaxed);
+        if (upscaler != BbSettings::UpscalerOff) {
+            s.upscaler.store(BbSettings::UpscalerOff, std::memory_order_relaxed);
+        }
+        if (frame_gen != BbSettings::FrameGenOff) {
+            s.frame_gen.store(BbSettings::FrameGenOff, std::memory_order_relaxed);
+        }
+        // The two optional buffers the upscaler feeds: with no upscaler they are pure cost.
+        s.reactive.store(false, std::memory_order_relaxed);
+        s.object_motion.store(false, std::memory_order_relaxed);
+        if (output != 0) {
+            s.output_res.store(0, std::memory_order_relaxed);
+        }
+        if (preset < BbSettings::Performance) {
+            s.preset.store(preset + 1, std::memory_order_relaxed);
+        }
+        std::printf("UWP recovery: degraded - upscaler %s -> off, frame generation %s -> off, "
+                    "output %dx%d -> %dx%d, preset %s -> %s; optional buffers (reactive mask, "
+                    "object motion) off\n",
+                    BbSettings::UpscalerName(upscaler), BbSettings::FrameGenName(frame_gen),
+                    BbSettings::OutputWidths[std::clamp(output, 0, BbSettings::OutputCount - 1)],
+                    BbSettings::OutputHeights[std::clamp(output, 0, BbSettings::OutputCount - 1)],
+                    BbSettings::OutputWidths[0], BbSettings::OutputHeights[0],
+                    BbSettings::PresetName(preset),
+                    BbSettings::PresetName(std::clamp(preset + 1, 0, BbSettings::PresetCount - 1)));
+        std::fflush(stdout);
+        bb_uwp_breadcrumb("recovery: degraded");
+        return 0;
+    }
+    return 0;
 }
 
 /// bbport: the memory categories and the fence position, for the UWP heartbeat (main.cpp).

@@ -216,6 +216,10 @@ jobs:
             # verdict that warns a player, the "biggest *writable* volume" rule and the folder walk
             # (including that a capped walk says it is capped) are what that run needed.
             @{ name = 'storage_report'; include = 'xbox/platform'; sources = @('xbox\tests\storage_report_test.cpp') },
+            # BUILD 3: the recovery watchdog's rules. Its failure modes are quiet - a threshold parsed a
+            # factor of 1024 wrong, a step that repeats every second and becomes the stall it was meant to
+            # survive, a cooldown that delays the exit behind a resolution change - so each is a check.
+            @{ name = 'watchdog_policy'; include = 'xbox/platform'; sources = @('xbox\tests\watchdog_policy_test.cpp') },
             @{ name = 'overlay_index'; include = 'xbox/platform'; sources = @('xbox\tests\overlay_index_test.cpp') }
           )
           # Compiler and test output is echoed and (on failure) annotated: the job log is not always

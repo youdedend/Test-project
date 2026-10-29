@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 
 namespace VideoCore {
@@ -77,12 +78,61 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
                                            MemoryType::DeviceLocal);
     }
 
+    // bbport (BUILD 3, item 13): every overlap merge, with the sizes and the reason.
+    //
+    // `819` sat at `arena: live=912 retired=448 MiB` and the log could not say how the arenas got
+    // that large: a merge is silent, and it is the largest single allocation the app makes. A merge
+    // happens when a buffer is bound across a range that spans more than one existing arena, so the
+    // arenas are expanded until the range is covered and their contents copied into one new arena
+    // (`previous` above). That is correct, but it means one 64 KiB request can turn four arenas into
+    // one of several hundred MiB, and the *sum* is held twice for as long as the retirement lasts.
+    // One line per merge names the count, each size, the result and the cumulative total, which is
+    // the measurement item 13 asks for; the cap below is the evaluation of splitting ranges.
     u64 retired_bytes = 0;
     for (auto old : previous) {
         const vk::BufferCopy copy{0, old->cpu_addr - arena->cpu_addr, old->size_bytes};
         runtime.CopyBuffer(old, arena, std::span{&copy, 1});
         retired_bytes += old->size_bytes;
         arena_backed -= std::min<u64>(arena_backed, old->size_bytes);
+    }
+    if (!previous.empty()) {
+        static u64 merge_count = 0, merge_total = 0, merge_largest = 0;
+        ++merge_count;
+        merge_total += retired_bytes;
+        merge_largest = std::max(merge_largest, arena->size_bytes);
+        std::printf("UWP dense GPU arena: merge #%llu %#llx: %zu arena(s) %llu MiB -> one of %llu "
+                    "MiB, for a buffer at %#llx-%#llx; copied %llu MiB, cumulative %llu MiB in %llu "
+                    "merge(s), largest %llu MiB\n",
+                    static_cast<unsigned long long>(merge_count),
+                    static_cast<unsigned long long>(arena->cpu_addr), previous.size(),
+                    static_cast<unsigned long long>(retired_bytes >> 20),
+                    static_cast<unsigned long long>(arena->size_bytes >> 20),
+                    static_cast<unsigned long long>(first_block << block_shift),
+                    static_cast<unsigned long long>(last_block << block_shift),
+                    static_cast<unsigned long long>(retired_bytes >> 20),
+                    static_cast<unsigned long long>(merge_total >> 20),
+                    static_cast<unsigned long long>(merge_count),
+                    static_cast<unsigned long long>(merge_largest >> 20));
+        // Item 13's evaluation, measured rather than argued: what merging past a cap would have
+        // cost. `BB_ARENA_MERGE_CAP_MB` (default 256, 0 disables the line) is not a limit - nothing
+        // is split - because splitting needs one DMA view slot per arena page (DmaViewCount = 176,
+        // and the table is fixed) and because the pages of one arena must stay contiguous for the
+        // page table's `(slot + 1) << 32 | offset` encoding. The line says how many arenas a cap
+        // would have produced, so the next decision is made on a number.
+        static const u64 merge_cap = [] {
+            const char* env = std::getenv("BB_ARENA_MERGE_CAP_MB");
+            return env ? std::strtoull(env, nullptr, 10) << 20 : u64{256} << 20;
+        }();
+        if (merge_cap != 0 && arena->size_bytes > merge_cap) {
+            const u64 would_split = (arena->size_bytes + merge_cap - 1) / merge_cap;
+            std::printf("UWP dense GPU arena: merge #%llu is %llu MiB, over the %llu MiB cap: "
+                        "splitting the range would need %llu arena(s) of this size (and one DMA "
+                        "view slot per page, %u available)\n",
+                        static_cast<unsigned long long>(merge_count),
+                        static_cast<unsigned long long>(arena->size_bytes >> 20),
+                        static_cast<unsigned long long>(merge_cap >> 20),
+                        static_cast<unsigned long long>(would_split), DmaViewCount);
+        }
     }
 
     // Replaced arenas hold whole copies of their ranges; keep them alive until every command

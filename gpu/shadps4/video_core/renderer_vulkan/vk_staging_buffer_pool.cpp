@@ -228,6 +228,35 @@ void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
     });
 }
 
+u64 StagingBufferPool::ResidentBytes() const {
+    u64 bytes = 0;
+    for (size_t i = 0; i < NUM_TYPES; ++i) {
+        for (const Block& block : rings[i].blocks) {
+            bytes += block.buffer->SizeBytes();
+        }
+        for (const LargeBuffer& entry : large_caches[i]) {
+            bytes += entry.buffer->SizeBytes();
+        }
+    }
+    return bytes;
+}
+
+u64 StagingBufferPool::TrimIdle() {
+    const u64 before = ResidentBytes();
+    for (u32 type = 0; type < NUM_TYPES; ++type) {
+        const bool vram = type == u32(VideoCore::MemoryType::DeviceLocal);
+        // The same idle rule as TickFrame, never a stricter one: `keep` stays at the ring's own
+        // count and the idle window is unchanged, so only blocks nothing has touched for 120 frames
+        // go. Trimming to one idle frame under pressure is the failure recorded above TickFrame -
+        // blocks still referenced by recorded commands destroyed under them.
+        TrimRing(rings[type], vram ? keep_vram_blocks : keep_blocks,
+                 vram ? VRAM_RING_IDLE_FRAMES : RING_IDLE_FRAMES);
+        TrimLarge(large_caches[type]);
+    }
+    const u64 after = ResidentBytes();
+    return before > after ? before - after : 0;
+}
+
 void StagingBufferPool::PublishStats() const {
     using namespace Core::Devtools::Widget;
     if (!GpuMemoryViewer::IsEnabled()) {

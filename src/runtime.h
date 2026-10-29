@@ -68,6 +68,8 @@ void runtime_file_unmount(const char *guest);
 int runtime_file_translate(const char *guest, char *out, size_t size);
 int64_t runtime_file_open(const char *path, int flags, int mode);
 int64_t runtime_file_close(int fd);
+/* bbport (BUILD 3): fsync the open, dirty save files before a clean exit. Returns how many. */
+int runtime_files_flush(void);
 int64_t runtime_file_read(int fd, void *buffer, uint64_t size);
 int64_t runtime_file_pread(int fd, void *buffer, uint64_t size, int64_t offset);
 int64_t runtime_file_write(int fd, const void *buffer, uint64_t size);

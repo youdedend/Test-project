@@ -863,6 +863,30 @@ int64_t runtime_file_stat(const char *p,void *s) { return do_stat(p,s); }
 int64_t runtime_file_fstat(int fd,void *s) { return do_fstat(fd,s); }
 int64_t runtime_file_getdents(int fd,char *b,uint64_t n,int64_t *base) { return do_getdents(fd,b,n,base); }
 int runtime_file_translate(const char *guest,char *out,size_t size) { return translate(guest,out,size); }
+/* bbport (BUILD 3, item 15d): flush the open save files before the watchdog exits the app.
+ *
+ * A save is written to a temporary copy and renamed over the old file when it is closed
+ * (deadinside28#64), so nothing is half-written while a file is open - but the bytes of an *open*
+ * save can still be in the kernel's cache, and the console killing the app a moment later would lose
+ * them. This fsyncs every save the guest has dirty and leaves it open, which is what "flush saves"
+ * means here: it does not commit (a commit is a rename the guest asked for), and it does not touch
+ * anything outside /savedataN. Returns how many files it flushed. */
+int runtime_files_flush(void) {
+    int flushed=0;
+    pthread_mutex_lock(&lock);
+    for (int i=3;i<MAX_FILES;++i) {
+        File *f=&files[i];
+        if (!f->used || f->host<0 || !save_path(f->path) || !f->dirty) continue;
+        if (fsync(f->host)) {
+            printf("Runtime: save flush failed for %s: %s\n",f->path,strerror(errno));
+        } else {
+            ++flushed;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return flushed;
+}
+
 void runtime_file_report(void) {
     printf("Runtime: files opened=%zu, reads=%zu (%llu bytes), writes=%zu, not found=%zu\n",
            opens,reads,(unsigned long long)bytes_read,writes,missing);

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -43,6 +44,8 @@
 #include "prepare_game.h"
 #include "storage_report.h"
 #include "sfo_version.h"
+// BUILD 3, item 15: the recovery watchdog's thresholds and its step order, as pure rules.
+#include "watchdog_policy.h"
 
 extern "C" void bbgpu_flush_caches(void);
 
@@ -82,6 +85,10 @@ void bb_uwp_overlay_configure(const char* base, const char* patch, const char* i
 uint64_t bbgpu_uwp_present_count(void);
 int bbgpu_uwp_active_precompile_diag(uint32_t* out_idx, uint32_t* out_total, uint32_t* out_stage,
                                      uint64_t* out_hash, uint64_t* out_partner_hash);
+/* BUILD 3: the watchdog's recovery steps (gpu/shim/bbgpu.cpp). */
+uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need);
+/* src/runtime_file.c: fsync the open, dirty save files before a clean exit. */
+int runtime_files_flush(void);
 /* gpu/shim/bbgpu.cpp: memory categories, the GPU fence position and the per-thread operation tags
  * (declared in gpu/bbgpu.h for the GPU; repeated here the way the rest of this block is). */
 typedef struct BbGpuMemoryCats {
@@ -707,8 +714,18 @@ static void migrate_ini_defaults(const std::string& ini_path) {
         return;
     }
     std::string text(data.begin(), data.end());
-    if (text.find("settings_rev=") != std::string::npos) {
-        return;
+    // BUILD 3: the file now carries the watchdog's thresholds (item 15) and the opt-in for a heavy
+    // optional feature (item 16), so the migration runs while the revision is below 3 instead of
+    // only when the marker is absent. Everything it adds is a comment or a default the code already
+    // uses, and no existing line is touched.
+    constexpr int kSettingsRev = 3;
+    int revision = 0;
+    if (const auto at = text.find("settings_rev="); at != std::string::npos) {
+        std::size_t end = at + std::strlen("settings_rev=");
+        while (end < text.size() && text[end] >= '0' && text[end] <= '9') {
+            revision = revision * 10 + (text[end] - '0');
+            ++end;
+        }
     }
     const std::string old_line = "output_res=1920x1080";
     const auto at = text.find(old_line);
@@ -718,13 +735,43 @@ static void migrate_ini_defaults(const std::string& ini_path) {
                     "app under the memory limit; set output_res=1920x1080 in bbport.ini to keep "
                     "1080p)\n");
     }
-    if (!text.empty() && text.back() != '\n') {
-        text.push_back('\n');
+    if (revision < 3 && text.find("watchdog=") == std::string::npos) {
+        if (!text.empty() && text.back() != '\n') {
+            text.push_back('\n');
+        }
+        text += "\n"
+                "# BUILD 3: the recovery watchdog. It checks once a second and acts when the app is\n"
+                "# within these distances of its memory limit; 0 disables every step. The stall times\n"
+                "# are what turns 'presents stopped' into a resolution drop, and then a clean exit.\n"
+                "watchdog=1\n"
+                "watchdog_ladder_mb=400\n"
+                "watchdog_pager_mb=250\n"
+                "watchdog_degrade_mb=150\n"
+                "watchdog_stuck_s=3\n"
+                "watchdog_exit_s=10\n"
+                "watchdog_cooldown_ms=2000\n"
+                "# heavy_features_optin=1 keeps an optional feature that costs more than 50 MiB.\n"
+                "heavy_features_optin=0\n";
+        std::printf("UWP settings: added the watchdog thresholds and heavy_features_optin to "
+                    "bbport.ini (settings_rev %d -> %d)\n", revision, kSettingsRev);
     }
-    text += "settings_rev=2\n";
-    BbPrepare::Bytes bytes(text.begin(), text.end());
-    write_file_bytes(ini_path, bytes);
-    std::fflush(stdout);
+    if (revision < 3) {
+        if (const auto marker = text.find("settings_rev="); marker != std::string::npos) {
+            std::size_t end = marker + std::strlen("settings_rev=");
+            while (end < text.size() && text[end] >= '0' && text[end] <= '9') {
+                ++end;
+            }
+            text.replace(marker, end - marker, "settings_rev=3");
+        } else {
+            if (!text.empty() && text.back() != '\n') {
+                text.push_back('\n');
+            }
+            text += "settings_rev=3\n";
+        }
+        BbPrepare::Bytes bytes(text.begin(), text.end());
+        write_file_bytes(ini_path, bytes);
+        std::fflush(stdout);
+    }
 }
 
 static void ensure_default_ini(const std::string& ini_path) {
@@ -753,6 +800,21 @@ static void ensure_default_ini(const std::string& ini_path) {
         "effect_dynamic_shadows=1\n"
         "effect_ssr=0\n"
         "model_lod=0\n"
+        "\n"
+        "# BUILD 3: the recovery watchdog (see docs/memory-plan-build-3.md). It checks once a second\n"
+        "# and acts when the app is within these distances of its memory limit: release cheap memory,\n"
+        "# then force a pager sweep, then drop optional features and the resolution, and finally exit\n"
+        "# cleanly (with the saves flushed) instead of being killed. watchdog=0 disables every step.\n"
+        "watchdog=1\n"
+        "watchdog_ladder_mb=400\n"
+        "watchdog_pager_mb=250\n"
+        "watchdog_degrade_mb=150\n"
+        "watchdog_stuck_s=3\n"
+        "watchdog_exit_s=10\n"
+        "watchdog_cooldown_ms=2000\n"
+        "# heavy_features_optin=1 keeps an optional feature whose host targets cost more than 50 MiB.\n"
+        "heavy_features_optin=0\n"
+        "settings_rev=3\n"
         "\n"
         "[dump]\n"
         "# Empty patch_path auto-detects the update folder next to the game folder.\n"
@@ -1698,6 +1760,35 @@ static void log_run_header(const std::string& local_dir) {
                 (std::strcmp(upscaler, "off") == 0) ? 0.0 : scene_mib * 2.0, frame_gen,
                 (std::strcmp(frame_gen, "off") == 0) ? 0.0 : scene_mib);
 
+    // BUILD 3, item 16: the caches on disk, with their sizes, so "shrink an over-provisioned cache"
+    // is a decision on numbers. driver.vkcache is the Vulkan pipeline cache (the compiled shaders the
+    // driver hands back); the two .bin files are this port's prepared-resource/shader caches. Read
+    // before the game starts, so the size is what the previous run left behind.
+    {
+        const char* names[] = {"driver.vkcache", "prepared.bin", "shaders.bin"};
+        char line[256] = {};
+        size_t used = 0;
+        for (const char* name : names) {
+            WIN32_FILE_ATTRIBUTE_DATA attr{};
+            const std::wstring path = std::wstring(local_dir.begin(), local_dir.end()) + L"\\" +
+                                      std::wstring(name, name + std::strlen(name));
+            if (!GetFileAttributesExFromAppW(path.c_str(), GetFileExInfoStandard, &attr)) {
+                continue;
+            }
+            const unsigned long long mib =
+                (static_cast<unsigned long long>(attr.nFileSizeHigh) << 32 | attr.nFileSizeLow) >> 20;
+            const int written = std::snprintf(line + used, sizeof(line) - used, " %s=%llu MiB", name, mib);
+            if (written > 0) {
+                used += size_t(written);
+                if (used >= sizeof(line)) {
+                    used = sizeof(line) - 1;
+                }
+            }
+        }
+        std::printf("UWP caches:%s%s\n", used ? line : " none present yet",
+                    used ? "" : " (first run, or the game has not started)");
+    }
+
     // Flags that change behaviour at run time, printed even when unset, so a log reader does not
     // have to guess which A/B switches were in play.
     // BUILD 1's switches are in here too, so a console run says which of the new tiers was armed:
@@ -1718,6 +1809,147 @@ static void log_run_header(const std::string& local_dir) {
                                                    : "192 (default)",
                 std::getenv("BB_UWP_STORAGE_DIALOG") ? std::getenv("BB_UWP_STORAGE_DIALOG") : "1");
     std::fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------------------------
+// BUILD 3, item 15: the recovery watchdog.
+//
+// The heartbeat (below) reports; this acts. It is a separate thread on purpose - the two runs that
+// ended at the wall both did it with the guest's threads blocked in an allocation, so anything that
+// has to notice "we have been at the limit for seconds" cannot be driven by a frame or a submission.
+//
+// Every check is 1 s, every step has a cooldown (watchdog_policy.h), and every step prints what it
+// released. The order is the plan's: cheap release, then the pager, then visible degradation, then a
+// clean exit that has flushed the saves - never a step that waits without a deadline.
+// ---------------------------------------------------------------------------------------------
+static BbWatchdog::Thresholds g_watchdog{};
+static std::atomic<bool> g_watchdog_ready{false};
+static std::atomic<bool> g_watchdog_ran_exit{false};
+
+/// `[watchdog]`/top-level keys in bbport.ini, read once by the loader before the game starts.
+/// Whole megabytes for the thresholds, milliseconds for the two stall times and the cooldown; every
+/// value is clamped by watchdog_policy.h, and every value it used is printed so a log shows which
+/// numbers were in play.
+static void configure_watchdog_from_ini(const BbIni::Values& ini) {
+    const auto value = [&ini](const char* key) -> const char* {
+        const auto it = ini.find(key);
+        return it == ini.end() ? nullptr : it->second.c_str();
+    };
+    BbWatchdog::Thresholds t;
+    t.enabled = BbIni::Flag(ini, "watchdog", true);
+    t.ladder_bytes = BbWatchdog::ParseMiB(value("watchdog_ladder_mb"), t.ladder_bytes,
+                                          std::uint64_t{64} << 20, std::uint64_t{2048} << 20);
+    t.pager_bytes = BbWatchdog::ParseMiB(value("watchdog_pager_mb"), t.pager_bytes,
+                                         std::uint64_t{64} << 20, std::uint64_t{2048} << 20);
+    t.degrade_bytes = BbWatchdog::ParseMiB(value("watchdog_degrade_mb"), t.degrade_bytes,
+                                           std::uint64_t{32} << 20, std::uint64_t{1024} << 20);
+    t.stuck_degrade_ms = BbWatchdog::ParseMs(value("watchdog_stuck_s"), t.stuck_degrade_ms / 1000,
+                                            1, 60) * 1000;
+    t.stuck_exit_ms = BbWatchdog::ParseMs(value("watchdog_exit_s"), t.stuck_exit_ms / 1000, 2, 120) * 1000;
+    t.cooldown_ms = BbWatchdog::ParseMs(value("watchdog_cooldown_ms"), t.cooldown_ms, 200, 30000);
+    // A degrade threshold above the pager threshold would make the pager step unreachable; the same
+    // for the ladder. Ordering is fixed here rather than silently producing a step that never runs.
+    if (t.degrade_bytes >= t.pager_bytes) {
+        t.degrade_bytes = t.pager_bytes - (std::uint64_t{1} << 20);
+    }
+    if (t.pager_bytes >= t.ladder_bytes) {
+        t.pager_bytes = t.ladder_bytes - (std::uint64_t{1} << 20);
+    }
+    if (t.stuck_degrade_ms >= t.stuck_exit_ms) {
+        t.stuck_degrade_ms = t.stuck_exit_ms / 2;
+    }
+    g_watchdog = t;
+    g_watchdog_ready = true;
+    std::printf("UWP watchdog: %s; ladder %llu MiB, pager %llu MiB, degrade %llu MiB, stuck %llu s "
+                "degrades / %llu s exits, cooldown %llu ms\n",
+                t.enabled ? "on" : "off (watchdog=0)",
+                static_cast<unsigned long long>(t.ladder_bytes >> 20),
+                static_cast<unsigned long long>(t.pager_bytes >> 20),
+                static_cast<unsigned long long>(t.degrade_bytes >> 20),
+                static_cast<unsigned long long>(t.stuck_degrade_ms / 1000),
+                static_cast<unsigned long long>(t.stuck_exit_ms / 1000),
+                static_cast<unsigned long long>(t.cooldown_ms));
+    std::fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------------------------
+// BUILD 3, item 16: the byte cost of each optional feature, and forcing off anything over 50 MiB.
+//
+// A5 already made 720p / upscaler off / frame generation off the console's defaults. What was still
+// missing is the rule the plan asks for on top of that: a feature that is *on* and costs more than
+// 50 MiB of host targets is turned off, and the line says what it would have cost. The number is
+// computed from the feature's own resolution (4 bytes per pixel per target), not guessed.
+//
+// The override goes through the environment because that is how BbSettings::Load applies a forced
+// value (it reads `BB_UPSCALER` / `BB_FRAME_GEN` after the file), so the player's bbport.ini is not
+// rewritten - the intent stays in the file, and `heavy_features_optin=1` in it restores it.
+// ---------------------------------------------------------------------------------------------
+static void enforce_optional_feature_budget(const BbIni::Values& ini) {
+    const auto value = [&ini](const char* key) {
+        const auto it = ini.find(key);
+        return it == ini.end() ? nullptr : it->second.c_str();
+    };
+    const char* output = value("output_res");
+    int width = 1280, height = 720;
+    if (output == nullptr || std::sscanf(output, "%dx%d", &width, &height) != 2 || width <= 0 ||
+        height <= 0) {
+        width = 1280;
+        height = 720;
+        output = "1280x720 (default)";
+    }
+    const double scene_mib = double(width) * double(height) * 4.0 / (1024.0 * 1024.0);
+    const char* upscaler = value("upscaler");
+    const char* frame_gen = value("frame_gen");
+    const bool upscaler_on = upscaler != nullptr && std::strcmp(upscaler, "off") != 0;
+    const bool frame_gen_on = frame_gen != nullptr && std::strcmp(frame_gen, "off") != 0;
+    // What each feature holds: the upscaler needs a history pair and its output at the feature's own
+    // resolution (two more scene targets); frame generation keeps one interpolated frame plus its
+    // history pair per generated frame.
+    const double upscaler_mib = upscaler_on ? scene_mib * 2.0 : 0.0;
+    const double frame_gen_mib = frame_gen_on ? scene_mib * 3.0 : 0.0;
+    const bool opt_in = BbIni::Flag(ini, "heavy_features_optin", false);
+    std::printf("UWP feature budget: output %s -> scene target %.1f MiB; upscaler=%s costs %.1f MiB, "
+                "frame_gen=%s costs %.1f MiB; features over 50 MiB are %s\n",
+                output, scene_mib, upscaler ? upscaler : "off", upscaler_mib,
+                frame_gen ? frame_gen : "off", frame_gen_mib,
+                opt_in ? "kept (heavy_features_optin=1)" : "turned off");
+    if (upscaler_on && upscaler_mib > 50.0 && !opt_in) {
+        set_env_var("BB_UPSCALER", "off");
+        std::printf("UWP feature budget: upscaler %s turned off (%.1f MiB of host targets at %s, "
+                    "over the 50 MiB this port allows by default); heavy_features_optin=1 in "
+                    "bbport.ini keeps it\n",
+                    upscaler, upscaler_mib, output);
+    }
+    if (frame_gen_on && frame_gen_mib > 50.0 && !opt_in) {
+        set_env_var("BB_FRAME_GEN", "off");
+        std::printf("UWP feature budget: frame generation %s turned off (%.1f MiB per generated "
+                    "frame at %s, over the 50 MiB this port allows by default); "
+                    "heavy_features_optin=1 in bbport.ini keeps it\n",
+                    frame_gen, frame_gen_mib, output);
+    }
+    // Item 16's other two evaluations, printed where a run can be read: the frame cap and its
+    // frames-in-flight cost, and the caches on disk. Neither changes behaviour on its own - a 30 fps
+    // cap is the player's `fps_cap=` and the texture cache is measured by the per-minute memory
+    // line's `textures N (M MiB)` with and without `BB_UWP_DOWNSCALE_TEXTURES`.
+    const char* fps_cap = value("fps_cap");
+    std::printf("UWP feature budget: fps_cap=%s (each frame in flight holds a %0.1f MiB scene target "
+                "plus the presenter's images; a 30 cap halves the frames the GPU may queue)\n",
+                fps_cap ? fps_cap : "60 (default)", scene_mib);
+    std::fflush(stdout);
+}
+
+/// One watchdog step. Returns the bytes it released/// One watchdog step. Returns the bytes it released (0 for the visible steps, which free nothing
+/// directly and are measured instead by the usage line the next check prints).
+static std::uint64_t run_watchdog_step(BbWatchdog::Step step, std::uint64_t need) {
+    switch (step) {
+    case BbWatchdog::StepLadder:
+    case BbWatchdog::StepPager:
+    case BbWatchdog::StepDegrade:
+        return bbgpu_uwp_recovery_step(int(step), need);
+    default:
+        break;
+    }
+    return 0;
 }
 
 /// bbport: the per-category memory table (A4) and the Windows side of the picture (B6).
@@ -2097,6 +2329,12 @@ static void run_loader() {
     set_env_var("BB_GPU_USER_DIR", user_str);
     set_env_var("TEMP", temp_str);
     set_env_var("TMP", temp_str);
+    // BUILD 3: the default file is written (and an older one migrated) *before* anything reads it,
+    // so the watchdog thresholds and the heavy-feature opt-in are in force on the first launch that
+    // has them rather than the one after. Both calls are idempotent: the migration is marked with
+    // `settings_rev=3` and does nothing on a second call.
+    ensure_default_ini(ini_path);
+    migrate_ini_defaults(ini_path);
     set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
     // bbport: `swap_disk_mb=` in bbport.ini is the swap budget, the same number as
     // BB_UWP_SWAP_DISK_MB. The pager reads it from the environment at start-up, and caps it to what
@@ -2115,6 +2353,11 @@ static void run_loader() {
                             it->second.c_str());
             }
         }
+        // BUILD 3, item 15: the watchdog's thresholds come from the same file (see
+        // configure_watchdog_from_ini).
+        configure_watchdog_from_ini(ini);
+        // BUILD 3, item 16: the byte cost of each optional feature, and the ones over 50 MiB off.
+        enforce_optional_feature_budget(ini);
     }
 
     // Guest memory contract self-test (cosmo/gow3_xbox). It runs by itself on the first launch
@@ -2199,9 +2442,6 @@ static void run_loader() {
         g_finished = true;
         return;
     }
-
-    ensure_default_ini(ini_path);
-    migrate_ini_defaults(ini_path);
 
     // Read the dump's metadata, pair a base game with a separately dumped update folder and let the
     // player confirm or change that choice before anything is prepared.
@@ -2513,6 +2753,141 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     }
                 }
                 last_presents = presents;
+                std::fflush(stdout);
+            }
+        }).detach();
+
+        // BUILD 3, item 15: the recovery watchdog. Its own thread, a 1 s check, a cooldown per step
+        // (watchdog_policy.h decides which step; bbgpu_uwp_recovery_step runs it) and one log line per
+        // step with what it released. Steps (a) and (b) repeat while the condition holds - each run
+        // may find memory the previous one could not - while (c) and (d) are one-shot escalations.
+        //
+        // It also runs step (a) when the OS changes `AppMemoryUsageLimit` (the console moves it when
+        // another app is suspended or the game leaves the foreground): a limit that fell is a run
+        // that is suddenly over its ceiling, and waiting a full second for the next check is a second
+        // an allocation may not have.
+        std::thread([] {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            while (!g_watchdog_ready.load(std::memory_order_acquire) && !g_finished.load()) {
+                Sleep(100);
+            }
+            const BbWatchdog::Thresholds thresholds = g_watchdog;
+            if (!thresholds.enabled) {
+                return;
+            }
+            BbWatchdog::Step last_step = BbWatchdog::StepNone;
+            std::uint64_t last_step_ms = 0;
+            std::uint64_t last_presents = 0;
+            std::uint64_t stuck_since_ms = 0;
+            std::uint64_t last_limit = 0;
+            while (!g_finished.load()) {
+                Sleep(1000);
+                if (g_finished.load()) {
+                    break;
+                }
+                const std::uint64_t limit = bb_uwp_app_memory_limit();
+                const std::uint64_t usage = bb_uwp_app_memory_usage();
+                // No limit reported: the byte thresholds cannot be evaluated, and inventing one
+                // would degrade a run that is fine. The stall rule still applies.
+                const std::uint64_t headroom =
+                    limit == 0 ? ~std::uint64_t{0} : (usage < limit ? limit - usage : 0);
+                const auto now_ms = static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count());
+                const std::uint64_t presents = bbgpu_uwp_present_count();
+                const bool visible = g_app_visible.load(std::memory_order_relaxed) != 0;
+                if (!visible || presents != last_presents || presents == 0) {
+                    stuck_since_ms = 0;
+                } else if (stuck_since_ms == 0) {
+                    // The first second without a present: the stall starts here, not at the start of
+                    // the run (`.717`'s reports measured from the wrong end).
+                    stuck_since_ms = now_ms;
+                }
+                const std::uint64_t stuck_ms =
+                    stuck_since_ms == 0 ? 0 : now_ms - stuck_since_ms;
+                last_presents = presents;
+
+                BbWatchdog::Step step = BbWatchdog::Decide(headroom, stuck_ms, thresholds);
+                // The limit changed under us: treat it like a crossing, not like the next scheduled
+                // check.
+                bool limit_changed = false;
+                if (last_limit != 0 && limit != last_limit) {
+                    std::printf("UWP watchdog: AppMemoryUsageLimit changed %llu -> %llu MiB, "
+                                "re-checking now\n",
+                                static_cast<unsigned long long>(last_limit >> 20),
+                                static_cast<unsigned long long>(limit >> 20));
+                    std::fflush(stdout);
+                    limit_changed = true;
+                    if (headroom <= thresholds.ladder_bytes) {
+                        step = step == BbWatchdog::StepNone ? BbWatchdog::StepLadder : step;
+                    }
+                }
+                last_limit = limit;
+                if (limit_changed) {
+                    // A limit change is a new situation: do not let the cooldown of the previous
+                    // step hold the first answer to it.
+                    last_step_ms = 0;
+                }
+
+                if (!BbWatchdog::ShouldRun(step, last_step, now_ms, last_step_ms, thresholds)) {
+                    continue;
+                }
+                // What the step is asked for: the distance back to the ladder threshold, not the
+                // whole threshold again - a run 10 MiB under the mark should not make the pager walk
+                // for 400 MiB. At least 32 MiB, because every one of these walks needs a budget to
+                // be worth starting.
+                std::uint64_t need = 0;
+                if (headroom != ~std::uint64_t{0}) {
+                    need = headroom < thresholds.ladder_bytes ? thresholds.ladder_bytes - headroom : 0;
+                    need = std::max<std::uint64_t>(need, std::uint64_t{32} << 20);
+                }
+                if (step == BbWatchdog::StepExit) {
+                    // (d) The run is over: say so once, dump what a stall report would have dumped,
+                    // flush the saves, and close the app the clean way instead of being killed.
+                    if (g_watchdog_ran_exit.exchange(true)) {
+                        continue;
+                    }
+                    std::printf("UWP watchdog: presents stuck for %llu s at %llu/%llu MiB (level=%u): "
+                                "dumping state, flushing saves and exiting cleanly\n",
+                                static_cast<unsigned long long>(stuck_ms / 1000),
+                                static_cast<unsigned long long>(usage >> 20),
+                                static_cast<unsigned long long>(limit >> 20),
+                                unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
+                    std::fflush(stdout);
+                    bb_uwp_breadcrumb("watchdog: exiting after a stall at the memory limit");
+                    runtime_memory_pager_state();
+                    runtime_memory_report();
+                    runtime_file_report();
+                    runtime_savedata_report();
+                    runtime_wait_report();
+                    runtime_sample_threads();
+                    bbgpu_thread_op_dump();
+                    bb_uwp_breadcrumb_dump("watchdog exit");
+                    const int flushed = runtime_files_flush();
+                    std::printf("UWP watchdog: flushed %d open save file(s); exiting\n", flushed);
+                    std::fflush(nullptr);
+                    close_app("watchdog: presents stuck at the app memory limit");
+                }
+                const auto start = std::chrono::steady_clock::now();
+                const std::uint64_t freed = run_watchdog_step(step, need);
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count();
+                last_step = step;
+                last_step_ms = now_ms;
+                std::printf("UWP watchdog: step %s freed %llu MiB in %lld ms (headroom %llu MiB of "
+                            "%llu, usage %llu/%llu MiB, presents %llu, stuck %llu ms)\n",
+                            BbWatchdog::StepName(step),
+                            static_cast<unsigned long long>(freed >> 20),
+                            static_cast<long long>(ms),
+                            static_cast<unsigned long long>(
+                                headroom == ~std::uint64_t{0} ? 0 : headroom >> 20),
+                            static_cast<unsigned long long>(limit >> 20),
+                            static_cast<unsigned long long>(usage >> 20),
+                            static_cast<unsigned long long>(limit >> 20),
+                            static_cast<unsigned long long>(presents),
+                            static_cast<unsigned long long>(stuck_ms));
                 std::fflush(stdout);
             }
         }).detach();
