@@ -3,6 +3,7 @@
 // (Cosmo/uncharted_xbox 5c74fc18 RetireTicks=64 safe deferred arena release).
 
 #include "dense_arena_lifetime.h"
+#include "arena_admission_policy.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <set>
+#include <utility>
 
 namespace VideoCore {
 
@@ -70,12 +72,36 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         }
     } while (expanded);
 
+    const u64 incoming = (last_page - first_page + 1) << arena_page_bits;
+    u64 replaced = 0;
+    for (const Buffer* old : previous) replaced += old->size_bytes;
+    static const bool admission_diagnostics = [] {
+        const char* env = std::getenv("BB_ARENA_ADMISSION");
+        return !env || env[0] != '0';
+    }();
+    static const u64 cap = [] {
+        const char* env = std::getenv("BB_ARENA_LIVE_CAP_MB");
+        const u64 mb = env ? std::strtoull(env, nullptr, 10) : 768;
+        return std::min<u64>(mb, 4096) << 20;
+    }();
+    if (admission_diagnostics &&
+        !BbArenaAdmission::CapFits(arena_backed, replaced, incoming, cap)) {
+        std::printf("UWP arena admission OBSERVE ONLY: live %llu MiB - replaced %llu + new %llu "
+                    "= %llu MiB exceeds live cap %llu MiB; no safe split/skip yet, allocation NOT "
+                    "blocked (transient includes old + full new)\n",
+                    (unsigned long long)(arena_backed >> 20), (unsigned long long)(replaced >> 20),
+                    (unsigned long long)(incoming >> 20),
+                    (unsigned long long)(BbArenaAdmission::ProjectedLive(arena_backed, replaced, incoming) >> 20),
+                    (unsigned long long)(cap >> 20));
+        std::fflush(stdout);
+    }
+    // Construct outside dense_arena_mutex: an allocation failure can ask the retired-arena release
+    // path for memory, and that path takes the same mutex. Holding it here deadlocks recovery.
+    Buffer pending{instance, first_page << arena_page_bits, incoming, MemoryType::DeviceLocal};
     Buffer* arena = nullptr;
     {
         std::scoped_lock lk{dense_arena_mutex};
-        arena = &dense_arenas.emplace_back(instance, first_page << arena_page_bits,
-                                           (last_page - first_page + 1) << arena_page_bits,
-                                           MemoryType::DeviceLocal);
+        arena = &dense_arenas.emplace_back(std::move(pending));
     }
 
     // bbport (BUILD 3, item 13): every overlap merge, with the sizes and the reason.

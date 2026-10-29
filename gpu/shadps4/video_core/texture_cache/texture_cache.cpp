@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <boost/container/small_vector.hpp>
 #include <xxhash.h>
 
@@ -1317,6 +1318,12 @@ void TextureCache::GarbageCollectImages() {
     const u64 minute_tick = gc_tick_at_second[(second - 60) % gc_tick_at_second.size()];
 #endif
     bool evicted_any = false;
+#ifdef BB_UWP
+    static const bool experiment = [] {
+        const char* env = std::getenv("BB_GC_EXPERIMENT");
+        return env && env[0] == '1';
+    }();
+#endif
     {
     std::scoped_lock lock{mutex};
     bool pressured = false;
@@ -1368,18 +1375,19 @@ void TextureCache::GarbageCollectImages() {
         // trip slot_vector.h ValidateIndex, or read whichever image reused it. ReclaimMemoryFor has
         // always applied these checks; this pass did not, which is how a bound render target or a
         // live display surface could be evicted under pressure. Pinned images cost no deletions.
-        {
-            BbGpu::ImagePinState pin;
-            pin.bound = image.binding.is_bound;
-            pin.target = image.binding.is_target;
-            pin.scene_proxy = image.scene_proxy;
-            pin.vo_surface = image.usage.vo_surface;
-            pin.collected = IsImageCollected(image_id);
-            if (!BbGpu::GcMayFreeImage(pin, /*age_allows_free=*/true)) {
-                ++gc_pinned;
-                ++gc_pass.blocked_pinned;
-                return keep(/*tiled_written_back=*/false);
-            }
+        BbGpu::ImagePinState pin;
+        pin.bound = image.binding.is_bound;
+        pin.target = image.binding.is_target;
+        pin.scene_proxy = image.scene_proxy;
+        pin.vo_surface = image.usage.vo_surface;
+        pin.collected = IsImageCollected(image_id);
+#ifdef BB_UWP
+        pin.external = IsExternalImagePinned(image_id, image.image_uid);
+#endif
+        if (!BbGpu::GcMayFreeImage(pin, /*age_allows_free=*/true)) {
+            ++gc_pinned;
+            ++gc_pass.blocked_pinned;
+            return keep(/*tiled_written_back=*/false);
         }
         // bbport: depth/stencil targets and shadow maps are GPU-only - the guest never reads them
         // back, so they hold nothing that has to be written out, and being tiled they could not be
@@ -1402,14 +1410,31 @@ void TextureCache::GarbageCollectImages() {
         }();
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
-        if (depth_reclaim && image.info.props.is_depth && (pressured || aggresive)) {
+#ifdef BB_UWP
+        const bool stale = minute_tick != 0 && image.lru_touched_tick < minute_tick;
+        const bool experiment_drop = image.backing && BbGpu::GcMayExperimentDrop(
+            pin, experiment, aggresive, tiled, download, stale);
+        // UWP's unwritten GPU depth discard is part of the opt-in experiment, not a default.
+        const bool depth_allowed = depth_reclaim && experiment_drop;
+#else
+        const bool depth_allowed = depth_reclaim && (pressured || aggresive);
+#endif
+        if (depth_allowed && image.info.props.is_depth) {
             --num_deletions;
             ++gc_depth;
             ++gc_pass.depth_reclaimed;
             ++gc_pass.freed;
             gc_pass.freed_bytes += image.info.guest_size;
+#ifdef BB_UWP
+            ++gc_pass.experiment_count;
+            gc_pass.experiment_host_bytes += image.GetHostImageSize();
+#endif
             evicted_any = true;
+#ifdef BB_UWP
+            FreeImage(image_id, "experiment-depth");
+#else
             FreeImage(image_id, "depth-reclaim");
+#endif
             return false;
         }
         // bbport: images that cannot go now (GPU-written: their contents exist only here, and
@@ -1429,8 +1454,13 @@ void TextureCache::GarbageCollectImages() {
             const char* env = std::getenv("BB_GC_DROP_OLD");
             return env && env[0] == '1';
         }();
+#ifdef BB_UWP
+        const bool drop = experiment_drop || (drop_old && tiled && download && aggresive &&
+                                               minute_tick != 0 && image.lru_touched_tick < minute_tick);
+#else
         const bool drop = drop_old && tiled && download && aggresive &&
                           image.lru_touched_tick < minute_tick;
+#endif
         // bbport (BUILD 2, items 8-11): one decision point, with its reason, instead of four
         // branches that each returned early and only one of which was ever counted.
         //
@@ -1445,7 +1475,13 @@ void TextureCache::GarbageCollectImages() {
         // Nothing except an actual free spends a deletion, so a cache whose oldest entries are all
         // retained can no longer stop the collector for the session.
         BbGpu::GcCandidateState candidate;
+        // Dropped candidates do not consume the synchronous write-back budget: no write-back is
+        // performed. The candidate-specific `drop` still requires every pin/age/pressure check.
+#ifdef BB_UWP
+        candidate.gpu_written = download && !drop;
+#else
         candidate.gpu_written = download;
+#endif
         candidate.tiled = tiled;
         candidate.writebacks_done = unsigned(gc_pass.written_back);
         // Below the pressure mark a GPU-written image that would have to be copied out is left
@@ -1511,7 +1547,16 @@ void TextureCache::GarbageCollectImages() {
         ++gc_pass.freed;
         gc_pass.freed_bytes += image.info.guest_size;
         evicted_any = true;
-        FreeImage(image_id, "eviction");
+#ifdef BB_UWP
+        if (experiment_drop) {
+            ++gc_pass.experiment_count;
+            gc_pass.experiment_host_bytes += image.GetHostImageSize();
+            FreeImage(image_id, "experiment-tiled");
+        } else
+#endif
+        {
+            FreeImage(image_id, "eviction");
+        }
         if (total_used_memory < critical_gc_memory) {
             if (aggresive) {
                 num_deletions >>= 2;
@@ -1575,6 +1620,15 @@ void TextureCache::GarbageCollectImages() {
             std::fflush(stdout);
         }
     }
+#ifdef BB_UWP
+    if (experiment) {
+        std::printf("UWP texture experiment: %llu unpinned stale tiled image(s) scheduled; "
+                    "%llu KiB of actual host allocations (deferred release, GPU contents discarded)\n",
+                    (unsigned long long)gc_pass.experiment_count,
+                    (unsigned long long)(gc_pass.experiment_host_bytes >> 10));
+        std::fflush(stdout);
+    }
+#endif
     gc_last_freed = gc_pass.freed_bytes;
     ++gc_passes;
     if (gc_pass.examined != 0 && gc_pass.freed == 0) {
@@ -1822,6 +1876,9 @@ u64 TextureCache::ReclaimMemoryForUnused(VAddr addr, size_t size, u64 bytes, u32
         }
         if (image.scene_proxy || image.usage.vo_surface || image.binding.is_bound ||
             image.binding.is_target || image.allocation_failed || IsImageCollected(image_id) ||
+#ifdef BB_UWP
+            IsExternalImagePinned(image_id, image.image_uid) ||
+#endif
             image.Overlaps(addr, size)) {
             ++reclaim_stats.held;
             return false;
@@ -1905,7 +1962,20 @@ void TextureCache::DeleteImage(ImageId image_id, bool now, const char* reason) {
         });
         return;
     }
+#ifdef BB_UWP
+    const bool experimental = reason && std::strncmp(reason, "experiment-", 11) == 0;
+    const u64 experiment_bytes = experimental && image.backing ? image.GetHostImageSize() : 0;
+    scheduler.DeferOperation([this, image_id, reason, experimental, experiment_bytes] {
+        EraseImage(image_id, reason);
+        if (experimental) {
+            std::printf("UWP texture experiment: released %llu KiB host allocation after GPU fence "
+                        "(OS usage may differ)\n", (unsigned long long)(experiment_bytes >> 10));
+            std::fflush(stdout);
+        }
+    });
+#else
     scheduler.DeferOperation([this, image_id, reason] { EraseImage(image_id, reason); });
+#endif
 }
 
 void TextureCache::EraseImage(ImageId image_id, const char* reason) {

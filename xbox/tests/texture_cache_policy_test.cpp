@@ -38,6 +38,7 @@ struct FakeSlot {
     unsigned long long uid = 0;
     bool bound = false, target = false, scene_proxy = false, vo_surface = false;
     bool collected = false; ///< the draw being recorded already resolved this id
+    bool external = false;
 
     BbGpu::ImagePinState Pin() const {
         BbGpu::ImagePinState pin;
@@ -46,6 +47,7 @@ struct FakeSlot {
         pin.scene_proxy = scene_proxy;
         pin.vo_surface = vo_surface;
         pin.collected = collected;
+        pin.external = external;
         return pin;
     }
 };
@@ -76,8 +78,8 @@ void TestEachPinFlagHoldsTheImage() {
     // One flag at a time: each on its own must stop the collector. These are exactly the checks
     // ReclaimMemoryFor applies, which the GC pass was missing.
     const char* names[] = {"bound", "render target", "scene proxy", "video-out surface",
-                           "collected by the draw"};
-    for (int i = 0; i < 5; ++i) {
+                           "collected by the draw", "stored external id/uid"};
+    for (int i = 0; i < 6; ++i) {
         FakeSlot slot;
         slot.allocated = true;
         slot.uid = 11;
@@ -87,11 +89,28 @@ void TestEachPinFlagHoldsTheImage() {
         case 2: slot.scene_proxy = true; break;
         case 3: slot.vo_surface = true; break;
         case 4: slot.collected = true; break;
+        case 5: slot.external = true; break;
         }
         Check(BbGpu::ImagePinned(slot.Pin()), std::string("a live ") + names[i] + " pins the image");
         Check(!BbGpu::GcMayFreeImage(slot.Pin(), true),
               std::string("the collector keeps a ") + names[i]);
     }
+}
+
+void TestExperimentalDiscard() {
+    BbGpu::ImagePinState pin;
+    using BbGpu::GcMayExperimentDrop;
+    Check(GcMayExperimentDrop(pin, true, true, true, true, true),
+          "opt-in critical stale tiled candidate can be considered");
+    Check(!GcMayExperimentDrop(pin, false, true, true, true, true), "experiment is opt-in");
+    Check(!GcMayExperimentDrop(pin, true, false, true, true, true), "not under critical pressure");
+    Check(!GcMayExperimentDrop(pin, true, true, false, true, true), "not tiled");
+    Check(!GcMayExperimentDrop(pin, true, true, true, false, true), "not GPU-written");
+    Check(!GcMayExperimentDrop(pin, true, true, true, true, false), "not old enough");
+    pin.external = true;
+    Check(!GcMayExperimentDrop(pin, true, true, true, true, true), "external id/uid stays pinned");
+    pin.external = false; pin.collected = true;
+    Check(!GcMayExperimentDrop(pin, true, true, true, true, true), "collected id stays pinned");
 }
 
 void TestCollectedIdsAreHeld() {
@@ -354,6 +373,7 @@ void TestPassAccounting() {
 int main() {
     TestUnpinnedImageCanGo();
     TestEachPinFlagHoldsTheImage();
+    TestExperimentalDiscard();
     TestCollectedIdsAreHeld();
     TestPinCombinations();
     TestPinnedImageDoesNotConsumeDeletions();

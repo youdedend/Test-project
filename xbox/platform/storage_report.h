@@ -24,11 +24,25 @@
 
 namespace BbStorage {
 
+enum class VolumeKind { Unknown, Fixed, Removable, Other };
+// A fixed drive can still be an external USB hard disk; media type alone does not prove the bus.
+enum class VolumeBus { Unknown, NonUsb, UsbOrRemovable };
+
 struct Volume {
     char letter = 0;          ///< 'Q', 'D', ...
     std::uint64_t total = 0;  ///< bytes, 0 when the query failed
     std::uint64_t free = 0;
     bool writable = false;    ///< a 64 KiB probe file was created and removed here
+    VolumeKind kind = VolumeKind::Unknown; ///< unknown is NOT considered safe for automatic swap
+    VolumeBus bus = VolumeBus::Unknown;   ///< unknown/USB must not be chosen automatically
+};
+
+struct SwapChoice {
+    std::string path;
+    std::string source;  ///< environment, ini, automatic, or LocalState fallback
+    char letter = 0;
+    std::uint64_t free = 0;
+    bool local = true;
 };
 
 struct FolderSize {
@@ -73,6 +87,33 @@ inline const Volume* BestWritable(const std::vector<Volume>& volumes, char skip)
     }
     return best;
 }
+
+/// Automatic swap placement: only an independently probed writable FIXED volume may beat
+/// LocalState. DRIVE_FIXED alone does not rule out a USB HDD: require a confirmed non-USB bus too;
+/// unknown/removable/remote devices are rejected.
+/// D wins a tie, otherwise the one with most free bytes wins. Below the reserve it is unusable.
+inline const Volume* BestSwapVolume(const std::vector<Volume>& volumes, char local,
+                                     std::uint64_t reserve) {
+    const Volume* best = nullptr;
+    for (const Volume& volume : volumes) {
+        if (!volume.writable || volume.letter == local || volume.kind != VolumeKind::Fixed ||
+            volume.bus != VolumeBus::NonUsb || volume.free <= reserve) continue;
+        if (!best || volume.free > best->free ||
+            (volume.free == best->free && volume.letter == 'D' && best->letter != 'D')) {
+            best = &volume;
+        }
+    }
+    return best;
+}
+
+/// Select a location (including strict removable-drive and existing-file checks). The caller applies
+/// env/ini precedence and provides the maximum free-space reserve. No file is overwritten.
+SwapChoice ChooseSwap(const std::string& local_dir, const std::string& requested_path,
+                      const char* requested_source, bool auto_select, std::uint64_t reserve);
+
+/// An opt-in 64 MiB temporary-file throughput test on the selected volume. Logs actual write/read
+/// timings or why it could not safely run. The file uses CREATE_NEW + DELETE_ON_CLOSE.
+void TestSwapSpeed(const SwapChoice& choice, std::uint64_t reserve, bool enabled);
 
 /// Size of every immediate child of `root`, files counted through the whole subtree.
 /// `cap` bounds the number of entries examined, and a folder that hits it is marked `truncated` so a
@@ -136,9 +177,8 @@ std::uint64_t LocalStateFreeBytes();
 inline std::string WarningText() {
     return std::string("Low storage: the volume holding the game's data has less than ") +
            FormatBytes(kLowStorageBytes) +
-           " free. The memory pager is capped to the space that is left, so the game can stall at "
-           "the console's memory limit with memory it cannot page out. Free space on that volume "
-           "(old logs, captures, other games) before playing.";
+           " free. Saves and caches also need that space even if swap is on another volume. "
+           "Free space on that volume (old logs, captures, other games) before playing.";
 }
 
 } // namespace BbStorage

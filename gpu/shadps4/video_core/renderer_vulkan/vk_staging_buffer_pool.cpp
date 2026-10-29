@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 
 #include "common/alignment.h"
@@ -185,6 +186,8 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
+    const bool requested = trim_requested.exchange(false, std::memory_order_relaxed);
+    const u64 before_requested = requested ? ResidentBytes() : 0;
     // cosmo/gow3_xbox vk_staging_buffer_pool.cpp: no urgent pass. Trimming the rings down to one
     // idle frame under memory pressure destroyed blocks that commands recorded a frame or two
     // earlier still referenced (DrawPipe / BbCopy use-after-free) and re-created blocks the kernel
@@ -197,6 +200,12 @@ void StagingBufferPool::TickFrame() {
     }
     for (auto& cache : large_caches) {
         TrimLarge(cache);
+    }
+    if (requested) {
+        const u64 after = ResidentBytes();
+        std::printf("UWP recovery: deferred staging trim freed %llu MiB on renderer thread\n",
+                    static_cast<unsigned long long>((before_requested > after ? before_requested - after : 0) >> 20));
+        std::fflush(stdout);
     }
     PublishStats();
 }

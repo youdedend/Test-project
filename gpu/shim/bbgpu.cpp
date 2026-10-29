@@ -601,8 +601,10 @@ extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need) {
         freed += arena_freed;
         // Then staging: the same idle rule as the per-frame trim, run now because a stalled
         // presenter means the per-frame trim is not running at all.
-        const uint64_t staging_freed = r->GetRuntime().GetStagingPool().TrimIdle();
-        freed += staging_freed;
+        // Staging's vectors are renderer-owned. Request its normal idle trim there rather than
+        // mutating them from the watchdog worker while a producer holds a StagingBufferRef.
+        r->GetRuntime().GetStagingPool().RequestIdleTrim();
+        const uint64_t staging_freed = 0; // actual bytes are logged on the next renderer TickFrame
         // Then images. `need` is what the caller wants back; when it is 0 the texture cache is asked
         // for whatever it can take, which is the cheap end of the same walk.
         // A step the watchdog runs with no specific need still has to ask the walk for a budget:
@@ -665,6 +667,31 @@ extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need) {
                     BbSettings::PresetName(std::clamp(preset + 1, 0, BbSettings::PresetCount - 1)));
         std::fflush(stdout);
         bb_uwp_breadcrumb("recovery: degraded");
+        return 0;
+    }
+    if (step == 4) {
+        // Request a lower proxy resolution. Native guest render targets are retained by
+        // SceneTargets and the change is applied at a frame boundary; do NOT claim hypothetical
+        // byte savings until actual allocations/usage are observed on the console.
+        auto& settings = BbSettings::Get();
+        const int before = std::clamp(settings.xbox_scene_res.load(std::memory_order_relaxed), 0,
+                                      BbSettings::XboxSceneCount - 1);
+        const int old_output = std::clamp(settings.output_res.load(std::memory_order_relaxed), 0,
+                                          BbSettings::OutputCount - 1);
+        settings.xbox_scene_res.store(BbSettings::XboxScene360p, std::memory_order_relaxed);
+        settings.output_res.store(BbSettings::OutputDefault, std::memory_order_relaxed);
+        const char* fixed = std::getenv("BB_RENDER_RES");
+        std::printf("UWP recovery: requested scene %dx%d -> %dx%d, output %dx%d -> %dx%d; "
+                    "actual target release pending a rendered frame%s\n",
+                    BbSettings::XboxSceneWidths[before], BbSettings::XboxSceneHeights[before],
+                    BbSettings::XboxSceneWidths[BbSettings::XboxScene360p],
+                    BbSettings::XboxSceneHeights[BbSettings::XboxScene360p],
+                    BbSettings::OutputWidths[old_output], BbSettings::OutputHeights[old_output],
+                    BbSettings::OutputWidths[BbSettings::OutputDefault],
+                    BbSettings::OutputHeights[BbSettings::OutputDefault],
+                    fixed && *fixed ? "; startup-patched BB_RENDER_RES overrides live scene setting" : "");
+        std::fflush(stdout);
+        bb_uwp_breadcrumb("recovery: lower scene resolution requested");
         return 0;
     }
     return 0;

@@ -50,9 +50,9 @@ void TestStepOrder() {
           "between pager and degrade: the pager sweeps, not the release");
     Check(BbWatchdog::Decide(150 * MiB, 0, t) == BbWatchdog::StepDegrade,
           "at the degrade threshold: features go off");
-    Check(BbWatchdog::Decide(1 * MiB, 0, t) == BbWatchdog::StepDegrade,
-          "at the limit with presents moving: still degrade, never exit on arithmetic alone");
-    Check(BbWatchdog::Decide(0, 0, t) == BbWatchdog::StepDegrade,
+    Check(BbWatchdog::Decide(1 * MiB, 0, t) == BbWatchdog::StepReduce,
+          "at the limit with presents moving: reduce, never exit on arithmetic alone");
+    Check(BbWatchdog::Decide(0, 0, t) == BbWatchdog::StepReduce,
           "a limit of zero headroom is not an exit");
 
     // A stall escalates on its own, whatever the headroom says.
@@ -66,16 +66,41 @@ void TestStepOrder() {
           "one millisecond short of the stall threshold does not exit");
 }
 
+void TestFastTickAndSkippedRungs() {
+    using namespace BbWatchdog;
+    Thresholds t;
+    Check(TickMs(600 * MiB, t) == 250 && TickMs(600 * MiB + 1, t) == 1000,
+          "250 ms inside 600 MiB, 1 s outside");
+    t.fast_enabled = false;
+    Check(TickMs(1, t) == 1000, "fast tick has an independent off switch");
+    Check(Decide(96 * MiB, 3000, t) == StepReduce,
+          "a stall cannot mask the stronger low-memory step");
+    t.reduce_enabled = false;
+    Check(Decide(1 * MiB, 0, t) == StepDegrade, "reduce has an independent off switch");
+    Step steps[4]{};
+    Check(NextSteps(StepReduce, StepNone, steps, 4) == 4 &&
+          steps[0] == StepLadder && steps[1] == StepPager &&
+          steps[2] == StepDegrade && steps[3] == StepReduce,
+          "a rapid burst queues all four steps in order");
+    Check(NextSteps(StepReduce, StepPager, steps, 4) == 2 &&
+          steps[0] == StepDegrade && steps[1] == StepReduce,
+          "already scheduled steps are not scheduled again");
+    Check(NextSteps(StepReduce, StepNone, steps, 2) == 2 &&
+          steps[0] == StepLadder && steps[1] == StepPager,
+          "a small queue returns a bounded prefix for the next tick");
+    Check(ShouldRun(StepPager, StepLadder, 10001, 10000, t),
+          "escalation from release to pager bypasses cooldown");
+}
+
 void TestDisabledAndUnknownLimit() {
     BbWatchdog::Thresholds t;
     t.enabled = false;
     Check(BbWatchdog::Decide(0, 60000, t) == BbWatchdog::StepNone,
           "watchdog=0 disables every step, including the exit");
-    // The caller passes headroom 0 when the console reports no limit; that must not read as "no
-    // memory left". The pager step is the cheapest thing that cannot hurt, so it is what remains.
+    // An unknown limit is represented by UINT64_MAX headroom by the caller.
     BbWatchdog::Thresholds live;
-    Check(BbWatchdog::Decide(0, 0, live) != BbWatchdog::StepExit,
-          "an unknown limit never exits the app");
+    Check(BbWatchdog::Decide(~0ull, 0, live) == BbWatchdog::StepNone,
+          "an unknown limit does not trigger memory thresholds");
 }
 
 void TestCooldown() {
@@ -146,6 +171,7 @@ void TestThresholdsFromIni() {
 int main() {
     TestThresholdsAreBytes();
     TestStepOrder();
+    TestFastTickAndSkippedRungs();
     TestDisabledAndUnknownLimit();
     TestCooldown();
     TestShouldRun();

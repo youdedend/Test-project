@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -59,6 +60,10 @@ public:
     /// next frame, which is what matters when no frame is being presented.
     [[nodiscard]] u64 TrimIdle();
 
+    /// Called from the watchdog thread. Actual trimming is performed by TickFrame on the
+    /// renderer thread; the ring vectors and outstanding refs are not safe to mutate off-thread.
+    void RequestIdleTrim() noexcept { trim_requested.store(true, std::memory_order_relaxed); }
+
 private:
     struct Block {
         std::unique_ptr<VideoCore::StreamBuffer> buffer;
@@ -99,6 +104,7 @@ private:
     u64 keep_vram_blocks = 0; ///< bbport: the same for the VRAM ring (DeviceLocal)
     std::array<std::vector<LargeBuffer>, NUM_TYPES> large_caches;
     u64 frame = 0;
+    std::atomic<bool> trim_requested{false};
 };
 
 } // namespace Vulkan

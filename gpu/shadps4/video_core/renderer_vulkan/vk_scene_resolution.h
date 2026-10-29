@@ -104,6 +104,9 @@ private:
     bool copying = false;
     bool force_stencil_bits = false; ///< test the portable resampler on any driver
     u64 generation = 0;
+#ifdef BB_UWP
+    u64 diagnostic_proxy_bytes = 0, diagnostic_created = 0;
+#endif
     mutable std::unordered_map<vk::Format, vk::FormatFeatureFlags> format_features;
     mutable std::array<vk::FormatFeatureFlags, 256> format_table{};
     mutable std::array<bool, 256> format_known{};

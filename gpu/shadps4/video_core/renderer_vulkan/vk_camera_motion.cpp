@@ -150,7 +150,11 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
     std::printf("GPU: camera motion debug overlay on\n");
 }
 
-CameraMotion::~CameraMotion() = default;
+CameraMotion::~CameraMotion() {
+#ifdef BB_UWP
+    texture_cache.SetExternalImagePin(VideoCore::TextureCache::CameraDepthPin, {});
+#endif
+}
 
 bool CameraMotion::WorldCamera(std::array<float,12>& inverse_view) const noexcept {
     if(!current.valid) return false;
@@ -321,7 +325,14 @@ void CameraMotion::OnConstants(const float* data) {
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
+#ifdef BB_UWP
+    if (depth_id != depth || !depth_uid) {
+        depth_uid = texture_cache.SetExternalImagePin(VideoCore::TextureCache::CameraDepthPin, depth);
+    }
+    depth_id = depth_uid ? depth : VideoCore::ImageId{};
+#else
     depth_id = depth;
+#endif
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
@@ -331,13 +342,21 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
     if (!frame_has_camera) InvalidateHistory();
     frame_has_camera = false;
     depth_id = {};
+#ifdef BB_UWP
+    depth_uid = 0;
+    texture_cache.SetExternalImagePin(VideoCore::TextureCache::CameraDepthPin, {});
+#endif
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {
     // bbport: depth_id and frame are ids from the G-buffer/display passes; the texture cache can
     // have freed either before this runs. SlotId has no generation, so index only what is live
     // (TryGetImage with uid 0 is a liveness check) instead of tripping slot_vector.h ValidateIndex.
+#ifdef BB_UWP
+    auto* depth_image = texture_cache.TryGetImageTouched(depth_id, depth_uid);
+#else
     auto* depth_image = texture_cache.TryGetImageTouched(depth_id, 0);
+#endif
     auto* color_image = texture_cache.TryGetImageTouched(frame, 0);
     if (depth_image == nullptr || color_image == nullptr) {
         depth_id = {};

@@ -24,6 +24,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -126,6 +129,11 @@ void runtime_memory_resident_breakdown(uint64_t* out, size_t count);
 static std::atomic<bool> g_finished{false};
 /// bbport: set by the storage report when the LocalState volume has less than the headroom this port
 /// wants. Read by the telemetry loop (one line the first time it goes low) and by the visible warning.
+// Launch-time cache state and optional continuous memory curve (item 7).
+// 0 unknown/off, 1 cold, 2 warm, 3 mixed. Set before starting the game.
+static std::atomic<std::uint64_t> g_run_start_tick{0};
+static std::atomic<int> g_cache_run_class{0};
+static std::atomic<bool> g_cache_curve_enabled{false};
 static std::atomic<bool> g_storage_low{false};
 static std::atomic<bool> g_storage_low_shown{false};
 static std::atomic<bool> g_game_mode{false};
@@ -815,6 +823,21 @@ static void ensure_default_ini(const std::string& ini_path) {
         "# heavy_features_optin=1 keeps an optional feature whose host targets cost more than 50 MiB.\n"
         "heavy_features_optin=0\n"
         "settings_rev=3\n"
+        "\n"
+        "# Per-feature memory experiments (0 disables; swap_file=auto selects a fixed drive).\n"
+        "swap_auto=1\n"
+        "swap_file=auto\n"
+        "swap_speed_test=1\n"
+        "swap_pool_decommit=1\n"
+        "arena_admission=1\n"
+        "arena_live_cap_mb=768\n"
+        "watchdog_fast=1\n"
+        "watchdog_reduce=1\n"
+        "watchdog_reduce_mb=96\n"
+        "watchdog_fast_tick_mb=600\n"
+        "texture_reclaim_experiment=0\n"
+        "resolution_diagnostics=1\n"
+        "cache_run_diagnostics=1\n"
         "\n"
         "[dump]\n"
         "# Empty patch_path auto-detects the update folder next to the game folder.\n"
@@ -1701,7 +1724,7 @@ static int run_memory_selftest() {
 /// The package version comes from the manifest (Package::Current), so it is the version the console
 /// installed even though the old build's first line did not print one. Commit and branch are baked
 /// in by the build (BB_BUILD_COMMIT / BB_BUILD_BRANCH, xbox/CMakeLists.txt + the workflow).
-static void log_run_header(const std::string& local_dir) {
+static void log_run_header(const std::string& local_dir, const BbStorage::SwapChoice& swap_choice) {
     unsigned major = 0, minor = 0, build = 0, revision = 0;
     try {
         const auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
@@ -1760,34 +1783,68 @@ static void log_run_header(const std::string& local_dir) {
                 (std::strcmp(upscaler, "off") == 0) ? 0.0 : scene_mib * 2.0, frame_gen,
                 (std::strcmp(frame_gen, "off") == 0) ? 0.0 : scene_mib);
 
-    // BUILD 3, item 16: the caches on disk, with their sizes, so "shrink an over-provisioned cache"
-    // is a decision on numbers. driver.vkcache is the Vulkan pipeline cache (the compiled shaders the
-    // driver hands back); the two .bin files are this port's prepared-resource/shader caches. Read
-    // before the game starts, so the size is what the previous run left behind.
-    {
-        const char* names[] = {"driver.vkcache", "prepared.bin", "shaders.bin"};
-        char line[256] = {};
-        size_t used = 0;
-        for (const char* name : names) {
-            WIN32_FILE_ATTRIBUTE_DATA attr{};
-            const std::wstring path = std::wstring(local_dir.begin(), local_dir.end()) + L"\\" +
-                                      std::wstring(name, name + std::strlen(name));
-            if (!GetFileAttributesExFromAppW(path.c_str(), GetFileExInfoStandard, &attr)) {
-                continue;
-            }
-            const unsigned long long mib =
-                (static_cast<unsigned long long>(attr.nFileSizeHigh) << 32 | attr.nFileSizeLow) >> 20;
-            const int written = std::snprintf(line + used, sizeof(line) - used, " %s=%llu MiB", name, mib);
-            if (written > 0) {
-                used += size_t(written);
-                if (used >= sizeof(line)) {
-                    used = sizeof(line) - 1;
-                }
-            }
-        }
-        std::printf("UWP caches:%s%s\n", used ? line : " none present yet",
-                    used ? "" : " (first run, or the game has not started)");
+    // Record actual launch-time paths BEFORE creating Prepared or importing caches. An existing
+    // directory alone is not proof of cached shaders: report existence, file count and bytes.
+    if (BbIni::Flag(ini, "cache_run_diagnostics", true)) {
+        const std::filesystem::path root{winrt::to_hstring(local_dir).c_str()};
+        const auto prepared = root / L"Prepared";
+        const auto portable = root / L"shader_cache";
+        const auto driver = root / L"user" / L"cache";
+        std::error_code ec;
+        const bool prep_dir = std::filesystem::is_directory(prepared, ec); ec.clear();
+        const bool prep_boot = std::filesystem::is_regular_file(prepared / L"boot-linked.bin", ec); ec.clear();
+        const bool shader_dir = std::filesystem::is_directory(portable, ec); ec.clear();
+        const bool driver_dir = std::filesystem::is_directory(driver, ec); ec.clear();
+        BbStorage::FolderSize shader_total, driver_total;
+        (void)BbStorage::WalkFolders(portable, shader_total, 10000);
+        (void)BbStorage::WalkFolders(driver, driver_total, 10000);
+        const bool shaders_warm = shader_total.files != 0 || driver_total.files != 0;
+        const int run_class = prep_boot && shaders_warm ? 2 : (!prep_boot && !shaders_warm ? 1 : 3);
+        g_cache_run_class.store(run_class, std::memory_order_release);
+        g_cache_curve_enabled.store(true, std::memory_order_release);
+        std::printf("UWP cache launch: Prepared=%s boot-linked.bin=%s; shader_cache=%s "
+                    "(%llu files, %llu MiB%s); user/cache=%s (%llu files, %llu MiB%s); run=%s\n",
+                    prep_dir ? "exists" : "absent", prep_boot ? "exists" : "absent",
+                    shader_dir ? "exists" : "absent",
+                    static_cast<unsigned long long>(shader_total.files),
+                    static_cast<unsigned long long>(shader_total.bytes >> 20),
+                    shader_total.truncated ? ", lower bound" : "",
+                    driver_dir ? "exists" : "absent",
+                    static_cast<unsigned long long>(driver_total.files),
+                    static_cast<unsigned long long>(driver_total.bytes >> 20),
+                    driver_total.truncated ? ", lower bound" : "",
+                    run_class == 2 ? "warm" : run_class == 1 ? "cold" : "mixed");
+    } else {
+        std::puts("UWP cache launch: diagnostics off (cache_run_diagnostics=0)");
     }
+
+    const auto effective = [](const char* name, const char* fallback) {
+        const char* value = std::getenv(name);
+        return value && *value ? value : fallback;
+    };
+    std::printf("UWP memory plan switches: swap_auto=%s swap_speed_test=%s swap_pool_decommit=%s "
+                "arena_admission=%s watchdog=%s watchdog_fast=%s watchdog_reduce=%s "
+                "texture_reclaim_experiment=%s resolution_diagnostics=%s cache_run_diagnostics=%s\n",
+                setting("swap_auto", "1"), setting("swap_speed_test", "1"),
+                effective("BB_UWP_POOL_DECOMMIT", "1"), effective("BB_ARENA_ADMISSION", "1"),
+                setting("watchdog", "1"), setting("watchdog_fast", "1"),
+                setting("watchdog_reduce", "1"), effective("BB_GC_EXPERIMENT", "0"),
+                effective("BB_RESOLUTION_DIAGNOSTICS", "1"), setting("cache_run_diagnostics", "1"));
+    std::printf("UWP texture switches: legacy BB_GC_DROP_OLD=%s, BB_GC_DEPTH_RECLAIM=%s\n",
+                effective("BB_GC_DROP_OLD", "0"), effective("BB_GC_DEPTH_RECLAIM", "1 (gated by experiment on UWP)"));
+    std::printf("UWP arena admission: %s; 250 MiB reserve and %s MiB live cap are OBSERVATION ONLY, "
+                "not enforced\n", std::strcmp(effective("BB_ARENA_ADMISSION", "1"), "0") == 0 ? "off" : "on",
+                effective("BB_ARENA_LIVE_CAP_MB", "768"));
+    if (std::strcmp(effective("BB_GC_EXPERIMENT", "0"), "1") == 0) {
+        std::puts("UWP texture experiment: ON; stale GPU-written contents are discarded without "
+                  "tiled write-back and may be needed later. Hardware verification required.");
+    }
+    std::printf("UWP swap selection: %c: free=%llu MiB path=%s source=%s "
+                "requested_budget=%s MiB reserve=%s MiB (actual cap after open)\n",
+                swap_choice.letter ? swap_choice.letter : '?',
+                static_cast<unsigned long long>(swap_choice.free >> 20), swap_choice.path.c_str(),
+                swap_choice.source.c_str(), effective("BB_UWP_SWAP_DISK_MB", "2048"),
+                effective("BB_UWP_SWAP_RESERVE_MB", "384"));
 
     // Flags that change behaviour at run time, printed even when unset, so a log reader does not
     // have to guess which A/B switches were in play.
@@ -1837,35 +1894,46 @@ static void configure_watchdog_from_ini(const BbIni::Values& ini) {
     };
     BbWatchdog::Thresholds t;
     t.enabled = BbIni::Flag(ini, "watchdog", true);
+    t.fast_enabled = BbIni::Flag(ini, "watchdog_fast", true);
+    t.reduce_enabled = BbIni::Flag(ini, "watchdog_reduce", true);
     t.ladder_bytes = BbWatchdog::ParseMiB(value("watchdog_ladder_mb"), t.ladder_bytes,
                                           std::uint64_t{64} << 20, std::uint64_t{2048} << 20);
     t.pager_bytes = BbWatchdog::ParseMiB(value("watchdog_pager_mb"), t.pager_bytes,
                                          std::uint64_t{64} << 20, std::uint64_t{2048} << 20);
     t.degrade_bytes = BbWatchdog::ParseMiB(value("watchdog_degrade_mb"), t.degrade_bytes,
                                            std::uint64_t{32} << 20, std::uint64_t{1024} << 20);
+    t.reduce_bytes = BbWatchdog::ParseMiB(value("watchdog_reduce_mb"), t.reduce_bytes,
+                                          std::uint64_t{32} << 20, std::uint64_t{1024} << 20);
+    t.fast_tick_bytes = BbWatchdog::ParseMiB(value("watchdog_fast_tick_mb"), t.fast_tick_bytes,
+                                             std::uint64_t{64} << 20, std::uint64_t{2048} << 20);
     t.stuck_degrade_ms = BbWatchdog::ParseMs(value("watchdog_stuck_s"), t.stuck_degrade_ms / 1000,
                                             1, 60) * 1000;
     t.stuck_exit_ms = BbWatchdog::ParseMs(value("watchdog_exit_s"), t.stuck_exit_ms / 1000, 2, 120) * 1000;
     t.cooldown_ms = BbWatchdog::ParseMs(value("watchdog_cooldown_ms"), t.cooldown_ms, 200, 30000);
-    // A degrade threshold above the pager threshold would make the pager step unreachable; the same
-    // for the ladder. Ordering is fixed here rather than silently producing a step that never runs.
-    if (t.degrade_bytes >= t.pager_bytes) {
-        t.degrade_bytes = t.pager_bytes - (std::uint64_t{1} << 20);
-    }
-    if (t.pager_bytes >= t.ladder_bytes) {
-        t.pager_bytes = t.ladder_bytes - (std::uint64_t{1} << 20);
-    }
+    // Clamp from the largest threshold down: no inverted pair may make a rung unreachable.
+    constexpr std::uint64_t one_mib = std::uint64_t{1} << 20;
+    t.pager_bytes = std::min(t.pager_bytes, t.ladder_bytes - one_mib);
+    t.degrade_bytes = std::min(t.degrade_bytes, t.pager_bytes - one_mib);
+    t.reduce_bytes = std::min(t.reduce_bytes, t.degrade_bytes - one_mib);
     if (t.stuck_degrade_ms >= t.stuck_exit_ms) {
         t.stuck_degrade_ms = t.stuck_exit_ms / 2;
     }
+    if (t.fast_tick_bytes < t.ladder_bytes) {
+        t.fast_tick_bytes = t.ladder_bytes;
+    }
     g_watchdog = t;
     g_watchdog_ready = true;
-    std::printf("UWP watchdog: %s; ladder %llu MiB, pager %llu MiB, degrade %llu MiB, stuck %llu s "
-                "degrades / %llu s exits, cooldown %llu ms\n",
+    std::printf("UWP watchdog: %s; ladder %llu MiB, pager %llu MiB, degrade %llu MiB, reduce %llu "
+                "MiB (%s), fast tick %llu MiB (%s), stuck %llu s degrades / %llu s exits, "
+                "cooldown %llu ms\n",
                 t.enabled ? "on" : "off (watchdog=0)",
                 static_cast<unsigned long long>(t.ladder_bytes >> 20),
                 static_cast<unsigned long long>(t.pager_bytes >> 20),
                 static_cast<unsigned long long>(t.degrade_bytes >> 20),
+                static_cast<unsigned long long>(t.reduce_bytes >> 20),
+                t.reduce_enabled ? "on" : "off",
+                static_cast<unsigned long long>(t.fast_tick_bytes >> 20),
+                t.fast_enabled ? "on" : "off",
                 static_cast<unsigned long long>(t.stuck_degrade_ms / 1000),
                 static_cast<unsigned long long>(t.stuck_exit_ms / 1000),
                 static_cast<unsigned long long>(t.cooldown_ms));
@@ -1946,6 +2014,7 @@ static std::uint64_t run_watchdog_step(BbWatchdog::Step step, std::uint64_t need
     case BbWatchdog::StepLadder:
     case BbWatchdog::StepPager:
     case BbWatchdog::StepDegrade:
+    case BbWatchdog::StepReduce:
         return bbgpu_uwp_recovery_step(int(step), need);
     default:
         break;
@@ -2229,12 +2298,69 @@ static void run_loader() {
         std::printf("Bloodborne Xbox Series X|S UWP loader started %04u-%02u-%02u %02u_%02u_%02u\n",
                     now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
     }
+    g_run_start_tick.store(GetTickCount64(), std::memory_order_release);
     GAMING_DEVICE_MODEL_INFORMATION model{};
     GetGamingDeviceModelInformation(&model);
     std::printf("Device model: 0x%08x; app memory budget: %llu MiB; gamepads: %u\n", model.deviceId,
                 static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
                 winrt::Windows::Gaming::Input::Gamepad::Gamepads().Size());
-    log_run_header(local_str);
+    // Read the player's switches and debug overrides BEFORE the run header and pager self-test.
+    // Otherwise the header reports defaults and BB_UWP_SWAP_FILE is overwritten unconditionally.
+    const std::string ini_path = local_str + "\\bbport.ini";
+    ensure_default_ini(ini_path);
+    migrate_ini_defaults(ini_path);
+    for (const auto& [k, v] : parse_kv_file(local_str + "\\graphics-debug.txt")) {
+        if (k.rfind("BB_", 0) == 0 || k.rfind("DZN_", 0) == 0 || k.rfind("MESA_", 0) == 0) {
+            set_env_var(k.c_str(), v);
+        }
+    }
+    const auto ini = parse_kv_file(ini_path);
+    const auto flag_to_env = [&](const char* key, const char* env, bool fallback) {
+        if (const char* existing = std::getenv(env); existing && *existing) return;
+        set_env_var(env, BbIni::Flag(ini, key, fallback) ? "1" : "0");
+    };
+    flag_to_env("swap_pool_decommit", "BB_UWP_POOL_DECOMMIT", true);
+    flag_to_env("arena_admission", "BB_ARENA_ADMISSION", true);
+    flag_to_env("texture_reclaim_experiment", "BB_GC_EXPERIMENT", false);
+    flag_to_env("resolution_diagnostics", "BB_RESOLUTION_DIAGNOSTICS", true);
+    const auto number_to_env = [&](const char* key, const char* env, long min, long max) {
+        if (const char* existing = std::getenv(env); existing && *existing) return;
+        const auto it = ini.find(key);
+        if (it == ini.end() || it->second.empty()) return;
+        char* end = nullptr;
+        const long n = std::strtol(it->second.c_str(), &end, 10);
+        if (end && *end == '\0' && n >= min && n <= max) set_env_var(env, std::to_string(n));
+        else std::printf("UWP settings: %s=%s invalid, using default\n", key, it->second.c_str());
+    };
+    number_to_env("swap_disk_mb", "BB_UWP_SWAP_DISK_MB", 64, 8192);
+    number_to_env("swap_reserve_mb", "BB_UWP_SWAP_RESERVE_MB", 0, 4096);
+    number_to_env("arena_live_cap_mb", "BB_ARENA_LIVE_CAP_MB", 0, 4096);
+    configure_watchdog_from_ini(ini);
+    enforce_optional_feature_budget(ini);
+    std::uint64_t reserve_mb = 384;
+    if (const char* value = std::getenv("BB_UWP_SWAP_RESERVE_MB")) {
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(value, &end, 10);
+        if (end && *end == '\0' && parsed <= 4096) reserve_mb = parsed;
+    }
+    std::string requested_swap;
+    const char* requested_source = "automatic";
+    if (const char* value = std::getenv("BB_UWP_SWAP_FILE"); value && *value) {
+        requested_swap = value;
+        requested_source = "BB_UWP_SWAP_FILE";
+    } else if (const auto it = ini.find("swap_file"); it != ini.end() &&
+               !it->second.empty() && BbIni::Lower(it->second) != "auto") {
+        requested_swap = it->second;
+        requested_source = "bbport.ini swap_file";
+    }
+    const BbStorage::SwapChoice swap_choice = BbStorage::ChooseSwap(
+        local_str, requested_swap, requested_source, BbIni::Flag(ini, "swap_auto", true),
+        reserve_mb << 20);
+    set_env_var("BB_UWP_SWAP_FILE", swap_choice.path);
+    set_env_var("BB_UWP_SWAP_FALLBACK", local_str + "\\bloodborne-swap-fallback-" +
+                std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64()) + ".bin");
+    log_run_header(local_str, swap_choice);
+    BbStorage::TestSwapSpeed(swap_choice, reserve_mb << 20, BbIni::Flag(ini, "swap_speed_test", true));
 
     // bbport: what the volume looks like before the pager is capped to it. The result decides the
     // visible warning below, so a run that is going to be storage-limited says so at the start
@@ -2291,13 +2417,6 @@ static void run_loader() {
         if (!dump.empty() && dump.back() == '\r') dump.pop_back();
     }
 
-    // Optional LocalState\graphics-debug.txt env overrides.
-    for (const auto& [k, v] : parse_kv_file(local_str + "\\graphics-debug.txt")) {
-        if (k.rfind("BB_", 0) == 0 || k.rfind("DZN_", 0) == 0 || k.rfind("MESA_", 0) == 0) {
-            set_env_var(k.c_str(), v);
-        }
-    }
-
     g_game_mode = (mode == "boot");
     set_env_var("BB_UWP_LAUNCHER", mode == "boot" ? "1" : "0");
 
@@ -2320,7 +2439,6 @@ static void run_loader() {
     const std::string user_str = local_str + "\\user";
     const std::string prepared_str = local_str + "\\Prepared";
     const std::string temp_str = local_str + "\\temp";
-    const std::string ini_path = local_str + "\\bbport.ini";
 
     CreateDirectoryFromAppW(winrt::to_hstring(user_str).c_str(), nullptr);
     CreateDirectoryFromAppW(winrt::to_hstring(prepared_str).c_str(), nullptr);
@@ -2330,36 +2448,6 @@ static void run_loader() {
     set_env_var("BB_GPU_USER_DIR", user_str);
     set_env_var("TEMP", temp_str);
     set_env_var("TMP", temp_str);
-    // BUILD 3: the default file is written (and an older one migrated) *before* anything reads it,
-    // so the watchdog thresholds and the heavy-feature opt-in are in force on the first launch that
-    // has them rather than the one after. Both calls are idempotent: the migration is marked with
-    // `settings_rev=3` and does nothing on a second call.
-    ensure_default_ini(ini_path);
-    migrate_ini_defaults(ini_path);
-    set_env_var("BB_UWP_SWAP_FILE", local_str + "\\bloodborne-swap.bin");
-    // bbport: `swap_disk_mb=` in bbport.ini is the swap budget, the same number as
-    // BB_UWP_SWAP_DISK_MB. The pager reads it from the environment at start-up, and caps it to what
-    // the device actually has, so a larger value than the console's free space is reported, not
-    // silently ignored (guest_swap.inc, `disk budget N MiB capped to M MiB`).
-    {
-        const auto ini = parse_kv_file(ini_path);
-        const auto it = ini.find("swap_disk_mb");
-        if (it != ini.end() && !it->second.empty()) {
-            const long mb = std::strtol(it->second.c_str(), nullptr, 10);
-            if (mb >= 64 && mb <= 8192) {
-                set_env_var("BB_UWP_SWAP_DISK_MB", std::to_string(mb));
-                std::printf("UWP settings: swap_disk_mb=%ld from bbport.ini\n", mb);
-            } else {
-                std::printf("UWP settings: swap_disk_mb=%s is out of range (64..8192), ignored\n",
-                            it->second.c_str());
-            }
-        }
-        // BUILD 3, item 15: the watchdog's thresholds come from the same file (see
-        // configure_watchdog_from_ini).
-        configure_watchdog_from_ini(ini);
-        // BUILD 3, item 16: the byte cost of each optional feature, and the ones over 50 MiB off.
-        enforce_optional_feature_budget(ini);
-    }
 
     // Guest memory contract self-test (cosmo/gow3_xbox). It runs by itself on the first launch
     // after install (while LocalState\memory-selftest.txt does not exist), and again whenever
@@ -2655,6 +2743,19 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                     limit_before != 0 && usage_before + (1024ULL << 20) >= limit_before;
                 Sleep(near_limit ? 1000 : 5000);
                 const uint64_t presents = bbgpu_uwp_present_count();
+                if (g_cache_curve_enabled.load(std::memory_order_acquire)) {
+                    const auto start_tick = g_run_start_tick.load(std::memory_order_acquire);
+                    const auto now_tick = GetTickCount64();
+                    const auto seconds = start_tick && now_tick >= start_tick
+                        ? (now_tick - start_tick) / 1000 : 0;
+                    const int cls = g_cache_run_class.load(std::memory_order_acquire);
+                    std::printf("UWP run curve: cache=%s t=%llds usage=%llu/%llu MiB presents=%llu\n",
+                                cls == 2 ? "warm" : cls == 1 ? "cold" : "mixed",
+                                static_cast<long long>(seconds),
+                                static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                                static_cast<unsigned long long>(bb_uwp_app_memory_limit() >> 20),
+                                static_cast<unsigned long long>(presents));
+                }
                 if (sample < 24 || stalled_ticks > 0 || near_limit) {
                     const uint64_t usage = bb_uwp_app_memory_usage();
                     const uint64_t limit = bb_uwp_app_memory_limit();
@@ -2767,88 +2868,103 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
         // another app is suspended or the game leaves the foreground): a limit that fell is a run
         // that is suddenly over its ceiling, and waiting a full second for the next check is a second
         // an allocation may not have.
+        // The monitor never performs reclaim itself: a slow GPU fence or pager sweep must not
+        // prevent 250 ms sampling or the stall/clean-exit decision. One worker serializes rungs.
         std::thread([] {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
-            while (!g_watchdog_ready.load(std::memory_order_acquire) && !g_finished.load()) {
-                Sleep(100);
-            }
+            while (!g_watchdog_ready.load(std::memory_order_acquire) && !g_finished.load()) Sleep(100);
             const BbWatchdog::Thresholds thresholds = g_watchdog;
-            if (!thresholds.enabled) {
-                return;
-            }
-            BbWatchdog::Step last_step = BbWatchdog::StepNone;
-            std::uint64_t last_step_ms = 0;
-            std::uint64_t last_presents = 0;
-            std::uint64_t stuck_since_ms = 0;
-            std::uint64_t last_limit = 0;
-            while (!g_finished.load()) {
-                Sleep(1000);
-                if (g_finished.load()) {
-                    break;
+            if (!thresholds.enabled || g_finished.load()) return;
+            struct Job {
+                BbWatchdog::Step step;
+                std::uint64_t need, headroom, usage, limit, presents, stuck_ms;
+            };
+            struct WorkQueue {
+                std::mutex mutex;
+                std::condition_variable ready;
+                std::deque<Job> jobs;
+                bool pending[6]{}; // includes the running job; prevents duplicate work
+            };
+            auto queue = std::make_shared<WorkQueue>();
+            std::thread([queue] {
+                winrt::init_apartment(winrt::apartment_type::multi_threaded);
+                for (;;) {
+                    Job job{};
+                    {
+                        std::unique_lock lock{queue->mutex};
+                        queue->ready.wait_for(lock, std::chrono::milliseconds(250), [&] {
+                            return !queue->jobs.empty() || g_finished.load();
+                        });
+                        if (g_finished.load()) return;
+                        if (queue->jobs.empty()) continue;
+                        job = queue->jobs.front();
+                        queue->jobs.pop_front();
+                    }
+                    const auto start = std::chrono::steady_clock::now();
+                    std::printf("UWP watchdog: step %s started (headroom %llu MiB, "
+                                "usage %llu/%llu MiB, presents %llu, stuck %llu ms)\n",
+                                BbWatchdog::StepName(job.step),
+                                static_cast<unsigned long long>(job.headroom >> 20),
+                                static_cast<unsigned long long>(job.usage >> 20),
+                                static_cast<unsigned long long>(job.limit >> 20),
+                                static_cast<unsigned long long>(job.presents),
+                                static_cast<unsigned long long>(job.stuck_ms));
+                    std::fflush(stdout);
+                    const std::uint64_t freed = run_watchdog_step(job.step, job.need);
+                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start).count();
+                    std::printf("UWP watchdog: step %s freed %llu MiB in %lld ms%s\n",
+                                BbWatchdog::StepName(job.step),
+                                static_cast<unsigned long long>(freed >> 20),
+                                static_cast<long long>(elapsed),
+                                job.step == BbWatchdog::StepReduce
+                                    ? " (settings requested; actual target changes require another frame)" : "");
+                    std::fflush(stdout);
+                    {
+                        std::scoped_lock lock{queue->mutex};
+                        queue->pending[int(job.step)] = false;
+                    }
                 }
-                const std::uint64_t limit = bb_uwp_app_memory_limit();
-                const std::uint64_t usage = bb_uwp_app_memory_usage();
-                // No limit reported: the byte thresholds cannot be evaluated, and inventing one
-                // would degrade a run that is fine. The stall rule still applies.
-                const std::uint64_t headroom =
-                    limit == 0 ? ~std::uint64_t{0} : (usage < limit ? limit - usage : 0);
+            }).detach();
+
+            BbWatchdog::Step highest_scheduled = BbWatchdog::StepNone;
+            std::uint64_t last_step_ms = 0, last_check_ms = 0, last_presents = 0;
+            std::uint64_t stuck_since_ms = 0, last_limit = 0;
+            while (!g_finished.load()) {
+                // With fast checks on, sample usage every 250 ms even outside the 600 MiB band;
+                // the rest of the check is throttled to one second while safely outside it. This
+                // detects a sudden crossing without sleeping through the start of a burst.
+                Sleep(thresholds.fast_enabled ? 250 : 1000);
+                if (g_finished.load()) break;
                 const auto now_ms = static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                        .count());
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+                const std::uint64_t limit = bb_uwp_app_memory_limit();
+                const std::uint64_t usage = bb_uwp_app_memory_usage();
+                const std::uint64_t headroom = limit == 0 ? ~std::uint64_t{0} :
+                    (usage < limit ? limit - usage : 0);
+                if (last_check_ms && now_ms - last_check_ms < BbWatchdog::TickMs(headroom, thresholds))
+                    continue;
+                last_check_ms = now_ms;
                 const std::uint64_t presents = bbgpu_uwp_present_count();
-                const bool visible = g_app_visible.load(std::memory_order_relaxed) != 0;
-                if (!visible || presents != last_presents || presents == 0) {
-                    stuck_since_ms = 0;
-                } else if (stuck_since_ms == 0) {
-                    // The first second without a present: the stall starts here, not at the start of
-                    // the run (`.717`'s reports measured from the wrong end).
-                    stuck_since_ms = now_ms;
-                }
-                const std::uint64_t stuck_ms =
-                    stuck_since_ms == 0 ? 0 : now_ms - stuck_since_ms;
+                const bool visible = g_app_visible.load(std::memory_order_relaxed);
+                if (!visible || presents != last_presents || presents == 0) stuck_since_ms = 0;
+                else if (!stuck_since_ms) stuck_since_ms = now_ms;
+                const std::uint64_t stuck_ms = stuck_since_ms ? now_ms - stuck_since_ms : 0;
                 last_presents = presents;
-
                 BbWatchdog::Step step = BbWatchdog::Decide(headroom, stuck_ms, thresholds);
-                // The limit changed under us: treat it like a crossing, not like the next scheduled
-                // check.
-                bool limit_changed = false;
-                if (last_limit != 0 && limit != last_limit) {
-                    std::printf("UWP watchdog: AppMemoryUsageLimit changed %llu -> %llu MiB, "
-                                "re-checking now\n",
+                if (last_limit && limit != last_limit) {
+                    std::printf("UWP watchdog: AppMemoryUsageLimit changed %llu -> %llu MiB\n",
                                 static_cast<unsigned long long>(last_limit >> 20),
                                 static_cast<unsigned long long>(limit >> 20));
-                    std::fflush(stdout);
-                    limit_changed = true;
-                    if (headroom <= thresholds.ladder_bytes) {
-                        step = step == BbWatchdog::StepNone ? BbWatchdog::StepLadder : step;
-                    }
+                    last_step_ms = 0;
+                    if (headroom <= thresholds.ladder_bytes && step == BbWatchdog::StepNone)
+                        step = BbWatchdog::StepLadder;
                 }
                 last_limit = limit;
-                if (limit_changed) {
-                    // A limit change is a new situation: do not let the cooldown of the previous
-                    // step hold the first answer to it.
-                    last_step_ms = 0;
-                }
-
-                if (!BbWatchdog::ShouldRun(step, last_step, now_ms, last_step_ms, thresholds)) {
-                    continue;
-                }
-                // What the step is asked for: the distance back to the ladder threshold, not the
-                // whole threshold again - a run 10 MiB under the mark should not make the pager walk
-                // for 400 MiB. At least 32 MiB, because every one of these walks needs a budget to
-                // be worth starting.
-                std::uint64_t need = 0;
-                if (headroom != ~std::uint64_t{0}) {
-                    need = headroom < thresholds.ladder_bytes ? thresholds.ladder_bytes - headroom : 0;
-                    need = std::max<std::uint64_t>(need, std::uint64_t{32} << 20);
-                }
+                // Exit is handled on the monitor, not queued behind a possibly stuck recovery rung.
                 if (step == BbWatchdog::StepExit) {
-                    // (d) The run is over: say so once, dump what a stall report would have dumped,
-                    // flush the saves, and close the app the clean way instead of being killed.
-                    if (g_watchdog_ran_exit.exchange(true)) {
-                        continue;
-                    }
+                    if (g_watchdog_ran_exit.exchange(true)) continue;
                     std::printf("UWP watchdog: presents stuck for %llu s at %llu/%llu MiB (level=%u): "
                                 "dumping state, flushing saves and exiting cleanly\n",
                                 static_cast<unsigned long long>(stuck_ms / 1000),
@@ -2857,40 +2973,57 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                                 unsigned(winrt::Windows::System::MemoryManager::AppMemoryUsageLevel()));
                     std::fflush(stdout);
                     bb_uwp_breadcrumb("watchdog: exiting after a stall at the memory limit");
+                    // The pager-state snapshot and breadcrumbs do not take the pager's commit
+                    // lock. Other reports and fsync can block behind the very stall we are exiting,
+                    // so attempt those on a worker with a deadline and never claim a timed-out save
+                    // flush succeeded. The app still exits if the driver or a file lock is stuck.
                     runtime_memory_pager_state();
-                    runtime_memory_report();
-                    runtime_file_report();
-                    runtime_savedata_report();
-                    runtime_wait_report();
-                    runtime_sample_threads();
-                    bbgpu_thread_op_dump();
                     bb_uwp_breadcrumb_dump("watchdog exit");
-                    const int flushed = runtime_files_flush();
-                    std::printf("UWP watchdog: flushed %d open save file(s); exiting\n", flushed);
-                    std::fflush(nullptr);
+                    try {
+                        auto done = std::make_shared<std::promise<void>>();
+                        auto result = done->get_future();
+                        std::thread([done] {
+                            const int flushed = runtime_files_flush();
+                            std::printf("UWP watchdog: flushed %d open save file(s)\n", flushed);
+                            std::fflush(stdout);
+                            runtime_memory_report();
+                            runtime_file_report();
+                            runtime_savedata_report();
+                            runtime_wait_report();
+                            runtime_sample_threads();
+                            bbgpu_thread_op_dump();
+                            std::fflush(stdout);
+                            done->set_value();
+                        }).detach();
+                        if (result.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+                            std::puts("UWP watchdog: dump/save flush timed out; save flush NOT confirmed");
+                    } catch (...) {
+                        std::puts("UWP watchdog: could not start dump/save worker; save flush NOT confirmed");
+                    }
+                    std::fflush(stdout);
                     close_app("watchdog: presents stuck at the app memory limit");
                 }
-                const auto start = std::chrono::steady_clock::now();
-                const std::uint64_t freed = run_watchdog_step(step, need);
-                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now() - start)
-                                    .count();
-                last_step = step;
-                last_step_ms = now_ms;
-                std::printf("UWP watchdog: step %s freed %llu MiB in %lld ms (headroom %llu MiB of "
-                            "%llu, usage %llu/%llu MiB, presents %llu, stuck %llu ms)\n",
-                            BbWatchdog::StepName(step),
-                            static_cast<unsigned long long>(freed >> 20),
-                            static_cast<long long>(ms),
-                            static_cast<unsigned long long>(
-                                headroom == ~std::uint64_t{0} ? 0 : headroom >> 20),
-                            static_cast<unsigned long long>(limit >> 20),
-                            static_cast<unsigned long long>(usage >> 20),
-                            static_cast<unsigned long long>(limit >> 20),
-                            static_cast<unsigned long long>(presents),
-                            static_cast<unsigned long long>(stuck_ms));
-                std::fflush(stdout);
+                if (!BbWatchdog::ShouldRun(step, highest_scheduled, now_ms, last_step_ms, thresholds))
+                    continue;
+                BbWatchdog::Step steps[4]{};
+                const unsigned count = BbWatchdog::NextSteps(step, highest_scheduled, steps, 4);
+                const std::uint64_t need = headroom == ~std::uint64_t{0} ? (std::uint64_t{32} << 20) :
+                    std::max<std::uint64_t>(headroom < thresholds.ladder_bytes
+                        ? thresholds.ladder_bytes - headroom : 0, std::uint64_t{32} << 20);
+                for (unsigned i = 0; i < count; ++i) {
+                    const auto current = steps[i];
+                    std::scoped_lock lock{queue->mutex};
+                    if (queue->pending[int(current)] || queue->jobs.size() >= 4) continue;
+                    queue->pending[int(current)] = true;
+                    queue->jobs.push_back({current, need, headroom, usage, limit, presents, stuck_ms});
+                    std::printf("UWP watchdog: step %s queued\n", BbWatchdog::StepName(current));
+                    std::fflush(stdout);
+                    if (current > highest_scheduled) highest_scheduled = current;
+                    last_step_ms = now_ms;
+                    queue->ready.notify_one();
+                }
             }
+            queue->ready.notify_one();
         }).detach();
 
         std::thread([diag = std::wstring(winrt::Windows::Storage::ApplicationData::Current()

@@ -113,6 +113,9 @@ private:
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};
+#ifdef BB_UWP
+    u64 depth_uid = 0;
+#endif
 
     vk::UniqueDescriptorSetLayout desc_layout;
     vk::UniquePipelineLayout pipeline_layout;

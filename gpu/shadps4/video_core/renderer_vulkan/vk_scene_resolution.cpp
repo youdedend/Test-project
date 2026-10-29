@@ -14,6 +14,15 @@
 #include <cstdlib>
 
 namespace Vulkan {
+#ifdef BB_UWP
+static bool ResolutionDiagnostics() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_RESOLUTION_DIAGNOSTICS");
+        return !env || env[0] != '0';
+    }();
+    return enabled;
+}
+#endif
 SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r,
                            VideoCore::TextureCache& t)
     : SceneTargets(i, s, r, [&t](VideoCore::ImageId id, u64 uid) {
@@ -115,6 +124,16 @@ bool SceneTargets::SetSize(SceneResolution::Size next) {
     scheduler.EndRendering();
     ResolveAll();
     scheduler.Finish();
+#ifdef BB_UWP
+    if (ResolutionDiagnostics()) {
+        std::printf("UWP resolution: proxy size %ux%u -> %ux%u; releasing %zu existing proxy "
+                    "allocations (%llu KiB); native guest targets remain allocated\n",
+                    size.width, size.height, next.width, next.height, entries.size(),
+                    static_cast<unsigned long long>(diagnostic_proxy_bytes >> 10));
+        std::fflush(stdout);
+    }
+    diagnostic_proxy_bytes = diagnostic_created = 0;
+#endif
     entries.clear(); // no command buffer can still reference these images/views
     tracked.clear();
     ++generation;
@@ -447,6 +466,24 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
             ASSERT_MSG(created, "Failed allocating image with error {}",
                        vk::to_string(vk::Result::eErrorOutOfDeviceMemory));
         }
+#ifdef BB_UWP
+        if (ResolutionDiagnostics()) {
+            diagnostic_proxy_bytes += entry->image.size_bytes;
+            ++diagnostic_created;
+            // Actual allocator sizes, not a width*height guess. The native original is retained;
+            // proxy scaling may therefore ADD memory even while reducing raster work.
+            if (diagnostic_created <= 16 || diagnostic_created % 32 == 0) {
+                std::printf("UWP resolution: native target %ux%u allocation=%llu KiB retained; "
+                            "proxy %ux%u allocation=%llu KiB, live proxies=%zu total=%llu KiB\n",
+                            original.info.size.width, original.info.size.height,
+                            static_cast<unsigned long long>(original.backing->image.size_bytes >> 10),
+                            proxy.width, proxy.height,
+                            static_cast<unsigned long long>(entry->image.size_bytes >> 10),
+                            entries.size(), static_cast<unsigned long long>(diagnostic_proxy_bytes >> 10));
+                std::fflush(stdout);
+            }
+        }
+#endif
         tracked.insert(original.image_uid);
     }
     recent[recent_next++ % recent.size()] = {key, entry.get()};

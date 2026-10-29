@@ -79,6 +79,35 @@ int main() {
               "a read-only volume is never recommended, however large");
     }
 
+    // Automatic swap must never pick USB, an unknown type, or LocalState while a fixed volume
+    // with usable space exists; most free space wins and D breaks ties.
+    {
+        using namespace BbStorage;
+        auto q = Make('Q', 88ull << 20, true);
+        auto d = Make('D', 76ull << 30, true); d.kind = VolumeKind::Fixed; d.bus = VolumeBus::NonUsb;
+        auto e = Make('E', 283ull << 30, true); e.kind = VolumeKind::Removable; e.bus = VolumeBus::UsbOrRemovable;
+        auto f = Make('F', 90ull << 30, true); f.kind = VolumeKind::Unknown;
+        std::vector<Volume> volumes{q, d, e, f};
+        const Volume* best = BestSwapVolume(volumes, 'Q', 384ull << 20);
+        Check(best && best->letter == 'D', "verified D beats larger removable E and unknown F");
+        volumes[2].kind = VolumeKind::Fixed; // USB HDDs can report DRIVE_FIXED
+        Check(BestSwapVolume(volumes, 'Q', 384ull << 20)->letter == 'D',
+              "a fixed-media USB disk is still excluded");
+        volumes[3].kind = VolumeKind::Fixed;
+        volumes[3].bus = VolumeBus::NonUsb;
+        best = BestSwapVolume(volumes, 'Q', 384ull << 20);
+        Check(best && best->letter == 'F', "the largest eligible fixed drive wins");
+        volumes[3].free = d.free;
+        best = BestSwapVolume(volumes, 'Q', 384ull << 20);
+        Check(best && best->letter == 'D', "D wins a tie");
+        volumes[1].writable = false; volumes[3].writable = false;
+        Check(BestSwapVolume(volumes, 'Q', 0) == nullptr,
+              "no eligible alternative means LocalState fallback");
+        volumes[1].writable = true; volumes[1].free = 384ull << 20;
+        Check(BestSwapVolume(volumes, 'Q', 384ull << 20) == nullptr,
+              "a fixed drive at its reserve is unusable");
+    }
+
     // --- the folder walk --------------------------------------------------
     {
         std::error_code ec;

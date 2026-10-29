@@ -18,6 +18,7 @@
 #include <cstdlib>
 
 #ifdef BB_UWP
+#include "../../../../xbox/graphics/arena_admission_policy.h"
 extern "C" uint64_t bb_uwp_app_memory_usage(void);
 extern "C" uint64_t bb_uwp_app_memory_limit(void);
 extern "C" size_t runtime_memory_page_out(size_t target_bytes);
@@ -181,6 +182,26 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
 
         const VkBufferCreateInfo buffer_ci_unsafe = static_cast<VkBufferCreateInfo>(buffer_ci);
 #ifdef BB_UWP
+        // Log the requested preflight on *every* large DeviceLocal allocation, including dense
+        // replacements: usage already includes the old arenas, so adding the full new size captures
+        // the transient peak. This is deliberately observation only: callers assume Create cannot
+        // fail, so blocking it would currently produce null-buffer corruption rather than a safe skip.
+        if (mem_type == MemoryType::DeviceLocal && buffer_ci.size >= BbArenaAdmission::kMinimum) {
+            static const bool observe = [] {
+                const char* env = std::getenv("BB_ARENA_ADMISSION");
+                return !env || env[0] != '0';
+            }();
+            const u64 usage = bb_uwp_app_memory_usage();
+            const u64 limit = bb_uwp_app_memory_limit();
+            if (observe && !BbArenaAdmission::BudgetFits(usage, limit, buffer_ci.size)) {
+                std::printf("UWP arena admission OBSERVE ONLY: DeviceLocal request %llu MiB with "
+                            "usage %llu/%llu MiB would breach the 250 MiB reserve; allocation NOT "
+                            "blocked (safe fallback not implemented)\n",
+                            (unsigned long long)(buffer_ci.size >> 20),
+                            (unsigned long long)(usage >> 20), (unsigned long long)(limit >> 20));
+                std::fflush(stdout);
+            }
+        }
         if (buffer_ci.size >= (256ULL << 10)) {
             const uint64_t limit = bb_uwp_app_memory_limit();
             if (limit > 0) {

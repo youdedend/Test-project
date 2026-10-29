@@ -28,22 +28,37 @@ enum Step : int {
     StepPager = 2,
     /// (c) within `degrade_bytes`, or presents stuck for `stuck_degrade_ms`: switch optional
     /// features off at run time (upscaler, frame generation, optional buffers) and lower the
-    /// internal resolution. Visible, so it is the last step before giving up.
+    /// internal resolution. Visible, so it is only taken once (b) has been tried.
     StepDegrade = 3,
-    /// (d) presents stuck for `stuck_exit_ms` while at the limit: dump state, flush saves and exit
+    /// (d) BUILD 4 (item 3): the step for a run whose features are *already* off. `.813` logged
+    /// "degrade freed 0 MiB" at 83 MiB of headroom and then exited: the feature switch was a no-op
+    /// because A5 had them off from the start, so there was nothing between "degrade" and "exit".
+    /// This one changes what the renderer allocates - the lowest scene preset and the smallest
+    /// output, which is what the host targets are sized from - so it frees MiB rather than flags.
+    StepReduce = 4,
+    /// (e) presents stuck for `stuck_exit_ms` while at the limit: dump state, flush saves and exit
     /// cleanly with a reason, instead of being killed by the console mid-save.
-    StepExit = 4,
+    StepExit = 5,
 };
 
 /// Thresholds, in the units the console reports. Defaults are the plan's numbers; every one can be
 /// overridden from `bbport.ini` (item 15 asks for that explicitly).
 struct Thresholds {
     bool enabled = true;
+    bool fast_enabled = true;
+    bool reduce_enabled = true;
     std::uint64_t ladder_bytes = std::uint64_t{400} << 20;
     std::uint64_t pager_bytes = std::uint64_t{250} << 20;
     std::uint64_t degrade_bytes = std::uint64_t{150} << 20;
     std::uint64_t stuck_degrade_ms = 3000;
     std::uint64_t stuck_exit_ms = 10000;
+    /// BUILD 4 (item 3): the stronger-than-degrade threshold. Between `degrade_bytes` and
+    /// `reduce_bytes` the run degrades; at or below `reduce_bytes` it also takes step (d). 83 MiB of
+    /// headroom is where `.813` gave up, so 96 MiB is the number that would have caught it.
+    std::uint64_t reduce_bytes = std::uint64_t{96} << 20;
+    /// BUILD 4 (item 3): a check every 250 ms while the run is within this distance of the limit,
+    /// because a 1 s tick missed a burst that moved 527 MiB in under 2 s.
+    std::uint64_t fast_tick_bytes = std::uint64_t{600} << 20;
     /// Minimum time between two steps. Each step costs milliseconds-to-seconds on the guest's
     /// threads; running one per second while the app hovers at a threshold is how a watchdog
     /// becomes the stall it was meant to survive.
@@ -66,10 +81,13 @@ struct Thresholds {
     if (stuck_ms >= thresholds.stuck_exit_ms && headroom <= thresholds.degrade_bytes) {
         return StepExit;
     }
-    if (stuck_ms >= thresholds.stuck_degrade_ms) {
-        return StepDegrade;
+    if (thresholds.reduce_enabled && headroom <= thresholds.reduce_bytes) {
+        // The stronger step. A caller that has not degraded yet runs Degrade first in the same tick
+        // (see NextSteps*), so going straight from 400 MiB to 90 between two ticks still turns the
+        // features off before it lowers the preset.
+        return StepReduce;
     }
-    if (headroom <= thresholds.degrade_bytes) {
+    if (headroom <= thresholds.degrade_bytes || stuck_ms >= thresholds.stuck_degrade_ms) {
         return StepDegrade;
     }
     if (headroom <= thresholds.pager_bytes) {
@@ -101,6 +119,28 @@ struct Thresholds {
     return step == StepLadder || step == StepPager;
 }
 
+/// List every crossed recovery rung in ascending order. An abrupt drop from 600 to 90 MiB must
+/// not silently skip the release and pager. Repeating a cheap rung returns just that rung; the
+/// caller prevents duplicate queued/running work. Exit is handled immediately by the monitor.
+[[nodiscard]] inline unsigned NextSteps(Step decided, Step highest_scheduled, Step* out,
+                                         unsigned capacity) {
+    if (!capacity || decided == StepNone) return 0;
+    if (decided == StepExit) { out[0] = StepExit; return 1; }
+    if (decided <= highest_scheduled) {
+        out[0] = decided;
+        return 1;
+    }
+    unsigned n = 0;
+    const int first = highest_scheduled < StepLadder ? int(StepLadder) : int(highest_scheduled) + 1;
+    for (int rung = first; rung <= int(decided) && n < capacity; ++rung) out[n++] = Step(rung);
+    return n;
+}
+
+/// BUILD 4 (item 3): the tick interval that applies now. 250 ms near the limit, 1 s otherwise.
+[[nodiscard]] inline std::uint64_t TickMs(std::uint64_t headroom, const Thresholds& thresholds) {
+    return thresholds.fast_enabled && headroom <= thresholds.fast_tick_bytes ? 250 : 1000;
+}
+
 /// Whether this step should run now, given the last one that ran.
 ///
 /// (a) and (b) are gated by the cooldown and repeat: each run may find memory the previous one
@@ -112,9 +152,8 @@ struct Thresholds {
     if (step == StepNone) {
         return false;
     }
-    if (!Repeatable(step)) {
-        return step > last_step;
-    }
+    if (step > last_step) return true; // never delay an escalation behind a cooldown
+    if (!Repeatable(step)) return false;
     return CooldownElapsed(now_ms, last_step_ms, thresholds);
 }
 
@@ -174,6 +213,7 @@ struct Thresholds {
     case StepLadder: return "release (arenas, staging, images)";
     case StepPager: return "pager sweep";
     case StepDegrade: return "degrade (features off, resolution down)";
+    case StepReduce: return "reduce (lowest scene preset, smallest output)";
     case StepExit: return "exit";
     case StepNone: break;
     }

@@ -8,6 +8,7 @@
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "bbport_settings.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -76,6 +77,17 @@ TemporalUpscaler::TemporalUpscaler(const Instance& i, Scheduler& s, VideoCore::T
       scene_targets(targets) {
     BbSettings::ConfigureUpscalerSupport(false, false, "Xbox uses live SceneTargets scaling");
     enabled = true;
+    const char* diagnostics = std::getenv("BB_RESOLUTION_DIAGNOSTICS");
+    if (!diagnostics || diagnostics[0] != '0') {
+        const auto [configured_w, configured_h] = BbSettings::XboxSceneSize();
+        const int out = std::clamp(BbSettings::Get().output_res.load(), 0,
+                                   BbSettings::XboxOutputCount - 1);
+        std::printf("UWP resolution: configured scene=%dx%d output=%dx%d; scene_res sizes host "
+                    "proxies, output_res sizes presentation surfaces, and native guest render "
+                    "targets remain allocated; BB_RENDER_RES=%s\n",
+                    configured_w, configured_h, BbSettings::OutputWidths[out], BbSettings::OutputHeights[out],
+                    std::getenv("BB_RENDER_RES") ? std::getenv("BB_RENDER_RES") : "unset");
+    }
     if (const char* fixed = std::getenv("BB_RENDER_RES"); fixed && fixed[0]) {
         int fw = 0, fh = 0;
         if (std::sscanf(fixed, "%dx%d", &fw, &fh) == 2 && fw >= 320 && fh >= 180) {

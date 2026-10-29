@@ -31,11 +31,13 @@ struct ImagePinState {
     /// targets and texture bindings collected before the descriptors are written). Such an image
     /// has no binding flag set yet, so the other three checks do not see it.
     bool collected = false;
+    /// An owner (for example camera motion) retained this id/uid beyond the current draw.
+    bool external = false;
 };
 
 /// True when the image must not be freed this pass, whatever the collector's age/pressure rules.
 [[nodiscard]] inline bool ImagePinned(const ImagePinState& state) {
-    return state.bound || state.target || state.scene_proxy || state.vo_surface || state.collected;
+    return state.bound || state.target || state.scene_proxy || state.vo_surface || state.collected || state.external;
 }
 
 /// The collector's decision for one candidate, given whether the age/pressure rules selected it.
@@ -43,6 +45,15 @@ struct ImagePinState {
 /// iterating (returns false), so a run of pinned entries cannot stall the pass.
 [[nodiscard]] inline bool GcMayFreeImage(const ImagePinState& state, bool age_allows_free) {
     return age_allows_free && !ImagePinned(state);
+}
+
+/// Experimental PR #89-style discard is only considered for an old, GPU-written tiled image
+/// under critical pressure, after *every* pin check. Age/unpinned status is NOT a proof that the
+/// guest will never read its GPU-only contents again; this stays opt-in and hardware-unverified.
+[[nodiscard]] inline bool GcMayExperimentDrop(const ImagePinState& pins, bool enabled,
+                                               bool critical, bool tiled, bool gpu_written,
+                                               bool stale) {
+    return enabled && critical && tiled && gpu_written && stale && !ImagePinned(pins);
 }
 
 // ---------------------------------------------------------------------------------------------

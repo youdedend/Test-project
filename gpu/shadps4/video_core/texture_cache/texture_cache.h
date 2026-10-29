@@ -261,6 +261,11 @@ public:
     /// Nullptr when the slot is free or its uid no longer matches - the caller skips its work.
     [[nodiscard]] Image* TryGetImageTouched(ImageId id, u64 uid) {
         Image* image = TryGetImage(id, uid);
+#ifdef BB_UWP
+        // A deferred deletion can leave a slot allocated after UnregisterImage has freed its LRU
+        // entry. Touching that entry or pinning the still-allocated slot would be a stale-id use.
+        if (image && False(image->flags & ImageFlagBits::Registered)) return nullptr;
+#endif
         if (image != nullptr) {
             TouchImage(*image);
         }
@@ -344,14 +349,23 @@ public:
     /// free them: pass 2 of the binding walk re-indexes these ids. Same thread as the rasterizer,
     /// which is what owns the flags consulted above; cleared when the draw's bindings are reset.
     void HoldCollectedImage(ImageId id) {
+#ifdef BB_UWP
+        std::scoped_lock lock{collected_mutex};
+#endif
         collected_images.push_back(id);
     }
 
     void ClearCollectedImages() {
+#ifdef BB_UWP
+        std::scoped_lock lock{collected_mutex};
+#endif
         collected_images.clear();
     }
 
     [[nodiscard]] bool IsImageCollected(ImageId id) const noexcept {
+#ifdef BB_UWP
+        std::scoped_lock lock{collected_mutex};
+#endif
         for (const ImageId held : collected_images) {
             if (held == id) {
                 return true;
@@ -359,6 +373,26 @@ public:
         }
         return false;
     }
+
+#ifdef BB_UWP
+    // Persistent camera/upscaler holders must be pins as well as checked ids. A bare SlotId has no
+    // generation: pin the uid captured under the cache mutex and re-resolve it with
+    // TryGetImageTouched at use. The UWP upscaler is currently a stub and stores no image ids.
+    static constexpr size_t CameraDepthPin = 0;
+    u64 SetExternalImagePin(size_t slot, ImageId id) {
+        std::scoped_lock lock{mutex};
+        if (slot >= external_images.size()) return 0;
+        Image* image = id ? TryGetImageTouched(id, 0) : nullptr;
+        external_images[slot] = {image ? id : ImageId{}, image ? image->image_uid : 0};
+        return external_images[slot].uid;
+    }
+    // Caller already holds the cache mutex (GC and emergency walk do).
+    [[nodiscard]] bool IsExternalImagePinned(ImageId id, u64 uid) const noexcept {
+        for (const auto& pin : external_images)
+            if (pin.id == id && pin.uid == uid && uid != 0) return true;
+        return false;
+    }
+#endif
 
     /// Get the associated depth stencil image if it is still valid.
     ImageId GetAssociatedDepth(Image& image, vk::Format format) {
@@ -605,6 +639,9 @@ private:
         u64 writeback_failed = 0;    ///< the guarded write-back refused: the image stayed
         u64 depth_reclaimed = 0;
         u64 dropped = 0;
+#ifdef BB_UWP
+        u64 experiment_count = 0, experiment_host_bytes = 0;
+#endif
     };
     GcPassStats gc_pass;
     /// bbport (BUILD 2): the anti-thrash state. `gc_hysteresis` keeps the collector running until
@@ -641,6 +678,11 @@ private:
     void RememberFreed(ImageId id, u64 uid, const char* reason);
     /// bbport: ids resolved by the draw being recorded (HoldCollectedImage).
     std::vector<ImageId> collected_images;
+#ifdef BB_UWP
+    mutable std::mutex collected_mutex;
+    struct ExternalImagePin { ImageId id{}; u64 uid = 0; };
+    std::array<ExternalImagePin, 5> external_images{};
+#endif
     /// bbport: why the last ReclaimMemoryForUnused walk refused an image (EmergencyReclaim prints
     /// it). Plain counters, incremented where the walk already branches on each rule.
     struct ReclaimStats {

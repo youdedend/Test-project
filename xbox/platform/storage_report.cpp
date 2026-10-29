@@ -9,6 +9,9 @@
 
 #include "storage_report.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -18,6 +21,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <fileapifromapp.h>
+#include <memoryapi.h>
+#include <winioctl.h>
 
 namespace BbStorage {
 namespace {
@@ -47,12 +53,14 @@ std::wstring Wide(const std::string& text) {
 }
 
 bool ProbeWritable(const std::wstring& root) {
-    const std::wstring path = root + L"bbport_storage_probe.tmp";
+    // Never truncate a pre-existing file, even on a drive the app can write.
+    const std::wstring path = root + L"bbport-probe-" + std::to_wstring(GetCurrentProcessId()) +
+                              L"-" + std::to_wstring(GetTickCount64()) + L".tmp";
     CREATEFILE2_EXTENDED_PARAMETERS params{};
     params.dwSize = sizeof(params);
     params.dwFileAttributes = FILE_ATTRIBUTE_TEMPORARY;
     params.dwFileFlags = FILE_FLAG_DELETE_ON_CLOSE;
-    const HANDLE file = CreateFile2FromAppW(path.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, &params);
+    const HANDLE file = CreateFile2FromAppW(path.c_str(), GENERIC_WRITE, 0, CREATE_NEW, &params);
     if (file == INVALID_HANDLE_VALUE) {
         return false;
     }
@@ -62,6 +70,43 @@ bool ProbeWritable(const std::wstring& root) {
                     written == block.size();
     CloseHandle(file);
     return ok;
+}
+
+// DRIVE_FIXED describes the medium, not the transport: many USB HDDs report DRIVE_FIXED. Query
+// the actual device bus as well; when the sandbox denies this query, err on the side of never using
+// USB rather than guessing from a letter. This may conservatively exclude D: on some consoles.
+VolumeBus QueryVolumeBus(char letter) {
+    std::wstring device = L"\\\\.\\";
+    device.push_back(static_cast<wchar_t>(letter));
+    device += L":";
+    CREATEFILE2_EXTENDED_PARAMETERS params{};
+    params.dwSize = sizeof(params);
+    HANDLE handle = CreateFile2FromAppW(device.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                        OPEN_EXISTING, &params);
+    if (handle == INVALID_HANDLE_VALUE) return VolumeBus::Unknown;
+    STORAGE_PROPERTY_QUERY query{};
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+    alignas(STORAGE_DEVICE_DESCRIPTOR) unsigned char data[1024]{};
+    DWORD returned = 0;
+    const BOOL ok = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+                                    data, sizeof(data), &returned, nullptr);
+    CloseHandle(handle);
+    if (!ok || returned < offsetof(STORAGE_DEVICE_DESCRIPTOR, BusType) + sizeof(STORAGE_BUS_TYPE))
+        return VolumeBus::Unknown;
+    const auto* descriptor = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR*>(data);
+    if (descriptor->RemovableMedia || descriptor->BusType == BusTypeUsb ||
+        descriptor->BusType == BusTypeSd || descriptor->BusType == BusTypeMmc)
+        return VolumeBus::UsbOrRemovable;
+    // Virtual, file-backed, network and unknown buses can hide the underlying transport. Exclude
+    // those rather than reporting that a USB-backed virtual disk is safe.
+    switch (descriptor->BusType) {
+    case BusTypeScsi: case BusTypeAtapi: case BusTypeAta: case BusTypeRAID:
+    case BusTypeSas: case BusTypeSata: case BusTypeNvme:
+        return VolumeBus::NonUsb;
+    default:
+        return VolumeBus::Unknown;
+    }
 }
 
 std::vector<Volume> QueryVolumes(char local_letter) {
@@ -80,6 +125,14 @@ std::vector<Volume> QueryVolumes(char local_letter) {
         volume.total = total_bytes.QuadPart;
         volume.free = free_bytes.QuadPart;
         volume.writable = ProbeWritable(root);
+        switch (GetDriveTypeW(root.c_str())) {
+        case DRIVE_FIXED: volume.kind = VolumeKind::Fixed; break;
+        case DRIVE_REMOVABLE: volume.kind = VolumeKind::Removable; break;
+        case DRIVE_UNKNOWN: case DRIVE_NO_ROOT_DIR: volume.kind = VolumeKind::Unknown; break;
+        default: volume.kind = VolumeKind::Other; break;
+        }
+        volume.bus = volume.kind == VolumeKind::Removable ? VolumeBus::UsbOrRemovable :
+                     volume.kind == VolumeKind::Fixed ? QueryVolumeBus(letter) : VolumeBus::Unknown;
         volumes.push_back(volume);
         if (volumes.size() >= 16) break;
     }
@@ -88,6 +141,157 @@ std::vector<Volume> QueryVolumes(char local_letter) {
 }
 
 } // namespace
+
+static const char* KindName(VolumeKind kind) {
+    switch (kind) {
+    case VolumeKind::Fixed: return "fixed";
+    case VolumeKind::Removable: return "removable";
+    case VolumeKind::Other: return "other (not eligible)";
+    default: return "unknown (not eligible)";
+    }
+}
+
+static const char* BusName(VolumeBus bus) {
+    switch (bus) {
+    case VolumeBus::NonUsb: return "verified non-USB";
+    case VolumeBus::UsbOrRemovable: return "USB/removable";
+    default: return "unknown (not eligible)";
+    }
+}
+
+// Parent directory with a trailing separator, or empty for a relative/UNC path. Requiring an
+// absolute drive path makes removable-device validation unambiguous and avoids clobbering an
+// unrelated file through a relative path.
+static std::string SwapParent(const std::string& path) {
+    if (path.size() < 4 || !LetterOf(path) || (path[2] != '\\' && path[2] != '/')) return {};
+    const auto at = path.find_last_of("\\/");
+    if (at == std::string::npos || at + 1 >= path.size()) return {};
+    return path.substr(0, at + 1);
+}
+
+static std::string UniqueSwapPath(const std::string& parent) {
+    return parent + "bloodborne-swap-" + std::to_string(GetCurrentProcessId()) + "-" +
+           std::to_string(GetTickCount64()) + ".bin";
+}
+
+SwapChoice ChooseSwap(const std::string& local_dir, const std::string& requested_path,
+                      const char* requested_source, bool auto_select, std::uint64_t reserve) {
+    const char local_letter = LetterOf(local_dir);
+    const std::string local_parent = local_dir + (local_dir.empty() || local_dir.back() == '\\' ? "" : "\\");
+    const auto volumes = QueryVolumes(local_letter);
+    auto free_of = [&](char letter) -> std::uint64_t {
+        for (const auto& volume : volumes) if (volume.letter == letter) return volume.free;
+        ULARGE_INTEGER available{};
+        const auto wide = Wide(local_parent);
+        return letter == local_letter && !wide.empty() &&
+                       GetDiskFreeSpaceExW(wide.c_str(), &available, nullptr, nullptr)
+                   ? available.QuadPart : 0;
+    };
+    if (!requested_path.empty()) {
+        const auto parent = SwapParent(requested_path);
+        const char letter = LetterOf(requested_path);
+        bool eligible = letter == local_letter && letter != 0;
+        if (!eligible) {
+            for (const auto& v : volumes) {
+                if (v.letter == letter && v.kind == VolumeKind::Fixed &&
+                    v.bus == VolumeBus::NonUsb) eligible = true;
+            }
+        }
+        const auto wide_path = Wide(requested_path);
+        WIN32_FILE_ATTRIBUTE_DATA attr{};
+        const bool exists = !wide_path.empty() &&
+            GetFileAttributesExFromAppW(wide_path.c_str(), GetFileExInfoStandard, &attr);
+        const DWORD attr_error = exists ? ERROR_SUCCESS : GetLastError();
+        const bool definitely_missing = !exists &&
+            (attr_error == ERROR_FILE_NOT_FOUND || attr_error == ERROR_PATH_NOT_FOUND);
+        if (!parent.empty() && eligible && definitely_missing && ProbeWritable(Wide(parent))) {
+            return {requested_path, requested_source ? requested_source : "explicit", letter,
+                    free_of(letter), letter == local_letter};
+        }
+        std::printf("UWP swap: requested path rejected (relative, removable/unknown, existing, or "
+                    "not writable); no existing file will be overwritten: %s\n", requested_path.c_str());
+    }
+    if (auto_select) {
+        if (const Volume* best = BestSwapVolume(volumes, local_letter, reserve)) {
+            const std::string parent = std::string(1, best->letter) + ":\\";
+            return {UniqueSwapPath(parent), "automatic", best->letter, best->free, false};
+        }
+        std::puts("UWP swap: no writable, non-removable alternative with space above the reserve; "
+                  "falling back to LocalState");
+    }
+    return {UniqueSwapPath(local_parent), auto_select ? "LocalState fallback" : "LocalState (auto off)",
+            local_letter, free_of(local_letter), true};
+}
+
+void TestSwapSpeed(const SwapChoice& choice, std::uint64_t reserve, bool enabled) {
+    constexpr std::uint64_t total = std::uint64_t{64} << 20;
+    constexpr DWORD block_size = 1024 * 1024;
+    if (!enabled) {
+        std::puts("UWP swap speed: 64 MiB test disabled (swap_speed_test=0)");
+        return;
+    }
+    if (choice.path.empty() || choice.free <= reserve || choice.free - reserve < total) {
+        std::puts("UWP swap speed: 64 MiB test skipped; not enough free space above reserve");
+        return;
+    }
+    const std::string parent = SwapParent(choice.path);
+    if (parent.empty()) {
+        std::puts("UWP swap speed: invalid path; test skipped");
+        return;
+    }
+    const std::wstring path = Wide(parent + "bbport-speed-" + std::to_string(GetCurrentProcessId()) +
+                                   "-" + std::to_string(GetTickCount64()) + ".tmp");
+    CREATEFILE2_EXTENDED_PARAMETERS params{};
+    params.dwSize = sizeof(params);
+    params.dwFileAttributes = FILE_ATTRIBUTE_TEMPORARY;
+    params.dwFileFlags = FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_WRITE_THROUGH |
+                         FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN;
+    HANDLE file = CreateFile2FromAppW(path.c_str(), GENERIC_WRITE | GENERIC_READ, 0, CREATE_NEW, &params);
+    if (file == INVALID_HANDLE_VALUE) {
+        std::printf("UWP swap speed: 64 MiB test could not create temporary file (error %lu)\n", GetLastError());
+        return;
+    }
+    auto* block = static_cast<unsigned char*>(
+        VirtualAllocFromApp(nullptr, block_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    if (!block) {
+        std::printf("UWP swap speed: aligned 1 MiB buffer unavailable (error %lu)\n", GetLastError());
+        CloseHandle(file);
+        return;
+    }
+    // Incompressible-ish test data, not a sparse file of zeros. VirtualAlloc is page aligned for
+    // unbuffered I/O and every transfer size and offset is a multiple of 1 MiB.
+    std::uint32_t state = 0x12345678;
+    for (DWORD i = 0; i < block_size; ++i) {
+        state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+        block[i] = static_cast<unsigned char>(state);
+    }
+    const auto start = std::chrono::steady_clock::now();
+    bool ok = true;
+    DWORD done = 0;
+    for (unsigned i = 0; i < 64 && ok; ++i)
+        ok = WriteFile(file, block, block_size, &done, nullptr) && done == block_size;
+    if (ok) ok = FlushFileBuffers(file) != FALSE;
+    const auto written = std::chrono::steady_clock::now();
+    LARGE_INTEGER zero{};
+    if (ok) ok = SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) != FALSE;
+    for (unsigned i = 0; i < 64 && ok; ++i)
+        ok = ReadFile(file, block, block_size, &done, nullptr) && done == block_size;
+    const auto read = std::chrono::steady_clock::now();
+    const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (ok) {
+        const double write_s = std::chrono::duration<double>(written - start).count();
+        const double read_s = std::chrono::duration<double>(read - written).count();
+        std::printf("UWP swap speed: 64 MiB %c: unbuffered write %.1f MiB/s (%.0f ms), "
+                    "read %.1f MiB/s (%.0f ms)\n", choice.letter,
+                    write_s > 0 ? 64.0 / write_s : 0, write_s * 1000,
+                    read_s > 0 ? 64.0 / read_s : 0, read_s * 1000);
+    } else {
+        std::printf("UWP swap speed: 64 MiB test incomplete (error %lu)\n", error);
+    }
+    CloseHandle(file);
+    VirtualFree(block, 0, MEM_RELEASE);
+    std::fflush(stdout);
+}
 
 int Report(const char* local_dir) {
     const std::string local = local_dir ? local_dir : "";
@@ -103,10 +307,10 @@ int Report(const char* local_dir) {
     }
     std::uint64_t local_free = 0, local_total = 0;
     for (const Volume& volume : volumes) {
-        std::printf("UWP storage: %c: total=%s free=%s%s%s\n", volume.letter,
+        std::printf("UWP storage: %c: total=%s free=%s%s%s type=%s bus=%s\n", volume.letter,
                     FormatBytes(volume.total).c_str(), FormatBytes(volume.free).c_str(),
                     volume.letter == local_letter ? " [LocalState]" : "",
-                    volume.writable ? " writable" : " read-only to this app");
+                    volume.writable ? " writable" : " read-only to this app", KindName(volume.kind), BusName(volume.bus));
         if (volume.letter == local_letter) {
             local_free = volume.free;
             local_total = volume.total;
@@ -130,22 +334,18 @@ int Report(const char* local_dir) {
                     FormatBytes(local_total).c_str());
     }
 
-    // A bigger volume is not a bigger swap budget unless the app may write there. Say which one is
-    // biggest and whether that is where the swap file already is.
-    if (const Volume* best = BestWritable(volumes, local_letter)) {
-        std::printf("UWP storage: largest writable volume other than LocalState's is %c: with %s "
-                    "free (the swap file stays in LocalState unless BB_UWP_SWAP_FILE points "
-                    "elsewhere)\n",
+    if (const Volume* best = BestSwapVolume(volumes, local_letter, std::uint64_t{384} << 20)) {
+        std::printf("UWP storage: largest eligible fixed volume other than LocalState is %c: "
+                    "with %s free (swap path printed in the run header)\n",
                     best->letter, FormatBytes(best->free).c_str());
     } else {
-        std::puts("UWP storage: no other writable volume; LocalState's volume is the only place the "
-                  "pager can write");
+        std::puts("UWP storage: no other writable fixed volume confirmed; removable and unknown "
+                  "volumes are excluded from automatic swap");
     }
 
     if (LowStorage(local_free)) {
         std::printf("UWP STORAGE WARNING: %s free on %c:, below the %s this port wants for the swap "
-                    "file plus the game's own writes. Paging will be capped to what is left, and the "
-                    "run can stall at the memory limit with memory it cannot hand back.\n",
+                    "for the game's own writes. The chosen swap volume is reported separately.\n",
                     FormatBytes(local_free).c_str(), local_letter ? local_letter : '?',
                     FormatBytes(kLowStorageBytes).c_str());
         return 1;
