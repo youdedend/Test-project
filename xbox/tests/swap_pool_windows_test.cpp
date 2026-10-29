@@ -8,6 +8,9 @@
 #endif
 #include <windows.h>
 #include <memoryapi.h>
+// The standalone clang-cl test is not linked through the UWP target; this import lives in the
+// same WindowsApp library used by the real package rather than the desktop kernel32 import set.
+#pragma comment(lib, "WindowsApp.lib")
 
 static void Require(bool ok, const char* message) {
     if (!ok) {
