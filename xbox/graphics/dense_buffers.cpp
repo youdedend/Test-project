@@ -16,6 +16,10 @@
 #include <set>
 #include <utility>
 
+/* Item 2, stage 2a: pre-merge reclaim (retired arenas + images; gpu/shim/bbgpu.cpp). Declared at
+ * namespace scope: clang-cl rejects extern "C" inside function bodies (failed-attempt #4). */
+extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+
 namespace VideoCore {
 
 void BufferCache::InitializeDenseBuffers() {
@@ -84,6 +88,10 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
         const u64 mb = env ? std::strtoull(env, nullptr, 10) : 768;
         return std::min<u64>(mb, 4096) << 20;
     }();
+    static const bool recover_before_merge = [] {
+        const char* env = std::getenv("BB_ARENA_ADMISSION_RECOVER");
+        return !env || env[0] != '0';
+    }();
     if (admission_diagnostics &&
         !BbArenaAdmission::CapFits(arena_backed, replaced, incoming, cap)) {
         std::printf("UWP arena admission OBSERVE ONLY: live %llu MiB - replaced %llu + new %llu "
@@ -93,6 +101,24 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
                     (unsigned long long)(incoming >> 20),
                     (unsigned long long)(BbArenaAdmission::ProjectedLive(arena_backed, replaced, incoming) >> 20),
                     (unsigned long long)(cap >> 20));
+        std::fflush(stdout);
+    }
+    // Item 2, stage 2a: make room BEFORE the merge allocates its transient peak (old + full new).
+    // The merge is the largest single allocation the app makes, and `.819` sat at live=912 MiB with
+    // 448 MiB retired while it happened. bbgpu_uwp_emergency_reclaim releases replaced arenas whose
+    // tick has signaled (no producer holds them) and takes images the collector may free - the same
+    // pin rules as every other reclaim path. NOT the pager here: runtime_memory_page_out takes the
+    // commit lock the guest fault path uses, and Test #22 showed an allocation storm through that
+    // lock looks like a 10 s stall. The allocation is never blocked (that is stage 2b): if the cap
+    // is still exceeded after reclaim, the merge proceeds and the OBSERVE line above is the record.
+    if (recover_before_merge &&
+        !BbArenaAdmission::CapFits(arena_backed, replaced, incoming, cap)) {
+        const u64 projected = BbArenaAdmission::ProjectedLive(arena_backed, replaced, incoming);
+        const u64 over = projected > cap ? projected - cap : 0;
+        const u64 freed = bbgpu_uwp_emergency_reclaim(over ? over : (u64{32} << 20));
+        std::printf("UWP arena admission: reclaimed %llu MiB before merge (over cap by %llu MiB); "
+                    "projection does not shrink until retirement settles\n",
+                    (unsigned long long)(freed >> 20), (unsigned long long)(over >> 20));
         std::fflush(stdout);
     }
     // Construct outside dense_arena_mutex: an allocation failure can ask the retired-arena release

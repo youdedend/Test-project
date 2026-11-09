@@ -17,6 +17,16 @@ inline bool BudgetFits(std::uint64_t usage, std::uint64_t limit, std::uint64_t b
     return bytes <= limit - usage - headroom;
 }
 
+/// Item 2, stage 2a: the pre-allocation recovery trigger ("require usage + size <= limit - 250 MiB").
+/// True means: run the ordered recovery ladder (recovery_ladder.h) and then STILL allocate. Denying,
+/// splitting or skipping the request is stage 2b and needs caller contracts first. Small
+/// allocations are not worth a ladder walk (kMinimum), and an unknown limit guards nothing.
+inline bool ShouldRecover(std::uint64_t usage, std::uint64_t limit, std::uint64_t bytes,
+                          std::uint64_t headroom = kHeadroom, std::uint64_t minimum = kMinimum) {
+    if (!limit || bytes < minimum) return false;
+    return !BudgetFits(usage, limit, bytes, headroom);
+}
+
 inline std::uint64_t ProjectedLive(std::uint64_t live, std::uint64_t replaced,
                                    std::uint64_t incoming) {
     const std::uint64_t remaining = live > replaced ? live - replaced : 0;

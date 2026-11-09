@@ -29,6 +29,9 @@ extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
 extern "C" uint64_t bbgpu_uwp_wait_for_release(uint64_t need, uint32_t timeout_ms);
 /* BUILD 3, item 14: the ladder's last rung - make the next attempt need less (step 3 = degrade). */
 extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need);
+/* Item 2, stage 2a: the ordered pre-allocation ladder (gpu/shim/bbgpu.cpp). flags bit0 = mid-draw
+ * (skips the Finish rung; see handoff failed-attempt #5). */
+extern "C" uint64_t bbgpu_uwp_prealloc_ladder(uint64_t need, int32_t flags);
 extern "C" uint64_t bb_uwp_app_memory_usage(void);
 /* B8: the big/slow allocation line (gpu/shim/bbgpu.cpp). */
 extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
@@ -274,6 +277,35 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
             }
         }
 #endif
+        // bbport (item 2, stage 2a): the 250 MiB reserve floor. The headroom block above only fires
+        // once the allocation is already at risk (usage + room > limit); this fires earlier, when
+        // the request would leave less than kHeadroom (250 MiB) of the app budget free, and runs
+        // the ORDERED ladder from recovery_ladder.h before the transient peak lands. It frees,
+        // never refuses: the allocation below proceeds exactly as before (denial needs the stage
+        // 2b caller contracts). mid-draw=1: this ctor is reached from GetDenseArena after
+        // BeginRendering, so the Finish rung is skipped (failed-attempt #5); PopPending, retired
+        // release, image reclaim and the pager are the safe subset and stop at the first point the
+        // request is covered.
+        static const bool prealloc_recover = [] {
+            const char* env = std::getenv("BB_ARENA_ADMISSION_RECOVER");
+            return !env || env[0] != '0';
+        }();
+        if (prealloc_recover && mem_type == MemoryType::DeviceLocal &&
+            BbArenaAdmission::ShouldRecover(bb_uwp_app_memory_usage(), limit, buffer_ci.size)) {
+            const auto ladder_start = std::chrono::steady_clock::now();
+            const uint64_t freed = bbgpu_uwp_prealloc_ladder(buffer_ci.size, 1);
+            const auto ladder_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - ladder_start)
+                                       .count();
+            std::printf("UWP recovery ladder (pre-alloc): reserve floor hit for a %llu KiB "
+                        "allocation; freed %llu MiB in %lld ms (usage %llu/%llu MiB)\n",
+                        static_cast<unsigned long long>(buffer_ci.size >> 10),
+                        static_cast<unsigned long long>(freed >> 20),
+                        static_cast<long long>(ladder_ms),
+                        static_cast<unsigned long long>(bb_uwp_app_memory_usage() >> 20),
+                        static_cast<unsigned long long>(limit >> 20));
+            std::fflush(stdout);
+        }
         VkBuffer unsafe_buffer{};
         // bbport: B8 - the allocation's size, the console's usage either side of it and how long it
         // took; bbgpu_note_alloc decides whether the line is worth printing (32 MiB or 250 ms).

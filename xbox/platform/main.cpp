@@ -830,6 +830,7 @@ static void ensure_default_ini(const std::string& ini_path) {
         "swap_speed_test=1\n"
         "swap_pool_decommit=1\n"
         "arena_admission=1\n"
+        "arena_admission_recover=1\n"
         "arena_live_cap_mb=768\n"
         "watchdog_fast=1\n"
         "watchdog_reduce=1\n"
@@ -2321,6 +2322,7 @@ static void run_loader() {
     };
     flag_to_env("swap_pool_decommit", "BB_UWP_POOL_DECOMMIT", true);
     flag_to_env("arena_admission", "BB_ARENA_ADMISSION", true);
+    flag_to_env("arena_admission_recover", "BB_ARENA_ADMISSION_RECOVER", true);
     flag_to_env("texture_reclaim_experiment", "BB_GC_EXPERIMENT", false);
     flag_to_env("resolution_diagnostics", "BB_RESOLUTION_DIAGNOSTICS", true);
     const auto number_to_env = [&](const char* key, const char* env, long min, long max) {

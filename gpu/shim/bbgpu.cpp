@@ -26,6 +26,7 @@
 #include <vector>
 #include <SDL3/SDL.h>
 #include "../bbgpu.h"
+#include "../../xbox/graphics/recovery_ladder.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/rdtsc.h"
@@ -473,6 +474,64 @@ extern "C" void bbgpu_uwp_pressure_level(int level) {
     saved_preset = -1;
     calm_since = {};
     std::fflush(stdout);
+}
+
+/// bbport (item 2, stage 2a): the ordered pre-allocation ladder, run BEFORE a DeviceLocal
+/// allocation that would leave less than 250 MiB of the app budget (arena_admission_policy.h
+/// ShouldRecover). Rung order and gating live in xbox/graphics/recovery_ladder.h and are pinned by
+/// xbox/tests/recovery_ladder_test.cpp; this is the real rung supply:
+///   FinishGpu      -> scheduler.Finish() (skipped when flags bit0 = mid-draw; failed-attempt #5)
+///   PopPending     -> scheduler.PopPendingOperations()
+///   ReleaseRetired -> ReleaseRetiredArenas + staging idle trim
+///   ReclaimImages  -> TextureCache::EmergencyReclaim
+///   Pager          -> runtime_memory_page_out (bounded by the pager's own budgets)
+/// It frees, never refuses: the caller allocates afterwards no matter what this returns.
+extern "C" uint64_t bbgpu_uwp_prealloc_ladder(uint64_t need, int32_t flags) {
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r || need == 0) {
+        return 0;
+    }
+    const bool mid_draw = (flags & 1) != 0;
+    BbUwp::RecoveryHooks hooks;
+    hooks.finish_gpu = [](std::uint64_t) -> std::uint64_t {
+        auto* rr = Core::Memory::Instance()->GetRasterizer();
+        if (!rr) return 0;
+        rr->GetScheduler().Finish();
+        return 0;
+    };
+    hooks.pop_pending = [](std::uint64_t) -> std::uint64_t {
+        auto* rr = Core::Memory::Instance()->GetRasterizer();
+        if (!rr) return 0;
+        rr->GetScheduler().PopPendingOperations();
+        return 0;
+    };
+    hooks.release_retired = [](std::uint64_t) -> std::uint64_t {
+        auto* rr = Core::Memory::Instance()->GetRasterizer();
+        if (!rr) return 0;
+        auto& buffers = rr->GetBufferCache();
+        const uint64_t before = buffers.RetiredArenaBytes();
+        buffers.ReleaseRetiredArenas();
+        const uint64_t after = buffers.RetiredArenaBytes();
+        rr->GetRuntime().GetStagingPool().RequestIdleTrim();
+        return before > after ? before - after : 0;
+    };
+    hooks.reclaim_images = [](std::uint64_t still_short) -> std::uint64_t {
+        auto* rr = Core::Memory::Instance()->GetRasterizer();
+        if (!rr) return 0;
+        // EmergencyReclaim(0) is a request for zero bytes, not "whatever you can": keep the budget.
+        return rr->GetTextureCache().EmergencyReclaim(still_short ? still_short : (uint64_t{32} << 20));
+    };
+    hooks.pager = [](std::uint64_t still_short) -> std::uint64_t {
+        return runtime_memory_page_out(static_cast<size_t>(still_short ? still_short : (128ull << 20)));
+    };
+    const auto outcome = BbUwp::RunRecoveryLadder(hooks, need, mid_draw);
+    std::printf("UWP recovery ladder (pre-alloc): freed %llu MiB of the %llu MiB wanted in %d "
+                "rung(s)%s\n",
+                static_cast<unsigned long long>(outcome.freed >> 20),
+                static_cast<unsigned long long>(need >> 20), outcome.rungs_run,
+                outcome.finish_skipped ? " (Finish skipped: mid-draw)" : "");
+    std::fflush(stdout);
+    return outcome.freed;
 }
 
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need) {
