@@ -732,7 +732,11 @@ static void migrate_ini_defaults(const std::string& ini_path) {
     // optional feature (item 16), so the migration runs while the revision is below 3 instead of
     // only when the marker is absent. Everything it adds is a comment or a default the code already
     // uses, and no existing line is touched.
-    constexpr int kSettingsRev = 3;
+    // diag-4: revision 4 appends the graphics-driver block below. A player's bbport.ini already
+    // exists by then, and the default text is only written for a *new* file - which is why "add
+    // dzn_debug=... to bbport.ini" was an instruction the app could not honour for the user whose
+    // file predates it. The revision marker is what makes this run exactly once.
+    constexpr int kSettingsRev = 4;
     int revision = 0;
     if (const auto at = text.find("settings_rev="); at != std::string::npos) {
         std::size_t end = at + std::strlen("settings_rev=");
@@ -781,6 +785,38 @@ static void migrate_ini_defaults(const std::string& ini_path) {
                 text.push_back('\n');
             }
             text += "settings_rev=3\n";
+        }
+        std::fflush(stdout);
+    }
+    // diag-4: revision 4 - the graphics-driver block. Appended only when the key is absent, so a
+    // player who already set it by hand keeps their value, and the default is the "off" the code
+    // has always used.
+    if (revision < 4 && text.find("dzn_debug=") == std::string::npos) {
+        if (!text.empty() && text.back() != '\n') {
+            text.push_back('\n');
+        }
+        text += "\n"
+                "# Graphics-driver switches, passed to the Mesa Dozen translator (empty = off).\n"
+                "# dzn_debug=d3d12 turns on the D3D12 debug layer: it reports the invalid call\n"
+                "# before a crash instead of after it. Add nobindless/no16bit/nostencilref to hide\n"
+                "# device capabilities the console driver may not support. Any name in CAPITALS\n"
+                "# (DZN_DEBUG=..., VK_LOADER_DRIVERS_DISABLE=...) is passed through too.\n"
+                "dzn_debug=\n";
+        std::printf("UWP settings: added dzn_debug to bbport.ini (settings_rev %d -> %d)\n",
+                    revision, kSettingsRev);
+    }
+    if (revision < kSettingsRev) {
+        if (const auto marker = text.find("settings_rev="); marker != std::string::npos) {
+            std::size_t end = marker + std::strlen("settings_rev=");
+            while (end < text.size() && text[end] >= '0' && text[end] <= '9') {
+                ++end;
+            }
+            text.replace(marker, end - marker, "settings_rev=" + std::to_string(kSettingsRev));
+        } else {
+            if (!text.empty() && text.back() != '\n') {
+                text.push_back('\n');
+            }
+            text += "settings_rev=" + std::to_string(kSettingsRev) + "\n";
         }
         BbPrepare::Bytes bytes(text.begin(), text.end());
         write_file_bytes(ini_path, bytes);
@@ -2433,12 +2469,25 @@ static void run_loader() {
         if (k.find('.') != std::string::npos) {
             continue; // section-qualified alias of the same line ([dump] key -> dump.key)
         }
-        if (k.rfind("BB_", 0) == 0 || k.rfind("DZN_", 0) == 0 || k.rfind("MESA_", 0) == 0) {
-            if (const char* existing = std::getenv(k.c_str()); existing && *existing) {
-                continue; // graphics-debug.txt, or the launcher, already decided this one
+        // Three spellings are accepted: the prefixes above, the friendly `dzn_debug` (mapped
+        // below), and any name written entirely in upper case - env names are upper case and
+        // bbport's own keys are lower case, so `DZN_DEBUG=d3d12` pasted as-is also works.
+        bool upper = !k.empty();
+        for (const char c : k) {
+            if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+                upper = false;
+                break;
             }
-            set_env_var(k.c_str(), v);
         }
+        const bool prefixed = k.rfind("BB_", 0) == 0 || k.rfind("DZN_", 0) == 0 ||
+                              k.rfind("MESA_", 0) == 0;
+        if (!prefixed && !upper) {
+            continue;
+        }
+        if (const char* existing = std::getenv(k.c_str()); existing && *existing) {
+            continue; // graphics-debug.txt, or the launcher, already decided this one
+        }
+        set_env_var(k.c_str(), v);
     }
     const auto flag_to_env = [&](const char* key, const char* env, bool fallback) {
         if (const char* existing = std::getenv(env); existing && *existing) return;
