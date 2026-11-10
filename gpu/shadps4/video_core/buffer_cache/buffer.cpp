@@ -276,7 +276,6 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                 }
             }
         }
-#endif
         // bbport (item 2, stage 2a): the 250 MiB reserve floor. The headroom block above only fires
         // once the allocation is already at risk (usage + room > limit); this fires earlier, when
         // the request would leave less than kHeadroom (250 MiB) of the app budget free, and runs
@@ -290,6 +289,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
             const char* env = std::getenv("BB_ARENA_ADMISSION_RECOVER");
             return !env || env[0] != '0';
         }();
+        const uint64_t limit = bb_uwp_app_memory_limit();
         if (prealloc_recover && mem_type == MemoryType::DeviceLocal &&
             BbArenaAdmission::ShouldRecover(bb_uwp_app_memory_usage(), limit, buffer_ci.size)) {
             const auto ladder_start = std::chrono::steady_clock::now();
@@ -306,6 +306,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                         static_cast<unsigned long long>(limit >> 20));
             std::fflush(stdout);
         }
+#endif
         VkBuffer unsafe_buffer{};
         // bbport: B8 - the allocation's size, the console's usage either side of it and how long it
         // took; bbgpu_note_alloc decides whether the line is worth printing (32 MiB or 250 ms).
