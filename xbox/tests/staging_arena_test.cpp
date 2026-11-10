@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace {
@@ -31,7 +32,7 @@ struct F {
         cfg.idle_frames = 10;
         return BbUwp::StagingArena(
             [this](std::uint64_t bytes, void*& ctx, void*& mapped) -> bool {
-                void* p = std::aligned_alloc(64, static_cast<size_t>(bytes));
+                void* p = ::operator new(static_cast<size_t>(bytes), std::align_val_t{64}, std::nothrow);
                 if (!p) {
                     return false;
                 }
@@ -44,7 +45,7 @@ struct F {
             [this](void* ctx) {
                 for (auto it = fake.begin(); it != fake.end(); ++it) {
                     if (it->ctx == ctx) {
-                        std::free(it->mapped);
+                        ::operator delete(it->mapped, std::align_val_t{64});
                         delete it->alive;
                         fake.erase(it);
                         return;
