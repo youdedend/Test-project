@@ -68,6 +68,46 @@ static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset)
             ": packet length exceeds remaining submission size. Packet dword count={}, remaining "
             "submission dwords={}",
             offset, span.size());
+        /* bbport (diag-5): the line above says a packet ran off the end, and returning `{}` stops
+         * the caller's loop - so the tail of this command stream is dropped without another word.
+         * `26314`'s 5th run logged that message once and the only thing that could be said about it
+         * was that it existed. Name the stream by its own dwords: the first ones (a Type-3 header
+         * says what the stream starts with) and the last ones it did contain. Reading stays inside
+         * `span`, so this cannot fault; the values are what make a truncation reproducible.
+         * One buffer for both halves on purpose - a helper returning a shared static would be
+         * overwritten by the second call before the line was formatted. */
+        auto describe_stream = [](std::span<const u32> words) {
+            static thread_local char text[224];
+            const std::size_t shown = words.size() < 8 ? words.size() : 8;
+            std::size_t used = 0;
+            text[0] = '\0';
+            const auto append = [&](const char* label, const u32* from, std::size_t count) {
+                const int wrote = std::snprintf(text + used, sizeof(text) - used, "%s[", label);
+                if (wrote <= 0) {
+                    return;
+                }
+                used += static_cast<std::size_t>(wrote);
+                for (std::size_t i = 0; i < count; ++i) {
+                    const int one = std::snprintf(text + used, sizeof(text) - used, "%s%08x",
+                                                  i ? " " : "", from[i]);
+                    if (one <= 0) {
+                        return;
+                    }
+                    used += static_cast<std::size_t>(one);
+                }
+                const int close = std::snprintf(text + used, sizeof(text) - used, "]");
+                if (close > 0) {
+                    used += static_cast<std::size_t>(close);
+                }
+            };
+            if (shown != 0) {
+                append("first ", words.data(), shown);
+                append(" last ", words.data() + (words.size() - shown), shown);
+            }
+            return text;
+        };
+        LOG_ERROR(Lib_GnmDriver, ": truncated stream: {} dwords, overrun by {}; {}",
+                  span.size(), offset - span.size(), describe_stream(span));
         // Return empty subspan so check for next packet bails out
         return {};
     }
