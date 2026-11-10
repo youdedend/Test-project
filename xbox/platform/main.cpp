@@ -1655,15 +1655,14 @@ static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
         if (VirtualQuery(reinterpret_cast<LPCVOID>(rip), &mbi, sizeof(mbi))) {
             mod_base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
         }
-        const char* mod_name = "unknown";
-        if (mod_base && mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))) {
-            mod_name = "bloodborne_xbox.exe";
-        } else if (mod_base &&
-                   mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(L"vulkan_dzn.dll"))) {
-            mod_name = "vulkan_dzn.dll";
-        } else if (mod_base &&
-                   mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(L"dxil.dll"))) {
-            mod_name = "dxil.dll";
+        /* bbport (diag-3): name whatever module is mapped at the faulting rip, not only the three
+         * this filter used to know. `1946`'s second crash printed `module=unknown+0x23ec55` and
+         * left the address unidentifiable, which is the one thing a crash line must never do. */
+        const char* mod_name = ModuleNameForAddress(rip);
+        if (mod_name == nullptr) {
+            mod_name = mod_base == reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))
+                           ? "bloodborne_xbox.exe"
+                           : "unknown";
         }
         const uintptr_t rva = mod_base ? (rip - mod_base) : rip;
         const uintptr_t fault_addr =
@@ -1693,6 +1692,27 @@ static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
          * crash the stall dump did name. The filter knows the faulting thread, so it asks for its
          * own slot; nothing here allocates or takes a lock beyond the tag table's. */
         bbgpu_thread_op_dump();
+        /* bbport (diag-3): which module the fault address itself points into (a bad data pointer
+         * usually points *at* a real object of some DLL), and where every other thread was when
+         * this one died - `1946` died during the watchdog's degrade step and nothing said what the
+         * render/PM4 threads were holding. */
+        {
+            MEMORY_BASIC_INFORMATION fbi{};
+            if (fault_addr != 0 && VirtualQuery(reinterpret_cast<LPCVOID>(fault_addr), &fbi,
+                                                sizeof(fbi)) != 0) {
+                const char* who = ModuleNameForAddress(fault_addr);
+                std::printf("UNHANDLED FAULT CONTEXT: addr is in %s, protect=0x%lx state=0x%lx "
+                            "type=0x%lx\n",
+                            who ? who : (fbi.AllocationBase ? "a private allocation"
+                                                            : "not mapped"),
+                            static_cast<unsigned long>(fbi.Protect),
+                            static_cast<unsigned long>(fbi.State),
+                            static_cast<unsigned long>(fbi.Type));
+            } else {
+                std::printf("UNHANDLED FAULT CONTEXT: addr is not mapped\n");
+            }
+            runtime_sample_threads();
+        }
         std::fflush(stdout);
     }
 
@@ -2035,6 +2055,58 @@ static std::uint64_t run_watchdog_step(BbWatchdog::Step step, std::uint64_t need
         break;
     }
     return 0;
+}
+
+/// bbport (diag-3): the file name of the module mapped at `address`, or nullptr when nothing is.
+/// The fault line could only name three modules by handle before, so `1946`'s second crash printed
+/// `module=unknown` and the one address that would have identified it was left raw. Enumerating
+/// the process's modules works for any DLL - including the ones loaded by name at run time - and
+/// costs nothing on the crash path.
+static const char* ModuleNameForAddress(uintptr_t address) {
+    // Resolved through the loader, not linked: psapi's process queries are not in the UWP API
+    // partition either (same reason the paging counters below are resolved this way).
+    using EnumFn = BOOL(WINAPI*)(HANDLE, HMODULE*, DWORD, LPDWORD);
+    using InfoFn = BOOL(WINAPI*)(HANDLE, HMODULE, MODULEINFO*, DWORD);
+    static EnumFn enum_proc = nullptr;
+    static InfoFn info_proc = nullptr;
+    static bool resolved = false;
+    if (!resolved) {
+        resolved = true;
+        if (HMODULE kernel = GetModuleHandleW(L"kernel32.dll")) {
+            enum_proc = reinterpret_cast<EnumFn>(
+                reinterpret_cast<void*>(GetProcAddress(kernel, "K32EnumProcessModules")));
+            info_proc = reinterpret_cast<InfoFn>(
+                reinterpret_cast<void*>(GetProcAddress(kernel, "K32GetModuleInformation")));
+        }
+    }
+    static thread_local char name[MAX_PATH];
+    HMODULE modules[512]{};
+    DWORD needed = 0;
+    if (address == 0 || enum_proc == nullptr || info_proc == nullptr ||
+        enum_proc(GetCurrentProcess(), modules, static_cast<DWORD>(sizeof(modules)), &needed) ==
+            FALSE) {
+        return nullptr;
+    }
+    const DWORD count = needed / static_cast<DWORD>(sizeof(HMODULE));
+    HMODULE owner = nullptr;
+    for (DWORD i = 0; i < count && i < std::size(modules); ++i) {
+        MODULEINFO info{};
+        if (info_proc(GetCurrentProcess(), modules[i], &info, static_cast<DWORD>(sizeof(info))) ==
+            FALSE) {
+            continue;
+        }
+        const auto base = reinterpret_cast<uintptr_t>(info.lpBaseOfDll);
+        if (address >= base && address < base + info.SizeOfImage) {
+            owner = modules[i];
+            break;
+        }
+    }
+    if (owner == nullptr ||
+        GetModuleFileNameA(owner, name, static_cast<DWORD>(std::size(name))) == 0) {
+        return nullptr;
+    }
+    const char* slash = std::strrchr(name, '\\');
+    return slash ? slash + 1 : name;
 }
 
 /// bbport: the per-category memory table (A4) and the Windows side of the picture (B6).
@@ -2855,12 +2927,25 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                         runtime_sample_threads();
                     }
                     if (g_app_visible.load(std::memory_order_relaxed) && presents > 0) {
-                        if (presents == last_presents) {
-                            if (++stalled_ticks >= 2 && !stall_dumped) {
+                        /* bbport (diag-3): a stuck fence is a stall even when the presenter keeps
+                         * presenting. `1946` reached 2,326 presents, then the fence stood at 4648
+                         * submitted / 4647 completed for forty seconds and the run was hung - and
+                         * the only dump taken happened because presents also stopped. Takes
+                         * priority over the presenter rule for the same reason: the fence is
+                         * upstream of the picture, so its age explains a stopped presenter, not
+                         * the other way round. */
+                        const bool fence_stalled =
+                            fence_age > 3000 && have_gpu && gpu.fence_submitted != 0;
+                        const bool presenter_stalled = presents == last_presents;
+                        if (presenter_stalled || fence_stalled) {
+                            if (++stalled_ticks >= (fence_stalled ? 1u : 2u) && !stall_dumped) {
                                 stall_dumped = true;
                                 std::printf(
-                                    "UWP STALL DETECTED (presents stuck at %llu for %u s):\n",
-                                    static_cast<unsigned long long>(presents), stalled_ticks * 5);
+                                    "UWP STALL DETECTED (%s: presents stuck at %llu for %u s, "
+                                    "gpu fence age %llu ms):\n",
+                                    fence_stalled ? "fence" : "presents",
+                                    static_cast<unsigned long long>(presents), stalled_ticks * 5,
+                                    fence_age);
                                 // bbport: first the pager, because a page sweep holds the commit
                                 // lock exclusively and both `.717` and `.823` froze with this dump
                                 // and nothing in it to say whether the freeze was ours.

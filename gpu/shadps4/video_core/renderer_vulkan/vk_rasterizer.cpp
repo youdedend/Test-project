@@ -23,6 +23,10 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "bbport_threads.h"
+/* bbport (diag-3): what this thread is drawing, for the stall and fault dumps (gpu/shim/bbgpu.cpp).
+ * Declared here rather than included: bbport_copy.h already publishes the sibling tag calls and
+ * clang-cl rejects extern "C" declarations inside function bodies. */
+extern "C" void bbgpu_thread_draw(const char* kind, const char* marker, uint32_t draw);
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
@@ -966,6 +970,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
 
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
+    // bbport (diag-3): name the draw while it records, so a stall report says which one.
+    static std::atomic<uint32_t> s_draw_no{0};
+    const uint32_t draw_no = s_draw_no.fetch_add(1, std::memory_order_relaxed) + 1;
+    bbgpu_thread_draw("graphics", is_indexed ? "indexed" : "non-indexed", draw_no);
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
@@ -1310,6 +1318,10 @@ void Rasterizer::DispatchDirect() {
 }
 
 void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
+    // bbport (diag-3): "compute" instead of the last graphics draw that finished recording.
+    static std::atomic<uint32_t> s_dispatch_no{0};
+    bbgpu_thread_draw("compute", nullptr,
+                      s_dispatch_no.fetch_add(1, std::memory_order_relaxed) + 1);
     FrameCapture::Poll();
     gbuffer_draw = false;
 

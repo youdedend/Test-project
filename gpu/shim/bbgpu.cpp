@@ -869,8 +869,21 @@ struct ThreadOp {
     std::atomic<uint64_t> arg1{0};
     std::atomic<uint64_t> since{0};
 };
-constexpr size_t kThreadOpSlots = 16;
+constexpr size_t kThreadOpSlots = 24; // bbport (diag-3): +rasterizer, PM4 processor, copy workers
 ThreadOp g_thread_ops[kThreadOpSlots];
+
+/* bbport (diag-3): what the tagged thread is drawing, if it is drawing. `1946`'s stall named the
+ * rasterizer's operation but not the draw inside it, which is the difference between "the last
+ * submission never completed" and "this particular draw hangs". String literals only. */
+struct ThreadDraw {
+    std::atomic<uint32_t> tid{0};
+    std::atomic<const char *> kind{nullptr}; // "graphics" / "compute" / "copy"
+    std::atomic<const char *> marker{nullptr}; // the pipeline name or stage, when there is one
+    std::atomic<uint32_t> draw{0};
+};
+constexpr size_t kThreadDrawSlots = 8;
+ThreadDraw g_thread_draws[kThreadDrawSlots];
+static thread_local ThreadDraw *t_draw = nullptr;
 } // namespace
 
 /* bbport: the slot is found once per thread and then cached, because `Scheduler::Wait` tags on
@@ -921,6 +934,35 @@ extern "C" void bbgpu_thread_op_done(void) {
     }
 }
 
+extern "C" void bbgpu_thread_draw(const char *kind, const char *marker, uint32_t draw) {
+    ThreadDraw *slot = t_draw;
+    if (!slot) {
+        const uint32_t tid = static_cast<uint32_t>(::GetCurrentThreadId());
+        ThreadDraw *empty = nullptr;
+        for (auto &d : g_thread_draws) {
+            const uint32_t owner = d.tid.load(std::memory_order_relaxed);
+            if (owner == tid) {
+                slot = &d;
+                break;
+            }
+            if (owner == 0 && !empty) {
+                empty = &d;
+            }
+        }
+        if (!slot) {
+            slot = empty;
+            if (!slot) {
+                return;
+            }
+            slot->tid.store(tid, std::memory_order_relaxed);
+        }
+        t_draw = slot;
+    }
+    slot->draw.store(draw, std::memory_order_relaxed);
+    slot->marker.store(marker, std::memory_order_release);
+    slot->kind.store(kind, std::memory_order_release);
+}
+
 extern "C" void bbgpu_thread_op_dump(void) {
     const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                    std::chrono::steady_clock::now().time_since_epoch())
@@ -935,6 +977,18 @@ extern "C" void bbgpu_thread_op_dump(void) {
                     static_cast<unsigned long long>(op.arg0.load(std::memory_order_relaxed)),
                     static_cast<unsigned long long>(op.arg1.load(std::memory_order_relaxed)),
                     static_cast<unsigned long long>(now - op.since.load(std::memory_order_relaxed)));
+    }
+    // bbport (diag-3): what each tagged draw thread is drawing right now.
+    for (auto &d : g_thread_draws) {
+        const char *kind = d.kind.load(std::memory_order_acquire);
+        if (!kind) {
+            continue;
+        }
+        const char *marker = d.marker.load(std::memory_order_acquire);
+        std::printf("UWP thread draw: tid %u %s #%u%s%s\n",
+                    d.tid.load(std::memory_order_relaxed), kind,
+                    d.draw.load(std::memory_order_relaxed), marker ? " marker=" : "",
+                    marker ? marker : "");
     }
     std::fflush(stdout);
 }
