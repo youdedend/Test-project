@@ -36,6 +36,9 @@ extern "C" uint64_t bb_uwp_app_memory_usage(void);
 /* B8: the big/slow allocation line (gpu/shim/bbgpu.cpp). */
 extern "C" void bbgpu_note_alloc(uint64_t size, const char *kind, const char *caller,
                                  uint64_t usage_before, double elapsed_ms);
+/* bbport: per-thread operation tags for the stall report (gpu/shim/bbgpu.cpp). */
+extern "C" void bbgpu_thread_op(const char* tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
 
 namespace {
 /// bbport: how much of the app budget a failed allocation needs back, and the last resort when
@@ -312,6 +315,9 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         // took; bbgpu_note_alloc decides whether the line is worth printing (32 MiB or 250 ms).
         const auto uwp_alloc_start = std::chrono::steady_clock::now();
         const uint64_t uwp_usage_before = bb_uwp_app_memory_usage();
+        // bbport (diag-1): name the allocation in the stall report - a 32-128 MiB buffer-cache
+        // allocation is one of the long single operations a wedge can hide behind.
+        bbgpu_thread_op("buffer-cache allocation", buffer_ci.size, 0);
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
 #ifdef BB_UWP
@@ -369,6 +375,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                          std::chrono::duration<double, std::milli>(
                              std::chrono::steady_clock::now() - uwp_alloc_start)
                              .count());
+        bbgpu_thread_op_done();
         if (result != VK_SUCCESS) {
             VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
             vmaGetHeapBudgets(allocator, budgets);

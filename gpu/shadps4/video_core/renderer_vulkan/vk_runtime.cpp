@@ -21,6 +21,10 @@
 
 #include <vulkan/vulkan_format_traits.hpp>
 
+/* bbport: per-thread operation tags for the stall report (gpu/shim/bbgpu.cpp). */
+extern "C" void bbgpu_thread_op(const char* tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+
 namespace Vulkan {
 
 static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
@@ -59,6 +63,25 @@ bool LoggedLayerMismatch(vk::Format format, u32 src_layers, u32 dst_layers) {
     return seen.emplace(static_cast<u32>(format), src_layers, dst_layers).second;
 }
 
+#ifdef BB_UWP
+/// bbport (diag-1, item 3): skip accounting and mapping poison. A layer-count mismatch means the
+/// ImageInfo bookkeeping for at least one side is wrong; the 2026-11-10 crash (a stale image
+/// object whose device pointer was garbage reaching the driver's copy builder) is exactly what a
+/// wrong mapping can produce. After two mismatches on the same (src, dst) pair the mapping is
+/// treated as poisoned and later copies to it are refused, counted and logged. Cause still
+/// unproven - this refuses rather than clamps, and every refusal is visible in the log.
+struct CopyMismatchBook {
+    std::mutex mutex;
+    std::set<std::pair<const void*, const void*>> seen_pairs;
+    std::set<std::pair<const void*, const void*>> poisoned_pairs;
+    u64 total_skips = 0;
+};
+CopyMismatchBook& GetCopyMismatchBook() {
+    static CopyMismatchBook book;
+    return book;
+}
+#endif
+
 void LogCopyMismatch(const char* what, const VideoCore::ImageInfo& src_info,
                      const VideoCore::ImageInfo& dst_info, u32 src_layers, u32 dst_layers) {
     std::printf("GPU: %s: source %s %ux%ux%u layers=%u addr=%#llx | destination %s %ux%ux%u "
@@ -77,6 +100,23 @@ void LogCopyMismatch(const char* what, const VideoCore::ImageInfo& src_info,
 static std::optional<SanitizedLayers> SanitizeCopyLayers(const VideoCore::ImageInfo& src_info,
                                                          const VideoCore::ImageInfo& dst_info,
                                                          const u32 depth) {
+#ifdef BB_UWP
+    // bbport (diag-1, item 3): refuse copies to a poisoned mapping pair up front, so no stale
+    // region reaches the driver's copy builder. Throttled log: first four refusals and every 64th.
+    {
+        auto& book = GetCopyMismatchBook();
+        std::scoped_lock lock{book.mutex};
+        if (book.poisoned_pairs.count({&src_info, &dst_info})) {
+            static u64 refused = 0;
+            if (++refused <= 4 || refused % 64 == 0) {
+                std::printf("GPU: refusing copy to poisoned mapping pair (refusal #%llu)\n",
+                            static_cast<unsigned long long>(refused));
+                std::fflush(stdout);
+            }
+            return std::nullopt;
+        }
+    }
+#endif
     const auto vk_src_type = ConvertImageType(src_info.type);
     const auto vk_dst_type = ConvertImageType(dst_info.type);
 
@@ -99,9 +139,28 @@ static std::optional<SanitizedLayers> SanitizeCopyLayers(const VideoCore::ImageI
 #ifdef BB_UWP
             // Soft fault: the guest and the texture cache disagree about the layer count. Skip
             // the copy (Test #11: five of these per session, each one a corrupted region).
+            // bbport (diag-1, item 3): count every skip (the dedup above hides repeats) and poison
+            // the pair after two mismatches; see GetCopyMismatchBook above.
+            {
+                auto& book = GetCopyMismatchBook();
+                std::scoped_lock lock{book.mutex};
+                const auto pair = std::make_pair(&src_info, &dst_info);
+                if (!book.seen_pairs.insert(pair).second) {
+                    book.poisoned_pairs.insert(pair);
+                }
+                book.total_skips += 1;
+                if (book.total_skips <= 8 || book.total_skips % 32 == 0) {
+                    std::printf("GPU: copy layer mismatch skip #%llu (poisoned pairs: %zu)\n",
+                                static_cast<unsigned long long>(book.total_skips),
+                                book.poisoned_pairs.size());
+                    std::fflush(stdout);
+                }
+            }
             if (LoggedLayerMismatch(src_info.pixel_format, src_layers, dst_layers)) {
                 LogCopyMismatch("copy layer mismatch", src_info, dst_info, src_layers, dst_layers);
             }
+            bbgpu_thread_op("copy layer mismatch - skipping copy", src_layers, dst_layers);
+            bbgpu_thread_op_done();
             return std::nullopt;
 #else
             LOG_WARNING(Render_Vulkan,
@@ -339,6 +398,15 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
 }
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
+    // bbport (diag-1): name the texture transfer in the stall report; the guard clears the tag on
+    // every exit (a mismatch return is the common one).
+    struct CopyImageOpGuard {
+        ~CopyImageOpGuard() {
+            bbgpu_thread_op_done();
+        }
+    } copy_image_op_guard;
+    bbgpu_thread_op("copying image (texture transfer)", src->info.resources.levels,
+                    dst->info.resources.levels);
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
 
     // Format mismatch warning (safe but useful)

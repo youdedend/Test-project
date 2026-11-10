@@ -102,6 +102,10 @@ typedef struct BbGpuMemoryCats {
      * 0 when the GPU is idle. This is the difference between "the GPU is busy" and "the GPU stopped",
      * and it is the number the stall reports never had. */
     uint64_t fence_stalled_ms;
+    /* bbport (diag-1): staging arenas vs legacy dedicated large buffers (step-1 measurement,
+     * release-notes Q1/Q2). Must stay field-for-field identical to gpu/bbgpu.h. */
+    uint64_t staging_arena_bytes, staging_arena_chunks, staging_arena_records;
+    uint64_t staging_dedicated_bytes, staging_dedicated_count;
     int32_t available;
 } BbGpuMemoryCats;
 int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats* out);
@@ -2125,6 +2129,13 @@ static void log_memory_table(uint64_t presents) {
                     static_cast<unsigned long long>(gpu.dense_live >> 20),
                     static_cast<unsigned long long>(gpu.dense_retired >> 20),
                     static_cast<unsigned long long>(gpu.arena_reserve_used >> 20));
+        std::printf("  staging: arena=%llu MiB in %llu chunk(s), %llu live record(s) | "
+                    "dedicated=%llu MiB in %llu buffer(s)\n",
+                    static_cast<unsigned long long>(gpu.staging_arena_bytes >> 20),
+                    static_cast<unsigned long long>(gpu.staging_arena_chunks),
+                    static_cast<unsigned long long>(gpu.staging_arena_records),
+                    static_cast<unsigned long long>(gpu.staging_dedicated_bytes >> 20),
+                    static_cast<unsigned long long>(gpu.staging_dedicated_count));
         std::printf("  fences: submitted=%llu completed=%llu outstanding=%llu\n",
                     static_cast<unsigned long long>(gpu.fence_submitted),
                     static_cast<unsigned long long>(gpu.fence_completed), outstanding);

@@ -19,6 +19,10 @@
 /* Item 2, stage 2a: pre-merge reclaim (retired arenas + images; gpu/shim/bbgpu.cpp). Declared at
  * namespace scope: clang-cl rejects extern "C" inside function bodies (failed-attempt #4). */
 extern "C" uint64_t bbgpu_uwp_emergency_reclaim(uint64_t need);
+/* bbport: per-thread operation tags for the stall report (gpu/shim/bbgpu.cpp). Declared at
+ * namespace scope like the one above (clang-cl rejects extern "C" in function bodies). */
+extern "C" void bbgpu_thread_op(const char* tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
 
 namespace VideoCore {
 
@@ -141,12 +145,16 @@ const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
     // One line per merge names the count, each size, the result and the cumulative total, which is
     // the measurement item 13 asks for; the cap below is the evaluation of splitting ranges.
     u64 retired_bytes = 0;
+    /* bbport (diag-1): name this loop in the stall report - a merge copies hundreds of MiB and is
+     * the longest synchronous copy the renderer does outside submissions. */
+    bbgpu_thread_op("dense-arena merge copy", static_cast<uint64_t>(previous.size()), 0);
     for (auto old : previous) {
         const vk::BufferCopy copy{0, old->cpu_addr - arena->cpu_addr, old->size_bytes};
         runtime.CopyBuffer(old, arena, std::span{&copy, 1});
         retired_bytes += old->size_bytes;
         arena_backed -= std::min<u64>(arena_backed, old->size_bytes);
     }
+    bbgpu_thread_op_done();
     if (!previous.empty()) {
         static u64 merge_count = 0, merge_total = 0, merge_largest = 0;
         ++merge_count;

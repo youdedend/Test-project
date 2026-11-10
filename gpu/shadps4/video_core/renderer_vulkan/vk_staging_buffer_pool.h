@@ -67,6 +67,18 @@ public:
     /// renderer thread; the ring vectors and outstanding refs are not safe to mutate off-thread.
     void RequestIdleTrim() noexcept { trim_requested.store(true, std::memory_order_relaxed); }
 
+    /// bbport (diag-1): read-only counters for the UWP memory table (bbgpu_uwp_memory_cats), the
+    /// split step-1 needed to measure: o1heap arena hosting vs the legacy dedicated large buffers.
+    /// Plain reads of the same counters ResidentBytes/TickFrame already use; no allocation.
+    struct Stats {
+        u64 arena_bytes{};
+        u64 arena_chunks{};
+        u64 arena_records{};
+        u64 dedicated_bytes{};
+        u64 dedicated_count{};
+    };
+    [[nodiscard]] Stats GetStats() const;
+
 private:
     struct Block {
         std::unique_ptr<VideoCore::StreamBuffer> buffer;

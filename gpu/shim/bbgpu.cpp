@@ -782,6 +782,14 @@ extern "C" int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats *out) {
     out->dense_live = buffers.ArenaBackedBytes();
     out->dense_retired = buffers.RetiredArenaBytes();
     out->arena_reserve_used = buffers.ArenaReserveUsedBytes();
+    // bbport (diag-1): the staging pool split (step-1 measurement, release-notes Q1/Q2) -
+    // o1heap arena hosting vs the legacy dedicated large buffers. Read-only counters.
+    const auto staging = r->GetRuntime().GetStagingPool().GetStats();
+    out->staging_arena_bytes = staging.arena_bytes;
+    out->staging_arena_chunks = staging.arena_chunks;
+    out->staging_arena_records = staging.arena_records;
+    out->staging_dedicated_bytes = staging.dedicated_bytes;
+    out->staging_dedicated_count = staging.dedicated_count;
     auto &scheduler = r->GetScheduler();
     out->fence_submitted = scheduler.CurrentTick();
     out->fence_completed = scheduler.GetWorkSemaphore()->KnownGpuTick();

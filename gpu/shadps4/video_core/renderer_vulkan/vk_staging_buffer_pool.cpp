@@ -309,6 +309,24 @@ void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
     });
 }
 
+StagingBufferPool::Stats StagingBufferPool::GetStats() const {
+    Stats stats;
+    for (size_t i = 0; i < NUM_TYPES; ++i) {
+        for (const LargeBuffer& entry : large_caches[i]) {
+            stats.dedicated_bytes += entry.buffer->SizeBytes();
+            stats.dedicated_count += 1;
+        }
+#ifdef BB_UWP
+        if (arenas[i]) {
+            stats.arena_bytes += arenas[i]->ResidentBytes();
+            stats.arena_chunks += arenas[i]->ChunkCount();
+            stats.arena_records += arenas[i]->RecordCount();
+        }
+#endif
+    }
+    return stats;
+}
+
 u64 StagingBufferPool::ResidentBytes() const {
     u64 bytes = 0;
     for (size_t i = 0; i < NUM_TYPES; ++i) {
