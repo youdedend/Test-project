@@ -3,8 +3,10 @@
 
 #pragma once
 
+
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <condition_variable>
 #include <deque>
@@ -25,6 +27,11 @@
 #include "video_core/amdgpu/regs_primitive.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+
+// bbport (diag-3): per-thread operation tags, defined in gpu/shim/bbgpu.cpp.
+extern "C" void bbgpu_thread_op(const char *tag, uint64_t arg0, uint64_t arg1);
+extern "C" void bbgpu_thread_op_done(void);
+extern "C" void bbgpu_thread_draw(const char *kind, const char *marker, uint32_t draw);
 
 namespace tracy {
 class VkCtxScope;
@@ -615,12 +622,33 @@ public:
     }
 
     void Execute(vk::CommandBuffer cmdbuf) {
-        for (CommandBase* command = first; command;) {
+        // bbport (diag-3): name the command being executed. `1946` froze with the recorder tagged
+        // "recording Vulkan commands" for 2.8 s and no way to say which command in the chunk was
+        // the one that never returned - the 0-based index and the command's vtable slot are what a
+        // follow-up run needs to pin it to a call site.
+        //
+        // Throttled, on purpose: a chunk holds thousands of commands, and the tag call reads the
+        // caller's thread id and scans the slot table. Tagging every one of them would turn a
+        // diagnostic into a frame-time cost. One tag per second is still enough for a stall dump,
+        // which is the only reader: if the thread is in command N for seconds, N is what the dump
+        // prints. The vtable pointer is inside the chunk's own storage, so it is never stale here.
+        constexpr auto kTagInterval = std::chrono::seconds{1};
+        auto next_tag = std::chrono::steady_clock::now();
+        uint32_t index = 0;
+        for (CommandBase* command = first; command; ++index) {
             CommandBase* const next = command->next;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_tag) {
+                next_tag = now + kTagInterval;
+                uintptr_t vtable = 0;
+                std::memcpy(&vtable, command, sizeof(vtable));
+                bbgpu_thread_op("recording Vulkan command", index, vtable);
+            }
             command->Execute(cmdbuf);
             command->~CommandBase();
             command = next;
         }
+        bbgpu_thread_op_done();
         first = last = nullptr;
         used = 0;
     }
