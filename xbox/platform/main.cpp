@@ -848,6 +848,12 @@ static void ensure_default_ini(const std::string& ini_path) {
         "# staging_arena=0 restores the legacy per-request staging buffers (item 2 step 1).\n"
         "staging_arena=1\n"
         "\n"
+        "# Graphics-driver switches, passed straight to the Mesa Dozen translator (empty = off).\n"
+        "# dzn_debug=d3d12 turns on the D3D12 debug layer, which reports the invalid call before a\n"
+        "# crash instead of after it; combine with nobindless/no16bit/nostencilref to hide device\n"
+        "# capabilities. (LocalState\\graphics-debug.txt sets the same variables and wins.)\n"
+        "dzn_debug=\n"
+        "\n"
         "[dump]\n"
         "# Empty patch_path auto-detects the update folder next to the game folder.\n"
         "patch_path=\n"
@@ -2415,6 +2421,25 @@ static void run_loader() {
         }
     }
     const auto ini = parse_kv_file(ini_path);
+    /* bbport (diag-4): let bbport.ini carry the same variables graphics-debug.txt does.
+     *
+     * The user went looking for `graphics-debug.txt` and there was none: it is a file the player
+     * has to invent, the port only reads it if it is already there, and nothing in the app ever
+     * writes it - so "add DZN_DEBUG=d3d12" was an instruction to create a file, at a path, with a
+     * format, none of which the app states. bbport.ini is the file the app does create and does
+     * document, so a `BB_`/`DZN_`/`MESA_` key found there is now exported too. graphics-debug.txt
+     * still wins: it is read first and set_env_var is not overridden here. */
+    for (const auto& [k, v] : ini) {
+        if (k.find('.') != std::string::npos) {
+            continue; // section-qualified alias of the same line ([dump] key -> dump.key)
+        }
+        if (k.rfind("BB_", 0) == 0 || k.rfind("DZN_", 0) == 0 || k.rfind("MESA_", 0) == 0) {
+            if (const char* existing = std::getenv(k.c_str()); existing && *existing) {
+                continue; // graphics-debug.txt, or the launcher, already decided this one
+            }
+            set_env_var(k.c_str(), v);
+        }
+    }
     const auto flag_to_env = [&](const char* key, const char* env, bool fallback) {
         if (const char* existing = std::getenv(env); existing && *existing) return;
         set_env_var(env, BbIni::Flag(ini, key, fallback) ? "1" : "0");
@@ -2425,6 +2450,13 @@ static void run_loader() {
     flag_to_env("texture_reclaim_experiment", "BB_GC_EXPERIMENT", false);
     flag_to_env("resolution_diagnostics", "BB_RESOLUTION_DIAGNOSTICS", true);
     flag_to_env("staging_arena", "BB_STAGING_ARENA", true);
+    // diag-4: the friendliest spelling of the translator's debug switches. `dzn_debug=d3d12` in
+    // bbport.ini becomes DZN_DEBUG=d3d12 for Mesa; an empty value leaves it alone (off).
+    if (const char* existing = std::getenv("DZN_DEBUG"); !(existing && *existing)) {
+        if (const auto it = ini.find("dzn_debug"); it != ini.end() && !it->second.empty()) {
+            set_env_var("DZN_DEBUG", it->second);
+        }
+    }
     const auto number_to_env = [&](const char* key, const char* env, long min, long max) {
         if (const char* existing = std::getenv(env); existing && *existing) return;
         const auto it = ini.find(key);

@@ -1,0 +1,15 @@
+# graphics-debug.txt - optional developer switches (Bloodborne Xbox UWP port)
+# Put ONE "NAME=value" per line. The app reads this file if it exists; it never creates it,
+# and it is safe to delete. If a key does not work here, the same key also works in bbport.ini
+# (any key starting with BB_, DZN_ or MESA_).
+#
+# --- turned on for the diag-4 run: asks the D3D12 driver to explain itself ---
+DZN_DEBUG=d3d12
+#
+# Other useful switches (one per run; keep only the ones you want):
+# DZN_DEBUG=d3d12,nobindless,no16bit,nostencilref
+#   hide three device features from the translator; if the crash moves, the log says which
+# BB_IO_STATS=1
+#   log guest map/unmap calls that held the memory table for 40 ms or more
+# BB_MEMORY_SELFTEST=1
+#   repeat the memory contract self-test on the next launch
