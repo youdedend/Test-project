@@ -7,7 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include "bbport_toggles.h"
-#include "renderer_vulkan/texture_cache_reclaim_request.h"
+#include "video_core/renderer_vulkan/texture_cache_reclaim_request.h"
 
 #include <condition_variable>
 #include <cstdio>
