@@ -1714,19 +1714,24 @@ static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
                 ? ep->ExceptionRecord->ExceptionInformation[1]
                 : 0;
         if (in_precompile) {
-            std::printf("UNHANDLED PRECOMPILE FAULT: code=0x%08lx module=%s+0x%llx rip=0x%llx "
-                        "rsp=0x%llx addr=0x%llx item=%u/%u stage=%u hash=%016llx partner=%016llx\n",
+            std::printf("UNHANDLED PRECOMPILE FAULT: code=0x%08lx module=%s+0x%llx base=0x%llx "
+                        "rip=0x%llx rsp=0x%llx addr=0x%llx item=%u/%u stage=%u hash=%016llx "
+                        "partner=%016llx\n",
                         static_cast<unsigned long>(code), mod_name,
-                        static_cast<unsigned long long>(rva), static_cast<unsigned long long>(rip),
+                        static_cast<unsigned long long>(rva),
+                        static_cast<unsigned long long>(mod_base),
+                        static_cast<unsigned long long>(rip),
                         static_cast<unsigned long long>(rsp),
                         static_cast<unsigned long long>(fault_addr), diag_idx, diag_total,
                         diag_stage, static_cast<unsigned long long>(diag_hash),
                         static_cast<unsigned long long>(diag_partner));
         } else {
-            std::printf("UNHANDLED NATIVE FAULT: code=0x%08lx module=%s+0x%llx rip=0x%llx "
-                        "rsp=0x%llx addr=0x%llx\n",
+            std::printf("UNHANDLED NATIVE FAULT: code=0x%08lx module=%s+0x%llx base=0x%llx "
+                        "rip=0x%llx rsp=0x%llx addr=0x%llx\n",
                         static_cast<unsigned long>(code), mod_name,
-                        static_cast<unsigned long long>(rva), static_cast<unsigned long long>(rip),
+                        static_cast<unsigned long long>(rva),
+                        static_cast<unsigned long long>(mod_base),
+                        static_cast<unsigned long long>(rip),
                         static_cast<unsigned long long>(rsp),
                         static_cast<unsigned long long>(fault_addr));
         }
@@ -2126,9 +2131,35 @@ static const char* ModuleNameForAddress(uintptr_t address) {
     static thread_local char name[MAX_PATH];
     HMODULE modules[512]{};
     DWORD needed = 0;
-    if (address == 0 || enum_proc == nullptr || info_proc == nullptr ||
-        enum_proc(GetCurrentProcess(), modules, static_cast<DWORD>(sizeof(modules)), &needed) ==
-            FALSE) {
+    if (address == 0) {
+        return nullptr;
+    }
+    /* bbport (diag-5): the enumeration above is a loader export that the UWP partition may not
+     * publish, and when it was missing this function gave up - which is how two builds printed
+     * `module=unknown+0x23ec55` for a rip that was inside our own executable. The image the process
+     * was started from can always be named without psapi: check the address against its own base
+     * and return that name. Only for an address *outside* the executable, with no enumeration
+     * available, does the caller's "unknown" stay the honest answer. */
+    const auto exe_module = GetModuleHandleW(nullptr);
+    const auto exe_name = [&]() -> const char* {
+        if (GetModuleFileNameA(exe_module, name, static_cast<DWORD>(std::size(name))) == 0) {
+            return nullptr;
+        }
+        const char* slash = std::strrchr(name, '\\');
+        return slash ? slash + 1 : name;
+    };
+    if (enum_proc == nullptr || info_proc == nullptr) {
+        MEMORY_BASIC_INFORMATION own{};
+        const auto base = reinterpret_cast<uintptr_t>(exe_module);
+        if (address >= base &&
+            VirtualQuery(reinterpret_cast<LPCVOID>(address), &own, sizeof(own)) != 0 &&
+            reinterpret_cast<uintptr_t>(own.AllocationBase) == base) {
+            return exe_name();
+        }
+        return nullptr;
+    }
+    if (enum_proc(GetCurrentProcess(), modules, static_cast<DWORD>(sizeof(modules)), &needed) ==
+        FALSE) {
         return nullptr;
     }
     const DWORD count = needed / static_cast<DWORD>(sizeof(HMODULE));
