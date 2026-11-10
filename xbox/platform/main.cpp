@@ -839,6 +839,8 @@ static void ensure_default_ini(const std::string& ini_path) {
         "texture_reclaim_experiment=0\n"
         "resolution_diagnostics=1\n"
         "cache_run_diagnostics=1\n"
+        "# staging_arena=0 restores the legacy per-request staging buffers (item 2 step 1).\n"
+        "staging_arena=1\n"
         "\n"
         "[dump]\n"
         "# Empty patch_path auto-detects the update folder next to the game folder.\n"
@@ -2325,6 +2327,7 @@ static void run_loader() {
     flag_to_env("arena_admission_recover", "BB_ARENA_ADMISSION_RECOVER", true);
     flag_to_env("texture_reclaim_experiment", "BB_GC_EXPERIMENT", false);
     flag_to_env("resolution_diagnostics", "BB_RESOLUTION_DIAGNOSTICS", true);
+    flag_to_env("staging_arena", "BB_STAGING_ARENA", true);
     const auto number_to_env = [&](const char* key, const char* env, long min, long max) {
         if (const char* existing = std::getenv(env); existing && *existing) return;
         const auto it = ini.find(key);

@@ -75,6 +75,36 @@ StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& sched
             std::memset(block.buffer->mapped_data.data(), 0, block.buffer->mapped_data.size());
         }
     }
+#ifdef BB_UWP
+    // bbport (item 2 step 1, xbox-swap study): o1heap arenas for the large/deferred path on the
+    // host types only. DeviceLocal chunks cannot host o1heap metadata (VRAM is not CPU-addressable)
+    // and stay on the legacy dedicated path. BB_STAGING_ARENA=0 restores the legacy path exactly.
+    static const bool arena_enabled = [] {
+        const char* env = std::getenv("BB_STAGING_ARENA");
+        return !env || env[0] != '0';
+    }();
+    if (arena_enabled) {
+        for (const MemoryType type : {MemoryType::HostUncached, MemoryType::HostCached}) {
+            arenas[u32(type)] = std::make_unique<BbUwp::StagingArena>(
+                [this, type](std::uint64_t bytes, void*& ctx, void*& mapped) {
+                    auto* buffer = new VideoCore::Buffer(instance, 0, bytes, type,
+                                                         "StagingBufferPool:Arena");
+                    if (buffer->mapped_data.empty()) {
+                        delete buffer;
+                        return false;
+                    }
+                    ctx = buffer;
+                    mapped = buffer->mapped_data.data();
+                    return true;
+                },
+                [](void* ctx) { delete static_cast<VideoCore::Buffer*>(ctx); });
+            std::printf("UWP staging arena: %s large/deferred path now sub-allocates from o1heap\n",
+                        type == MemoryType::HostUncached ? "HostUncached (uploads)"
+                                                        : "HostCached (readbacks)");
+            std::fflush(stdout);
+        }
+    }
+#endif
 }
 
 StagingBufferPool::~StagingBufferPool() = default;
@@ -132,6 +162,27 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
 }
 
 StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool deferred) {
+#ifdef BB_UWP
+    // Item 2 step 1: sub-allocate from the o1heap arena when one exists for this type. On any
+    // failure fall through to the legacy dedicated path - the arena may under-deliver, it may
+    // never fail a request the old code could serve.
+    if (arenas[u32(type)]) {
+        if (const auto hit =
+                arenas[u32(type)]->Request(size, 0, scheduler.CurrentTick(), deferred)) {
+            auto* buffer = static_cast<VideoCore::Buffer*>(hit->provider_ctx);
+            StagingBufferRef ref{
+                .buffer = buffer,
+                .offset = hit->offset,
+                .size = size,
+                .type = type,
+            };
+            if (!buffer->mapped_data.empty()) {
+                ref.mapped = buffer->mapped_data.data() + hit->offset;
+            }
+            return ref;
+        }
+    }
+#endif
     auto& cache = large_caches[u32(type)];
     const u64 max_size = std::max(size + size / 4, RoundAllocationSize(size));
 
@@ -175,6 +226,18 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
 }
 
 void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
+#ifdef BB_UWP
+    // Item 2 step 1: arena records release back to o1heap only once their tick is free (the same
+    // rule the legacy cache applies in TrimLarge).
+    if (arenas[u32(ref.type)] && arenas[u32(ref.type)]->Owns(ref.buffer)) {
+        if (arenas[u32(ref.type)]->FreeDeferredByOffset(ref.buffer, ref.offset,
+                                                        scheduler.CurrentTick())) {
+            return;
+        }
+        ASSERT_MSG(false, "FreeDeferred on an arena allocation that is not held");
+        return;
+    }
+#endif
     auto& cache = large_caches[u32(ref.type)];
     const auto it = std::ranges::find_if(
         cache, [&](const LargeBuffer& entry) { return entry.buffer.get() == ref.buffer; });
@@ -201,6 +264,15 @@ void StagingBufferPool::TickFrame() {
     for (auto& cache : large_caches) {
         TrimLarge(cache);
     }
+#ifdef BB_UWP
+    // Item 2 step 1: reclaim arena records whose GPU tick is free; release empty idle chunks.
+    for (auto& arena : arenas) {
+        if (arena) {
+            arena->Collect(frame,
+                           [this](u64 tick) { return scheduler.IsFree(tick); });
+        }
+    }
+#endif
     if (requested) {
         const u64 after = ResidentBytes();
         std::printf("UWP recovery: deferred staging trim freed %llu MiB on renderer thread\n",
@@ -246,6 +318,11 @@ u64 StagingBufferPool::ResidentBytes() const {
         for (const LargeBuffer& entry : large_caches[i]) {
             bytes += entry.buffer->SizeBytes();
         }
+#ifdef BB_UWP
+        if (arenas[i]) {
+            bytes += arenas[i]->ResidentBytes();
+        }
+#endif
     }
     return bytes;
 }

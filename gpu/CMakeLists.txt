@@ -223,7 +223,8 @@ if (BB_UWP)
         ../xbox/graphics/present_bridge.cpp
         ../xbox/graphics/overlay.cpp
         ../xbox/graphics/dense_buffers.cpp
-        ../xbox/graphics/descriptor_fallback.cpp)
+        ../xbox/graphics/descriptor_fallback.cpp
+        ../xbox/graphics/o1heap/o1heap.c)
     list(APPEND SHIM_SOURCES ../xbox/graphics/window.cpp)
 endif()
 # Windows: a DLL cannot leave the runtime_* symbols for bb-probe.exe to resolve, so the

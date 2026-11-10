@@ -194,6 +194,7 @@ jobs:
             @{ name = 'dense_arena'; include = 'xbox/graphics'; sources = @('xbox\tests\dense_arena_lifetime_test.cpp') },
             @{ name = 'arena_admission_policy'; include = 'xbox/graphics'; sources = @('xbox\tests\arena_admission_policy_test.cpp') },
             @{ name = 'recovery_ladder'; include = 'xbox/graphics'; sources = @('xbox\tests\recovery_ladder_test.cpp') },
+            @{ name = 'staging_arena'; include = 'xbox/graphics'; sources = @('xbox\tests\staging_arena_test.cpp', 'xbox\graphics\o1heap\o1heap.c') },
             # Which images the texture cache may free (a bound target, scene proxy or live video-out
             # surface must stay) and the uid rule that makes a stored ImageId safe to re-check:
             # freed behind the rasterizer's / upscaler's back, a slot index either trips

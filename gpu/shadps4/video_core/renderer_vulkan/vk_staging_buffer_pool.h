@@ -10,6 +10,9 @@
 
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
+#ifdef BB_UWP
+#include "../../../../xbox/graphics/staging_arena.h"
+#endif
 
 namespace Vulkan {
 
@@ -103,6 +106,11 @@ private:
     u64 keep_blocks = 0; ///< bbport: ring blocks never trimmed
     u64 keep_vram_blocks = 0; ///< bbport: the same for the VRAM ring (DeviceLocal)
     std::array<std::vector<LargeBuffer>, NUM_TYPES> large_caches;
+#ifdef BB_UWP
+    /// Item 2 step 1: o1heap sub-allocation arenas for the large/deferred path (host types only -
+    /// DeviceLocal chunks cannot host o1heap metadata). Null entry = legacy path for that type.
+    std::array<std::unique_ptr<BbUwp::StagingArena>, NUM_TYPES> arenas;
+#endif
     u64 frame = 0;
     std::atomic<bool> trim_requested{false};
 };
