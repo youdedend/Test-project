@@ -106,6 +106,8 @@ typedef struct BbGpuMemoryCats {
      * release-notes Q1/Q2). Must stay field-for-field identical to gpu/bbgpu.h. */
     uint64_t staging_arena_bytes, staging_arena_chunks, staging_arena_records;
     uint64_t staging_dedicated_bytes, staging_dedicated_count;
+    /* bbport (diag-2): ring blocks and the resident total the diag-1 row left out. */
+    uint64_t staging_ring_bytes, staging_ring_blocks, staging_resident_bytes;
     int32_t available;
 } BbGpuMemoryCats;
 int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats* out);
@@ -1685,6 +1687,12 @@ static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
                         static_cast<unsigned long long>(rsp),
                         static_cast<unsigned long long>(fault_addr));
         }
+        /* bbport (diag-2): name the operation the faulting thread was in. The tags diag-1 added
+         * were only ever printed by the *stall* report, so `26314.1903`'s dead-texture fault
+         * arrived without the one line that says "this thread was copying a texture" - the same
+         * crash the stall dump did name. The filter knows the faulting thread, so it asks for its
+         * own slot; nothing here allocates or takes a lock beyond the tag table's. */
+        bbgpu_thread_op_dump();
         std::fflush(stdout);
     }
 
@@ -2130,12 +2138,16 @@ static void log_memory_table(uint64_t presents) {
                     static_cast<unsigned long long>(gpu.dense_retired >> 20),
                     static_cast<unsigned long long>(gpu.arena_reserve_used >> 20));
         std::printf("  staging: arena=%llu MiB in %llu chunk(s), %llu live record(s) | "
-                    "dedicated=%llu MiB in %llu buffer(s)\n",
+                    "dedicated=%llu MiB in %llu buffer(s) | ring=%llu MiB in %llu block(s), "
+                    "resident=%llu MiB\n",
                     static_cast<unsigned long long>(gpu.staging_arena_bytes >> 20),
                     static_cast<unsigned long long>(gpu.staging_arena_chunks),
                     static_cast<unsigned long long>(gpu.staging_arena_records),
                     static_cast<unsigned long long>(gpu.staging_dedicated_bytes >> 20),
-                    static_cast<unsigned long long>(gpu.staging_dedicated_count));
+                    static_cast<unsigned long long>(gpu.staging_dedicated_count),
+                    static_cast<unsigned long long>(gpu.staging_ring_bytes >> 20),
+                    static_cast<unsigned long long>(gpu.staging_ring_blocks),
+                    static_cast<unsigned long long>(gpu.staging_resident_bytes >> 20));
         std::printf("  fences: submitted=%llu completed=%llu outstanding=%llu\n",
                     static_cast<unsigned long long>(gpu.fence_submitted),
                     static_cast<unsigned long long>(gpu.fence_completed), outstanding);

@@ -131,6 +131,12 @@ typedef struct BbGpuMemoryCats {
     uint64_t staging_arena_records;
     uint64_t staging_dedicated_bytes;
     uint64_t staging_dedicated_count;
+    /* bbport (diag-2): the ring blocks - fixed 16 MiB blocks the staging pool keeps between
+     * frames. diag-1's first row omitted them, so `arena=0 MiB | dedicated=0 MiB` was reported
+     * through a 2.4 GiB level-load burst in 26314.1903 and the split could not be read. */
+    uint64_t staging_ring_bytes;
+    uint64_t staging_ring_blocks;
+    uint64_t staging_resident_bytes;
     int32_t available;
 } BbGpuMemoryCats;
 /* Fills `out`; returns 1 when the GPU exists (0 leaves the struct zeroed). */

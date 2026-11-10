@@ -76,6 +76,11 @@ public:
         u64 arena_records{};
         u64 dedicated_bytes{};
         u64 dedicated_count{};
+        /// bbport (diag-2): the ring blocks (fixed BLOCK_SIZE blocks kept between frames) and the
+        /// full resident total, so the row cannot read zero while the pool is holding memory.
+        u64 ring_bytes{};
+        u64 ring_blocks{};
+        u64 resident_bytes{};
     };
     [[nodiscard]] Stats GetStats() const;
 

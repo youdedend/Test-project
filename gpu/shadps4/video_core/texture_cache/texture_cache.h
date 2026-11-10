@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include "bbport_toggles.h"
+#include "renderer_vulkan/texture_cache_reclaim_request.h"
 
 #include <condition_variable>
 #include <cstdio>
@@ -244,8 +245,44 @@ public:
         return freed;
     }
 
-    /// bbport: out of GPU memory for an image of its own (scene proxies): unused textures go at
-    /// once, up to `bytes` (ReclaimMemoryFor). Not with the cache's lock held.
+    /// bbport (diag-2, the 26314 crash): a watchdog step must not free images itself.
+    ///
+    /// `26302.0802` onward, recovery step 1 called EmergencyReclaim straight from the watchdog's
+    /// own worker thread. EmergencyReclaim takes `mutex`, but the renderer's index paths do not
+    /// (GetImage, the binding walks and the copy recording all read `slot_images` unlocked), so an
+    /// image the renderer is mid-copy on can be erased from its slot while it records - the exact
+    /// shape of the `dzn_image_get_copy_loc` fault (`vulkan_dzn.dll+0x1fd79`, stale `dzn_image`
+    /// with device=0xD8/0xE0), which only ever appears in builds after `26301.1156`.
+    ///
+    /// So the step asks and the render thread performs it at a frame boundary, the same rule this
+    /// file already applies to the staging pool. The policy lives in
+    /// renderer_vulkan/texture_cache_reclaim_request.h and is covered by
+    /// xbox/tests/texture_cache_reclaim_request_test.cpp.
+    void RequestEmergencyReclaim(u64 bytes) noexcept {
+        reclaim_request.Request(bytes);
+    }
+
+    /// bbport (diag-2): runs a pending RequestEmergencyReclaim. Called by the render thread only,
+    /// from Rasterizer::OnSubmit, where the previous frame's copies are finished being recorded.
+    /// Returns the bytes freed (0 when nothing was pending).
+    u64 RunPendingReclaim() {
+        const u64 bytes = reclaim_request.Take();
+        if (bytes == 0) {
+            return 0;
+        }
+        const u64 freed = EmergencyReclaim(bytes);
+        reclaim_request.NoteFreed(freed);
+        std::printf("Texture cache: render-thread reclaim of the watchdog's request freed %llu MiB "
+                    "of %llu MiB asked (%llu MiB in total; running it here is diag-2)\n",
+                    static_cast<unsigned long long>(freed >> 20),
+                    static_cast<unsigned long long>(bytes >> 20),
+                    static_cast<unsigned long long>(reclaim_request.FreedTotal() >> 20));
+        std::fflush(stdout);
+        return freed;
+    }
+
+    /// bbport (diag-2): out of GPU memory for an image of its own (scene proxies): unused textures
+    /// go at once, up to `bytes` (ReclaimMemoryFor). Not with the cache's lock held.
     u64 ReclaimMemory(u64 bytes) {
         std::scoped_lock lock{mutex};
         return ReclaimMemoryFor(0, 0, bytes);
@@ -711,7 +748,9 @@ private:
     const bool readback_linear_images;
     PageTable page_table;
     std::mutex mutex;
-    // bbport: FindImage results for unchanged image registrations (guarded by `mutex`).
+    /// bbport (diag-2): the watchdog's reclaim request, handed to the render thread.
+    BbUwp::ReclaimRequest reclaim_request;
+
     struct FindImageCacheEntry {
         VAddr address = 0;
         u64 size = 0;

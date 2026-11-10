@@ -195,6 +195,10 @@ jobs:
             @{ name = 'arena_admission_policy'; include = 'xbox/graphics'; sources = @('xbox\tests\arena_admission_policy_test.cpp') },
             @{ name = 'recovery_ladder'; include = 'xbox/graphics'; sources = @('xbox\tests\recovery_ladder_test.cpp') },
             @{ name = 'staging_arena'; include = 'xbox/graphics'; sources = @('xbox\tests\staging_arena_test.cpp', 'xbox\graphics\o1heap\o1heap.c') },
+            # diag-2: a watchdog step may only ASK for an image reclaim; the render thread performs
+            # it. Pins the hand-off that keeps the watchdog's worker off the texture cache's image
+            # slots while the render thread records copies (the 26314.1903 stale-image fault).
+            @{ name = 'texture_cache_reclaim_request'; include = 'gpu/shadps4/video_core'; sources = @('xbox\tests\texture_cache_reclaim_request_test.cpp') },
             # Which images the texture cache may free (a bound target, scene proxy or live video-out
             # surface must stay) and the uid rule that makes a stored ImageId safe to re-check:
             # freed behind the rasterizer's / upscaler's back, a slot index either trips

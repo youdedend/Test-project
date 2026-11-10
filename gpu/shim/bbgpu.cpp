@@ -668,16 +668,24 @@ extern "C" uint64_t bbgpu_uwp_recovery_step(int32_t step, uint64_t need) {
         // for whatever it can take, which is the cheap end of the same walk.
         // A step the watchdog runs with no specific need still has to ask the walk for a budget:
         // EmergencyReclaim(0) is a request for zero bytes, not "as much as you can".
+        //
+        // bbport (diag-2): the walk itself is NOT run here. It used to be, and that is the
+        // difference between `26301.1156` (no watchdog image reclaim) and `26302.0802` onward:
+        // EmergencyReclaim takes the cache's `mutex`, but the renderer's index paths (GetImage, the
+        // binding walks, copy recording) read `slot_images` unlocked, so freeing an image the
+        // renderer is mid-copy on erases its slot underneath it - the stale-image fault
+        // `dzn_image_get_copy_loc` (`vulkan_dzn.dll+0x1fd79`) both 26314 runs died on. Ask, and let
+        // Rasterizer::OnSubmit run it at a frame boundary, exactly as staging does above.
         const uint64_t ask = need > freed ? need - freed : (uint64_t{32} << 20);
-        const uint64_t images_freed = r->GetTextureCache().EmergencyReclaim(ask);
+        r->GetTextureCache().RequestEmergencyReclaim(ask);
+        const uint64_t images_freed = 0; // freed on the render thread; logged on the next OnSubmit
         freed += images_freed;
-        std::printf("UWP recovery: released %llu MiB (arenas %llu, staging %llu, images %llu MiB) "
-                    "of the %llu MiB wanted\n",
+        std::printf("UWP recovery: released %llu MiB (arenas %llu, staging %llu, images asked %llu "
+                    "MiB - deferred to the render thread)\n",
                     static_cast<unsigned long long>(freed >> 20),
                     static_cast<unsigned long long>(arena_freed >> 20),
                     static_cast<unsigned long long>(staging_freed >> 20),
-                    static_cast<unsigned long long>(images_freed >> 20),
-                    static_cast<unsigned long long>(need >> 20));
+                    static_cast<unsigned long long>(ask >> 20));
         std::fflush(stdout);
         return freed;
     }
@@ -790,6 +798,9 @@ extern "C" int32_t bbgpu_uwp_memory_cats(BbGpuMemoryCats *out) {
     out->staging_arena_records = staging.arena_records;
     out->staging_dedicated_bytes = staging.dedicated_bytes;
     out->staging_dedicated_count = staging.dedicated_count;
+    out->staging_ring_bytes = staging.ring_bytes;
+    out->staging_ring_blocks = staging.ring_blocks;
+    out->staging_resident_bytes = staging.resident_bytes;
     auto &scheduler = r->GetScheduler();
     out->fence_submitted = scheduler.CurrentTick();
     out->fence_completed = scheduler.GetWorkSemaphore()->KnownGpuTick();

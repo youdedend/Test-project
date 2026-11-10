@@ -1441,6 +1441,11 @@ void Rasterizer::OnSubmit() {
 #endif
     texture_cache.ProcessDownloadImages();
     texture_cache.RunGarbageCollector();
+#ifdef BB_UWP
+    // bbport (diag-2): a reclaim the watchdog asked for runs here, on the render thread and at a
+    // frame boundary - never on the watchdog's worker while this thread is recording copies.
+    texture_cache.RunPendingReclaim();
+#endif
     runtime.TickFrame();
 }
 

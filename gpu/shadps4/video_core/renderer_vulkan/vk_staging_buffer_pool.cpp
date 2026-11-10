@@ -312,6 +312,12 @@ void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
 StagingBufferPool::Stats StagingBufferPool::GetStats() const {
     Stats stats;
     for (size_t i = 0; i < NUM_TYPES; ++i) {
+        // bbport (diag-2): rings were missing from the first version of this row, which is why
+        // 26314.1903 reported `arena=0 MiB | dedicated=0 MiB` straight through a 2.4 GiB load.
+        for (const Block& block : rings[i].blocks) {
+            stats.ring_bytes += block.buffer->SizeBytes();
+            stats.ring_blocks += 1;
+        }
         for (const LargeBuffer& entry : large_caches[i]) {
             stats.dedicated_bytes += entry.buffer->SizeBytes();
             stats.dedicated_count += 1;
@@ -324,6 +330,7 @@ StagingBufferPool::Stats StagingBufferPool::GetStats() const {
         }
 #endif
     }
+    stats.resident_bytes = stats.ring_bytes + stats.dedicated_bytes + stats.arena_bytes;
     return stats;
 }
 
