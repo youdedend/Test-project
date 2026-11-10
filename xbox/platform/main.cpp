@@ -1625,6 +1625,8 @@ extern "C" void bb_uwp_note_device_lost(const char* where) {
     bb_uwp_breadcrumb_dump("device lost");
 }
 
+static const char* ModuleNameForAddress(uintptr_t address);
+
 static LONG CALLBACK uwp_last_chance_logger(PEXCEPTION_POINTERS ep) {
     if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -2934,6 +2936,10 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                          * priority over the presenter rule for the same reason: the fence is
                          * upstream of the picture, so its age explains a stopped presenter, not
                          * the other way round. */
+                        BbGpuMemoryCats gpu{};
+                        const bool have_gpu = bbgpu_uwp_memory_cats(&gpu) != 0;
+                        const unsigned long long fence_age =
+                            have_gpu ? static_cast<unsigned long long>(gpu.fence_stalled_ms) : 0ULL;
                         const bool fence_stalled =
                             fence_age > 3000 && have_gpu && gpu.fence_submitted != 0;
                         const bool presenter_stalled = presents == last_presents;
