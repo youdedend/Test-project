@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <chrono>
 #include <array>
 #include <map>
@@ -342,8 +343,26 @@ void PrintBufferStats() {
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
 #ifdef BB_UWP
+    /* bbport (diag-6): this guard is correct and it was silent, which is why `26314.2323` took a
+     * fault at `0x23FB16ED5BC` (1,279 GiB past the end of guest space, from the recording thread)
+     * with no line anywhere saying an address had been rejected. The address is refused - good - but
+     * the caller then binds the zero buffer and the run continues into a different fault three
+     * hundred lines later. Say it once per distinct address, with the size and the flags, so the
+     * *first* bad address in a run is the one that gets investigated. */
     if (size == 0 || device_addr >= (u64{1} << ADDRESS_SPACE_BITS) ||
         size > (u64{1} << ADDRESS_SPACE_BITS) - device_addr) {
+        static std::atomic<unsigned> reports{0};
+        static std::atomic<u64> last{0};
+        if (reports.load(std::memory_order_relaxed) < 16 &&
+            last.load(std::memory_order_relaxed) != device_addr) {
+            last.store(device_addr, std::memory_order_relaxed);
+            reports.fetch_add(1, std::memory_order_relaxed);
+            LOG_WARNING(Render_Vulkan,
+                        "ObtainBuffer refused an address outside guest space: addr={:#x} size={:#x} "
+                        "written={} texel={} -> zero buffer (guest space ends at {:#x})",
+                        device_addr, size, is_written, is_texel_buffer,
+                        (u64{1} << ADDRESS_SPACE_BITS) - 1);
+        }
         return {null_buffer.get(), 0};
     }
 #endif

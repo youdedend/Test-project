@@ -99,6 +99,28 @@ struct Thresholds {
     return StepNone;
 }
 
+/// bbport (diag-6): why `Decide` did not choose the exit, in words, or nullptr when it did (or when
+/// the exit was never in question).
+///
+/// Two consecutive runs (`26314.2112`, `26314.2323`) sat with presents frozen for 30-45 s and the log
+/// never contained `UWP watchdog: presents stuck ... exiting` - because the exit needs **both** a 10 s
+/// stall and `headroom <= degrade_bytes` (150 MiB), and both runs had ~660 MiB of headroom. That is
+/// deliberate ("a 10 s stall with memory to spare is a bug the stall report should still catch"), but
+/// the log never said so, so a reader could not tell a policy decision from a broken ladder. This
+/// function makes the decision readable without changing it: the caller prints one line when the exit
+/// was declined for lack of memory pressure.
+[[nodiscard]] inline const char* ExitDeclinedReason(std::uint64_t headroom, std::uint64_t stuck_ms,
+                                                   const Thresholds& thresholds) {
+    if (stuck_ms < thresholds.stuck_exit_ms) {
+        return nullptr; // no stall: the exit was not being considered
+    }
+    if (headroom <= thresholds.degrade_bytes) {
+        return nullptr; // the exit was taken
+    }
+    return "stall reached, but no memory pressure: the exit needs headroom at or below the degrade "
+           "threshold";
+}
+
 /// True when `now_ms - last_step_ms` has reached the cooldown. `last_step_ms == 0` (never stepped)
 /// always passes: the first crossing is not delayed.
 [[nodiscard]] inline bool CooldownElapsed(std::uint64_t now_ms, std::uint64_t last_step_ms,
