@@ -66,6 +66,37 @@ void TestStepOrder() {
           "one millisecond short of the stall threshold does not exit");
 }
 
+// bbport (diag-6): the two runs that froze for 30-45 s with ~660 MiB of headroom looked, in the log,
+// exactly like a watchdog that had stopped running. It had not: the exit needs a stall *and* memory
+// pressure, and the second half was never reported. These checks pin the explanation to the same rule
+// Decide uses, so the log line cannot drift away from the behaviour.
+void TestExitDeclinedIsExplained() {
+    using namespace BbWatchdog;
+    Thresholds t;
+    // The real case: a long stall, plenty of memory -> no exit, and the reason says so.
+    Check(Decide(660 * MiB, 45000, t) != StepExit,
+          "a 45 s stall with 660 MiB of headroom does not exit (the 2323 run)");
+    Check(ExitDeclinedReason(660 * MiB, 45000, t) != nullptr,
+          "and the log explains why instead of staying silent");
+    // One byte over the degrade threshold is still no exit, and still explained.
+    Check(ExitDeclinedReason(150 * MiB + 1, 10000, t) != nullptr,
+          "one byte above the degrade threshold is still no exit, explained");
+    // At the threshold the exit is taken, so there is nothing to explain.
+    Check(Decide(150 * MiB, 10000, t) == StepExit, "at the degrade threshold the exit is taken");
+    Check(ExitDeclinedReason(150 * MiB, 10000, t) == nullptr,
+          "an exit that happened needs no explanation");
+    // No stall, no explanation: the exit was not being considered at all.
+    Check(ExitDeclinedReason(2000 * MiB, 9999, t) == nullptr,
+          "below the stall threshold the exit is not being considered");
+    Check(ExitDeclinedReason(2000 * MiB, 0, t) == nullptr, "and certainly not while presenting");
+    // A disabled watchdog never exits, and must not claim a decision it did not make.
+    Thresholds off = t;
+    off.enabled = false;
+    Check(Decide(0, 60000, off) == StepNone, "a disabled watchdog does not exit");
+    Check(ExitDeclinedReason(0, 60000, off) == nullptr,
+          "and a disabled watchdog has no exit decision to explain");
+}
+
 void TestFastTickAndSkippedRungs() {
     using namespace BbWatchdog;
     Thresholds t;
@@ -171,6 +202,7 @@ void TestThresholdsFromIni() {
 int main() {
     TestThresholdsAreBytes();
     TestStepOrder();
+    TestExitDeclinedIsExplained();
     TestFastTickAndSkippedRungs();
     TestDisabledAndUnknownLimit();
     TestCooldown();

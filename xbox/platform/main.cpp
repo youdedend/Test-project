@@ -3159,6 +3159,7 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
             }).detach();
 
             BbWatchdog::Step highest_scheduled = BbWatchdog::StepNone;
+            bool exit_declined_logged = false; // diag-6: one line per stall, not per tick
             std::uint64_t last_step_ms = 0, last_check_ms = 0, last_presents = 0;
             std::uint64_t stuck_since_ms = 0, last_limit = 0;
             while (!g_finished.load()) {
@@ -3193,6 +3194,23 @@ struct View : winrt::implements<View, winrt::Windows::ApplicationModel::Core::IF
                         step = BbWatchdog::StepLadder;
                 }
                 last_limit = limit;
+                // bbport (diag-6): say when a stall was real but the exit was declined for lack of
+                // memory pressure. Without this the log of a 45 s freeze is indistinguishable from a
+                // watchdog that is not running; two runs were read that way. Printed once per stall
+                // (keyed on stuck_since_ms), not once a second.
+                if (step != BbWatchdog::StepExit && !exit_declined_logged) {
+                    if (const char* why =
+                            BbWatchdog::ExitDeclinedReason(headroom, stuck_ms, thresholds)) {
+                        std::printf("UWP watchdog: no clean exit at a %llu s stall with %llu MiB "
+                                    "headroom - %s\n",
+                                    static_cast<unsigned long long>(stuck_ms / 1000),
+                                    static_cast<unsigned long long>(headroom >> 20), why);
+                        std::fflush(stdout);
+                        exit_declined_logged = true;
+                    }
+                } else if (step == BbWatchdog::StepExit || stuck_ms == 0) {
+                    exit_declined_logged = false;
+                }
                 // Exit is handled on the monitor, not queued behind a possibly stuck recovery rung.
                 if (step == BbWatchdog::StepExit) {
                     if (g_watchdog_ran_exit.exchange(true)) continue;
